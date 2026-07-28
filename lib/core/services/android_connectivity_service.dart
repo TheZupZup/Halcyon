@@ -32,8 +32,7 @@ class AndroidConnectivityService implements ConnectivityService {
   static const String _eventChannelName =
       'io.github.thezupzup.linthra/network_status_events';
 
-  static const MethodChannel _methodChannel =
-      MethodChannel(_methodChannelName);
+  static const MethodChannel _methodChannel = MethodChannel(_methodChannelName);
 
   final PlatformNetworkStatusReader _statusReader;
   final Stream<Object?> _statusEvents;
