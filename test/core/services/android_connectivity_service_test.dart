@@ -42,7 +42,8 @@ void main() {
       expect(await service.currentStatus(), NetworkStatus.mobile);
     });
 
-    test('currentStatus fails closed when the platform channel throws', () async {
+    test('currentStatus fails closed when the platform channel throws',
+        () async {
       final service = AndroidConnectivityService(
         statusReader: () => Future<Object?>.error(Exception('channel failed')),
         statusEvents: const Stream<Object?>.empty(),
