@@ -5,10 +5,10 @@ import '../../core/repositories/download_preferences.dart';
 import '../../core/repositories/download_repository.dart';
 import '../../core/repositories/download_store.dart';
 import '../../core/repositories/offline_file_store.dart';
+import '../../core/services/android_connectivity_service.dart';
 import '../../core/services/cached_track_locator.dart';
 import '../../core/services/connectivity_service.dart';
 import '../../core/services/offline_cache_manager.dart';
-import '../../core/services/optimistic_connectivity_service.dart';
 import '../../core/services/remote_track_downloader.dart';
 import '../../core/services/track_prefetcher.dart';
 import 'cache_download_repository.dart';
@@ -50,11 +50,12 @@ final downloadPreferencesProvider = Provider<DownloadPreferences>((ref) {
   return InMemoryDownloadPreferences();
 });
 
-/// Network reachability used to honor the mobile-data download preference. The
-/// default optimistically reports Wi-Fi until real detection lands; tests inject
-/// a fake to drive the policy's mobile/offline/unknown paths.
+/// The active network's metering state, used to honor the mobile-data download
+/// preference. Android reports the app's default network as unmetered, metered,
+/// offline, or unknown; an unknown/platform failure stays conservative rather
+/// than silently being treated as Wi-Fi. Tests override this with a fake.
 final connectivityServiceProvider = Provider<ConnectivityService>((ref) {
-  return const OptimisticConnectivityService();
+  return AndroidConnectivityService();
 });
 
 /// Supplies the currently playing track so the cache policy never evicts it. A
