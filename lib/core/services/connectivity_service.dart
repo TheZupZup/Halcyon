@@ -1,17 +1,21 @@
-/// Network reachability, abstracted so the downloads feature can enforce the
-/// user's mobile-data download preference without binding to a plugin.
+/// Network reachability, abstracted so downloads can enforce the user's
+/// mobile-data preference without binding policy code to Android APIs.
 ///
-///  - [offline]: no usable connection — downloads wait.
-///  - [wifi]: an unmetered connection — downloads always allowed.
-///  - [mobile]: a metered/cellular connection — downloads allowed only when the
-///    user has turned on "Allow mobile data".
-///  - [unknown]: the connection type couldn't be determined. Treated
-///    conservatively (like [mobile]): downloads run only when the user has
-///    allowed mobile data, so an unknown connection is never assumed unmetered.
+/// The historical enum names are kept to avoid churn, but policy is based on
+/// Android's metering signal rather than a guessed transport name:
+///
+///  - [offline]: no active connection — downloads wait.
+///  - [wifi]: the active connection is **unmetered** — downloads are allowed.
+///    This is normally Wi-Fi or Ethernet, but can also be unmetered cellular.
+///  - [mobile]: the active connection is **metered** — downloads are allowed only
+///    when the user has turned on "Allow mobile data". Metered Wi-Fi also lands
+///    here, which avoids treating a paid hotspot as free data.
+///  - [unknown]: metering couldn't be determined. Treated conservatively like
+///    [mobile], so an unusual device or platform failure is never assumed free.
 enum NetworkStatus { offline, wifi, mobile, unknown }
 
 abstract interface class ConnectivityService {
-  /// Emits whenever connectivity changes.
+  /// Emits whenever the active network or its metering state changes.
   Stream<NetworkStatus> get statusStream;
 
   /// One-shot read of the current status.
