@@ -31,6 +31,12 @@ class MainActivity : AudioServiceActivity() {
     // must launch from an activity context, not the application context.
     private val shareChannel by lazy { ShareChannel(this) }
 
+    // Reports the active network's metering state for the download/cache policy.
+    // Application-scoped so the callback never retains this activity.
+    private val networkStatusChannel by lazy {
+        NetworkStatusChannel(applicationContext)
+    }
+
     override fun onResume() {
         super.onResume()
         displayRefreshRate.onResume()
@@ -97,6 +103,11 @@ class MainActivity : AudioServiceActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // Android metering-aware network state: one-shot current value plus a
+        // change stream. Separate from SAF/share/icon channels so the data guard
+        // stays small and auditable.
+        networkStatusChannel.configure(flutterEngine.dartExecutor.binaryMessenger)
 
         // Launcher-icon switching: enable the chosen <activity-alias> and
         // disable the others (LauncherIconChannel). Separate channel from SAF so
