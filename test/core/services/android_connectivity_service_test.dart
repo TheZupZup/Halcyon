@@ -60,6 +60,7 @@ void main() {
       );
       final values = <NetworkStatus>[];
       final subscription = service.statusStream.listen(values.add);
+      final Future<void> done = subscription.asFuture<void>();
 
       events
         ..add('unmetered')
@@ -67,7 +68,7 @@ void main() {
         ..add('metered')
         ..add('offline');
       await events.close();
-      await subscription.asFuture<void>();
+      await done;
 
       expect(
         values,
@@ -88,12 +89,13 @@ void main() {
       );
       final values = <NetworkStatus>[];
       final subscription = service.statusStream.listen(values.add);
+      final Future<void> done = subscription.asFuture<void>();
 
       events
         ..add('unmetered')
         ..addError(Exception('private platform detail'));
       await events.close();
-      await subscription.asFuture<void>();
+      await done;
 
       expect(
         values,

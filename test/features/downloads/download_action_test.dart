@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/track.dart';
+import 'package:linthra/core/services/connectivity_service.dart';
 import 'package:linthra/data/repositories/download_repository_provider.dart';
 import 'package:linthra/data/repositories/music_library_repository_provider.dart';
 import 'package:linthra/features/library/library_screen.dart';
@@ -17,15 +20,18 @@ void main() {
     Future<void> pump(WidgetTester tester, List<Track> tracks) async {
       await tester.pumpWidget(
         ProviderScope(
-          // Default download providers are plugin-free (in-memory store +
-          // optimistic connectivity); only the remote downloader is faked so a
-          // `jellyfin:` track counts as remote/offline-capable.
+          // Keep the widget test independent from Android platform channels: the
+          // fake downloader supplies bytes and the fixed unmetered connection lets
+          // the request exercise the successful download path deterministically.
           overrides: [
             musicLibraryRepositoryProvider.overrideWithValue(
               FakeMusicLibraryRepository(tracks: tracks),
             ),
             remoteTrackDownloaderProvider
                 .overrideWithValue(FakeRemoteTrackDownloader()),
+            connectivityServiceProvider.overrideWithValue(
+              const _UnmeteredConnectivity(),
+            ),
           ],
           child: const MaterialApp(home: LibraryScreen()),
         ),
@@ -82,4 +88,15 @@ void main() {
       expect(find.text('Play next'), findsOneWidget);
     });
   });
+}
+
+class _UnmeteredConnectivity implements ConnectivityService {
+  const _UnmeteredConnectivity();
+
+  @override
+  Stream<NetworkStatus> get statusStream =>
+      Stream<NetworkStatus>.value(NetworkStatus.wifi);
+
+  @override
+  Future<NetworkStatus> currentStatus() async => NetworkStatus.wifi;
 }

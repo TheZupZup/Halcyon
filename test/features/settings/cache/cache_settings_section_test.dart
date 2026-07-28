@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/track.dart';
+import 'package:linthra/core/services/connectivity_service.dart';
 import 'package:linthra/data/repositories/download_repository_provider.dart';
 import 'package:linthra/features/settings/cache/cache_settings_section.dart';
 
@@ -11,11 +14,15 @@ void main() {
   group('CacheSettingsSection', () {
     Future<ProviderContainer> pump(WidgetTester tester) async {
       final container = ProviderContainer(
-        // Plugin-free defaults; only the remote downloader is faked so a
-        // jellyfin: track counts as a managed download.
+        // Keep these widget tests plugin-free and deterministic: the fake
+        // downloader supplies bytes, and the fixed unmetered network allows the
+        // setup downloads to complete instead of waiting for Android channels.
         overrides: [
           remoteTrackDownloaderProvider
               .overrideWithValue(FakeRemoteTrackDownloader()),
+          connectivityServiceProvider.overrideWithValue(
+            const _UnmeteredConnectivity(),
+          ),
         ],
       );
       addTearDown(container.dispose);
@@ -106,4 +113,15 @@ void main() {
       expect(find.textContaining('4 B of'), findsOneWidget);
     });
   });
+}
+
+class _UnmeteredConnectivity implements ConnectivityService {
+  const _UnmeteredConnectivity();
+
+  @override
+  Stream<NetworkStatus> get statusStream =>
+      Stream<NetworkStatus>.value(NetworkStatus.wifi);
+
+  @override
+  Future<NetworkStatus> currentStatus() async => NetworkStatus.wifi;
 }
