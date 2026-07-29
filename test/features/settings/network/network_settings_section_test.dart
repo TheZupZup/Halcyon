@@ -50,44 +50,49 @@ void main() {
       expect(find.text('Unlimited plan'), findsOneWidget);
     });
 
-    testWidgets('save-data choice persists and updates the tile', (tester) async {
-      await pump(tester);
+    testWidgets(
+      'save-data choice persists and updates the tile',
+      (tester) async {
+        await pump(tester);
 
-      await tester.tap(find.text('Mobile data usage'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Save data'));
-      await tester.pumpAndSettle();
+        await tester.tap(find.text('Mobile data usage'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Save data'));
+        await tester.pumpAndSettle();
 
-      expect(
-        await preferences.mobileDataProfile(),
-        MobileDataProfile.saveData,
-      );
-      expect(find.text('Save data'), findsOneWidget);
-      expect(
-        find.textContaining('Smart pre-cache is paused'),
-        findsOneWidget,
-      );
-    });
+        expect(
+          await preferences.mobileDataProfile(),
+          MobileDataProfile.saveData,
+        );
+        expect(find.text('Save data'), findsOneWidget);
+        expect(
+          find.textContaining('Smart pre-cache is paused'),
+          findsOneWidget,
+        );
+      },
+    );
 
-    testWidgets('unlimited choice permits full metered-network use',
-        (tester) async {
-      await pump(tester);
+    testWidgets(
+      'unlimited choice permits full metered-network use',
+      (tester) async {
+        await pump(tester);
 
-      await tester.tap(find.text('Mobile data usage'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Unlimited plan'));
-      await tester.pumpAndSettle();
+        await tester.tap(find.text('Mobile data usage'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Unlimited plan'));
+        await tester.pumpAndSettle();
 
-      expect(
-        await preferences.mobileDataProfile(),
-        MobileDataProfile.unlimited,
-      );
-      expect(find.text('Unlimited plan'), findsOneWidget);
-      expect(
-        find.textContaining('smart pre-cache may use mobile data'),
-        findsOneWidget,
-      );
-    });
+        expect(
+          await preferences.mobileDataProfile(),
+          MobileDataProfile.unlimited,
+        );
+        expect(find.text('Unlimited plan'), findsOneWidget);
+        expect(
+          find.textContaining('smart pre-cache may use mobile data'),
+          findsOneWidget,
+        );
+      },
+    );
 
     testWidgets('cancel keeps the existing choice', (tester) async {
       preferences = InMemoryDownloadPreferences(

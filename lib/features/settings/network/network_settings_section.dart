@@ -56,7 +56,10 @@ class NetworkSettingsSection extends StatelessWidget {
                   color: theme.colorScheme.primary,
                 ),
                 const SizedBox(width: AppSpacing.sm),
-                Text('Wi-Fi & mobile data', style: theme.textTheme.titleMedium),
+                Text(
+                  'Wi-Fi & mobile data',
+                  style: theme.textTheme.titleMedium,
+                ),
               ],
             ),
             const SizedBox(height: AppSpacing.xs),
@@ -182,7 +185,8 @@ extension MobileDataProfilePresentation on MobileDataProfile {
       case MobileDataProfile.wifiOnly:
         return 'Downloads and smart pre-cache wait for an unmetered network.';
       case MobileDataProfile.saveData:
-        return 'Manual downloads may use mobile data. Smart pre-cache is paused.';
+        return 'Manual downloads may use mobile data. '
+            'Smart pre-cache is paused.';
       case MobileDataProfile.unlimited:
         return 'Downloads and smart pre-cache may use mobile data.';
     }

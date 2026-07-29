@@ -112,8 +112,7 @@ class SmartPrecacheService {
       StabilityDiagnostics.precache('skip:disabled');
       return;
     }
-    final MobileDataProfile profile =
-        await _preferences.mobileDataProfile();
+    final MobileDataProfile profile = await _preferences.mobileDataProfile();
     if (profile.pausesSmartPrecache) {
       StabilityDiagnostics.precache('skip:save-data-profile');
       return;

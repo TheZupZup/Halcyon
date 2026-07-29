@@ -17,8 +17,7 @@ class _RecordingPrefetcher implements TrackPrefetcher {
   }
 }
 
-Track _track(String id) =>
-    Track(id: id, title: id, uri: 'jellyfin:$id');
+Track _track(String id) => Track(id: id, title: id, uri: 'jellyfin:$id');
 
 PlaybackState _playing() => PlaybackState(
       status: PlaybackStatus.playing,
