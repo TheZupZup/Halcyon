@@ -29,10 +29,9 @@ import 'track_prefetcher.dart';
 ///  - **It only decides what/when.** Everything that *bounds* a pre-cache lives
 ///    downstream in the [TrackPrefetcher]: it pre-caches only remote tracks
 ///    (skipping local files, already on disk), avoids duplicates, honours the
-///    mobile-data policy (Wi-Fi always; mobile data only when the user allowed
-///    it; never offline), stays under the cache limit (evicting pre-cached entries
-///    before any user download), and never throws. A pre-cache never blocks or
-///    interrupts what's playing.
+///    mobile-data profile and active-network policy, stays under the cache limit
+///    (evicting pre-cached entries before any user download), and never throws.
+///    A pre-cache never blocks or interrupts what's playing.
 ///  - **One at a time.** Pre-caches run sequentially (effective concurrency 1),
 ///    off the playback path, so the cache limit settles between writes and the
 ///    app never opens an unbounded number of requests.
@@ -111,6 +110,12 @@ class SmartPrecacheService {
     if (upNext.isEmpty) return;
     if (!await _preferences.preloadEnabled()) {
       StabilityDiagnostics.precache('skip:disabled');
+      return;
+    }
+    final MobileDataProfile profile =
+        await _preferences.mobileDataProfile();
+    if (profile.pausesSmartPrecache) {
+      StabilityDiagnostics.precache('skip:save-data-profile');
       return;
     }
     // Repeat-one replays the current track indefinitely, so the up-next won't

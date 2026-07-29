@@ -4,26 +4,40 @@ import '../../core/repositories/download_preferences.dart';
 /// A non-persistent [DownloadPreferences] for development and tests.
 class InMemoryDownloadPreferences implements DownloadPreferences {
   InMemoryDownloadPreferences({
+    MobileDataProfile? mobileDataProfile,
     bool allowMobileData = false,
     int maxCacheBytes = CacheSize.defaultLimit,
     bool preloadEnabled = true,
     int precacheCount = kDefaultPrecacheCount,
-  })  : _allowMobileData = allowMobileData,
+  })  : _mobileDataProfile = mobileDataProfile ??
+            (allowMobileData
+                ? MobileDataProfile.unlimited
+                : MobileDataProfile.wifiOnly),
         _maxCacheBytes = maxCacheBytes,
         _preloadEnabled = preloadEnabled,
         _precacheCount = sanitizePrecacheCount(precacheCount);
 
-  bool _allowMobileData;
+  MobileDataProfile _mobileDataProfile;
   int _maxCacheBytes;
   bool _preloadEnabled;
   int _precacheCount;
 
   @override
-  Future<bool> allowMobileData() async => _allowMobileData;
+  Future<MobileDataProfile> mobileDataProfile() async => _mobileDataProfile;
+
+  @override
+  Future<void> setMobileDataProfile(MobileDataProfile profile) async {
+    _mobileDataProfile = profile;
+  }
+
+  @override
+  Future<bool> allowMobileData() async =>
+      _mobileDataProfile.allowsMeteredDownloads;
 
   @override
   Future<void> setAllowMobileData(bool value) async {
-    _allowMobileData = value;
+    _mobileDataProfile =
+        value ? MobileDataProfile.unlimited : MobileDataProfile.wifiOnly;
   }
 
   @override

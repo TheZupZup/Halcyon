@@ -35,21 +35,46 @@ int sanitizePrecacheCount(int value) {
 /// can show it as a selected preset rather than a custom value.
 bool isPrecacheCountPreset(int count) => kPrecacheCountOptions.contains(count);
 
+/// How Linthra should use metered networks such as LTE/5G or a metered hotspot.
+enum MobileDataProfile {
+  /// Remote downloads and automatic cache wait for an unmetered network.
+  wifiOnly,
+
+  /// User-requested downloads may use metered data, but automatic smart
+  /// pre-cache is paused to avoid background consumption.
+  saveData,
+
+  /// User-requested downloads and automatic smart pre-cache may use metered
+  /// data. Offline and unknown-network safeguards still apply downstream.
+  unlimited;
+
+  /// Whether an explicit user download may start on a metered network.
+  bool get allowsMeteredDownloads => this != MobileDataProfile.wifiOnly;
+
+  /// Whether the profile deliberately pauses automatic smart pre-cache.
+  bool get pausesSmartPrecache => this == MobileDataProfile.saveData;
+}
+
 /// The user's download/offline preferences.
 ///
 /// These are kept behind an interface so the [DownloadRepository] and cache
 /// manager can consult them without binding to a storage plugin. The policy
 /// lives in the repository; this only remembers the choices:
-///  - "Allow mobile data": when off (the safe default), downloads and smart
-///    pre-cache run only on Wi-Fi and are queued on mobile data; when on, they
-///    may also run over a metered/cellular connection.
+///  - Mobile-data profile: Wi-Fi only, save data, or unlimited.
 ///  - "Max cache size": the byte ceiling the offline cache is kept under, with
 ///    least-recently-used eviction once a new download would exceed it.
 ///  - Smart pre-cache "on/off" and "how many upcoming tracks": whether, and how
 ///    far ahead, playback warms the next queued tracks into the cache.
 abstract interface class DownloadPreferences {
-  /// Whether downloads and smart pre-cache may use mobile data. Defaults to
-  /// `false`, so the safe behaviour out of the box is Wi-Fi only.
+  /// The user's metered-network policy. Defaults to [MobileDataProfile.wifiOnly].
+  Future<MobileDataProfile> mobileDataProfile();
+
+  Future<void> setMobileDataProfile(MobileDataProfile profile);
+
+  /// Legacy compatibility for call sites that only need a yes/no answer.
+  ///
+  /// `true` means explicit downloads may use a metered network. New UI should
+  /// use [mobileDataProfile] so it can distinguish save-data and unlimited.
   Future<bool> allowMobileData();
 
   Future<void> setAllowMobileData(bool value);
@@ -62,8 +87,8 @@ abstract interface class DownloadPreferences {
 
   /// Whether smart pre-cache is on: upcoming queued tracks are warmed into the
   /// cache ahead of play. Defaults to `true`. Pre-cached bytes are bounded by
-  /// [maxCacheBytes], skipped (not queued) when the connection isn't allowed by
-  /// the mobile-data policy, and evicted before any user download.
+  /// [maxCacheBytes], skipped when the connection/profile does not allow them,
+  /// and evicted before any user download.
   Future<bool> preloadEnabled();
 
   Future<void> setPreloadEnabled(bool value);
