@@ -20,10 +20,10 @@ class WhatsNewSection extends StatelessWidget {
   /// handful of concise bullets and updated when cutting a new build; exposed so
   /// the widget test can assert each line renders without duplicating the copy.
   static const List<String> releaseNotes = <String>[
-    'User-installed CA certificates are now trusted for HTTPS servers.',
-    'Playlists and favorites now sync two-way with Navidrome/Subsonic.',
-    'Changes made on your server now show up on their own.',
-    'Add or remove favorites straight from any track menu.',
+    'Choose Wi-Fi only, Save data, or Unlimited for downloads and smart pre-cache.',
+    'Metered Android connections are now detected instead of assumed to be Wi-Fi.',
+    'Add a whole album or artist, or selected songs, to a playlist.',
+    'The separate GitHub Sponsor edition can unlock a custom two-color palette.',
   ];
 
   @override
