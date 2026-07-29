@@ -37,6 +37,12 @@
          Framework grant the user picks. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- ACCESS_NETWORK_STATE: reads only the active connection's Android
+         metering/capability flags so downloads can distinguish unmetered,
+         metered, offline, and unknown states. It exposes no SSID, carrier, IP,
+         location, server address, or credential and requires no runtime prompt. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- CHANGE_WIFI_MULTICAST_STATE: lets the app receive multicast Wi-Fi
          packets so mDNS (`_googlecast._tcp`) discovery can find Chromecast
          devices on the local network. Required by the `bonsoir` discovery
@@ -71,19 +77,19 @@
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
             <!-- Specifies an Android theme to apply to this Activity as soon as
-                 the Android process has started. This theme is visible to the user
-                 while the Flutter UI initializes. After that, this theme continues
-                 to determine the Window background behind the Flutter UI. -->
+                  the Android process has started. This theme is visible to the user
+                  while the Flutter UI initializes. After that, this theme continues
+                  to determine the Window background behind the Flutter UI. -->
             <meta-data
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
             <!-- The MAIN/LAUNCHER intent-filter lives on the <activity-alias>
-                 entries below, not here: each alias supplies one selectable
-                 launcher icon while targeting this same activity. MainActivity
-                 stays the single real activity (Flutter engine host + audio
-                 session); the system launches it through whichever alias is
-                 enabled. -->
+                  entries below, not here: each alias supplies one selectable
+                  launcher icon while targeting this same activity. MainActivity
+                  stays the single real activity (Flutter engine host + audio
+                  session); the system launches it through whichever alias is
+                  enabled. -->
         </activity>
 
         <!-- Launcher-icon aliases — one per Appearance branding variant.
