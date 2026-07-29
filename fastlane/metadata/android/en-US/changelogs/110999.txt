@@ -1,0 +1,17 @@
+Linthra 0.1.10 — mobile data controls & playlist tools.
+
+Mobile data:
+- Choose Wi-Fi only, Save data, or Unlimited for downloads and
+  smart pre-cache.
+- Linthra now reads Android's metered-network state instead of
+  assuming every connection is Wi-Fi.
+- Wi-Fi only keeps new remote downloads and smart pre-cache off
+  LTE/5G and metered hotspots.
+- Save data allows user-requested downloads while pausing automatic
+  smart pre-cache.
+
+Playlists:
+- Add every song from an album or artist to a playlist.
+- Long-press songs to select several and add only that selection.
+- The shared playlist flow still handles duplicates and lets you
+  create a playlist immediately.
