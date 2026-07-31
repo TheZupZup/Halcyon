@@ -82,8 +82,7 @@ class SubsonicFolderBrowserSource implements FolderBrowsableMusicSource {
       extra: <String, String>{'musicFolderId': musicFolderId},
     );
     final Object? root = envelope.data['indexes'];
-    final Object? indexes =
-        root is Map<String, dynamic> ? root['index'] : null;
+    final Object? indexes = root is Map<String, dynamic> ? root['index'] : null;
     if (indexes is! List) return MusicFolderListing.empty;
 
     final List<MusicFolder> folders = <MusicFolder>[];
