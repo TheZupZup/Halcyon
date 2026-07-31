@@ -40,7 +40,8 @@ class JellyfinFolderBrowserSource implements FolderBrowsableMusicSource {
 
   @override
   Future<List<MusicFolder>> fetchRootFolders() async {
-    final Uri uri = Uri.parse('${session.baseUrl}/Library/MediaFolders').replace(
+    final Uri uri =
+        Uri.parse('${session.baseUrl}/Library/MediaFolders').replace(
       queryParameters: const <String, String>{'IsHidden': 'false'},
     );
     final Map<String, dynamic> body = await _getObject(uri);
@@ -120,15 +121,13 @@ class JellyfinFolderBrowserSource implements FolderBrowsableMusicSource {
   Future<Map<String, dynamic>> _getObject(Uri uri) async {
     final http.Response response;
     try {
-      response = await _client
-          .get(uri, headers: <String, String>{
-            'Accept': 'application/json',
-            'Authorization': JellyfinAuthHeader.forToken(
-              session.deviceId,
-              session.accessToken,
-            ),
-          })
-          .timeout(_timeout);
+      response = await _client.get(uri, headers: <String, String>{
+        'Accept': 'application/json',
+        'Authorization': JellyfinAuthHeader.forToken(
+          session.deviceId,
+          session.accessToken,
+        ),
+      }).timeout(_timeout);
     } on TimeoutException {
       throw JellyfinException.notReachable();
     } on Exception {
