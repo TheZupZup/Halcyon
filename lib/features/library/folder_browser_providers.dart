@@ -14,8 +14,7 @@ final jellyfinFolderBrowserSourceProvider =
     jellyfinSettingsControllerProvider.select((state) => state.isConnected),
   );
   if (!connected) return null;
-  final session =
-      ref.read(jellyfinSettingsControllerProvider.notifier).session;
+  final session = ref.read(jellyfinSettingsControllerProvider.notifier).session;
   if (session == null) return null;
   final JellyfinFolderBrowserSource source =
       JellyfinFolderBrowserSource(session: session);
@@ -30,8 +29,7 @@ final subsonicFolderBrowserSourceProvider =
     subsonicSettingsControllerProvider.select((state) => state.isConnected),
   );
   if (!connected) return null;
-  final session =
-      ref.read(subsonicSettingsControllerProvider.notifier).session;
+  final session = ref.read(subsonicSettingsControllerProvider.notifier).session;
   if (session == null) return null;
   final SubsonicFolderBrowserSource source =
       SubsonicFolderBrowserSource(session: session);
