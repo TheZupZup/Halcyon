@@ -43,16 +43,7 @@ jobs:
         run: flutter pub get --enforce-lockfile
 
       - name: Verify formatting
-        run: |
-          dart format \
-            lib/core/sources/jellyfin/jellyfin_folder_browser_source.dart \
-            lib/core/sources/subsonic/subsonic_folder_browser_source.dart \
-            lib/features/library/folder_browser_providers.dart
-          git diff --no-ext-diff --unified=200 -- \
-            lib/core/sources/jellyfin/jellyfin_folder_browser_source.dart \
-            lib/core/sources/subsonic/subsonic_folder_browser_source.dart \
-            lib/features/library/folder_browser_providers.dart
-          exit 1
+        run: dart format --set-exit-if-changed .
 
       - name: Analyze
         run: flutter analyze
