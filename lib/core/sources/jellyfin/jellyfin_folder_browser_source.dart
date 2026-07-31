@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../../models/jellyfin_session.dart';
 import '../../models/music_folder.dart';
+import '../../models/track.dart';
 import '../../services/folder_browsable_music_source.dart';
 import 'jellyfin_api.dart';
 import 'jellyfin_auth_header.dart';
@@ -85,7 +86,7 @@ class JellyfinFolderBrowserSource implements FolderBrowsableMusicSource {
     if (rawItems is! List) return MusicFolderListing.empty;
 
     final List<MusicFolder> folders = <MusicFolder>[];
-    final tracks = <dynamic>[];
+    final List<Track> tracks = <Track>[];
     for (final Object? raw in rawItems) {
       if (raw is! Map<String, dynamic>) continue;
       final String type = _string(raw['Type']) ?? '';
@@ -106,10 +107,7 @@ class JellyfinFolderBrowserSource implements FolderBrowsableMusicSource {
       }
     }
     folders.sort(_compareFolders);
-    return MusicFolderListing(
-      folders: folders,
-      tracks: tracks.cast(),
-    );
+    return MusicFolderListing(folders: folders, tracks: tracks);
   }
 
   void close() => _client.close();
