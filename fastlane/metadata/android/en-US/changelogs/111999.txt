@@ -1,0 +1,6 @@
+Linthra 0.1.11 — folder browsing and Android navigation.
+
+- Browse Jellyfin and Navidrome/Subsonic through their real folder hierarchy from Library → Folders.
+- Open nested folders and start songs directly from the folder view.
+- Android Back now closes internal states, returns from detail screens, goes back to Library from other main tabs, and exits only from Library root.
+- No ads, tracking, analytics, or telemetry.
