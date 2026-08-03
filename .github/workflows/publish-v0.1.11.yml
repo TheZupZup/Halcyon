@@ -1,7 +1,6 @@
-name: Publish Linthra v0.1.11
+name: Diagnose Linthra v0.1.11 Release
 
-# One-time publisher for the already-reviewed v0.1.11 release commit.
-# Remove this workflow after the tag, Release, and signed assets are verified.
+# Temporary, visible release verifier. Remove after v0.1.11 assets are confirmed.
 on:
   workflow_dispatch:
   push:
@@ -11,47 +10,26 @@ on:
       - .github/workflows/publish-v0.1.11.yml
 
 permissions:
-  contents: write
+  contents: read
   actions: write
   issues: write
 
 jobs:
-  publish:
+  diagnose-release:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      RELEASE_TAG: v0.1.11
-      RELEASE_NAME: Linthra v0.1.11
-      TARGET_SHA: 379bcd2841b36d0ea78b12cc64435f619e6e5ccd
-      RELEASE_NOTES_PATH: /tmp/linthra-v0.1.11-release-notes.md
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Verify the immutable release target
-        shell: bash
-        run: |
-          set -euo pipefail
-          git cat-file -e "${TARGET_SHA}^{commit}"
-          test "$(git show "${TARGET_SHA}:pubspec.yaml" | sed -n 's/^version: //p')" = "0.1.11+111999"
-          git show "${TARGET_SHA}:lib/core/app_info.dart" \
-            | grep -Fq "static const String _devVersionName = '0.1.11';"
-          git show "${TARGET_SHA}:docs/release-notes/v0.1.11.md" \
-            > "${RELEASE_NOTES_PATH}"
-
-      - name: Create tag, publish Release, and verify signed assets
+      - name: Inspect Release and follow signed build
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const fs = require('fs');
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const tag = process.env.RELEASE_TAG;
-            const target = process.env.TARGET_SHA;
-            const verificationMarker = '<!-- v0.1.11-release-verified -->';
+            const tag = 'v0.1.11';
+            const target = '379bcd2841b36d0ea78b12cc64435f619e6e5ccd';
+            const issueNumber = 293;
+            const marker = '<!-- v0.1.11-release-diagnostic -->';
             const requiredAssets = [
               'linthra-v0.1.11-release-signed.apk',
               'linthra-v0.1.11-release-signed.aab',
@@ -59,148 +37,198 @@ jobs:
               'linthra-v0.1.11-arm64-v8a-release-signed.apk',
               'linthra-v0.1.11-x86_64-release-signed.apk',
             ];
-            const sleep = (milliseconds) =>
-              new Promise((resolve) => setTimeout(resolve, milliseconds));
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-            let tagRef;
-            try {
-              tagRef = await github.rest.git.getRef({
-                owner,
-                repo,
-                ref: `tags/${tag}`,
-              });
-            } catch (error) {
-              if (error.status !== 404) throw error;
-            }
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo, issue_number: issueNumber, per_page: 100 },
+            );
+            let statusComment = comments.find((comment) =>
+              comment.body?.includes(marker),
+            );
 
-            if (tagRef) {
-              const existingTag = await github.rest.git.getTag({
-                owner,
-                repo,
-                tag_sha: tagRef.data.object.sha,
-              });
-              if (
-                existingTag.data.object.type !== 'commit' ||
-                existingTag.data.object.sha !== target
-              ) {
-                throw new Error(
-                  `${tag} already exists but does not point to ${target}.`,
-                );
-              }
-              core.info(`${tag} already exists on the expected commit.`);
-            } else {
-              const annotatedTag = await github.rest.git.createTag({
-                owner,
-                repo,
-                tag,
-                message: 'Linthra v0.1.11 — folder browsing & Android navigation',
-                object: target,
-                type: 'commit',
-              });
-              await github.rest.git.createRef({
-                owner,
-                repo,
-                ref: `refs/tags/${tag}`,
-                sha: annotatedTag.data.sha,
-              });
-              core.info(`Created annotated tag ${tag} on ${target}.`);
-            }
-
-            let release;
-            try {
-              release = await github.rest.repos.getReleaseByTag({
-                owner,
-                repo,
-                tag,
-              });
-              core.info(`Release exists: ${release.data.html_url}`);
-            } catch (error) {
-              if (error.status !== 404) throw error;
-              const body = fs.readFileSync(
-                process.env.RELEASE_NOTES_PATH,
-                'utf8',
-              );
-              release = await github.rest.repos.createRelease({
-                owner,
-                repo,
-                tag_name: tag,
-                name: process.env.RELEASE_NAME,
-                body,
-                draft: false,
-                prerelease: false,
-              });
-              core.info(`Published ${release.data.html_url}`);
-            }
-
-            async function waitForAssets(attempts, delayMilliseconds) {
-              for (let attempt = 1; attempt <= attempts; attempt += 1) {
-                release = await github.rest.repos.getReleaseByTag({
+            async function publishStatus(body) {
+              const comment = `${marker}\n${body}`;
+              if (statusComment) {
+                const updated = await github.rest.issues.updateComment({
                   owner,
                   repo,
-                  tag,
+                  comment_id: statusComment.id,
+                  body: comment,
                 });
-                const names = new Set(
-                  release.data.assets.map((asset) => asset.name),
-                );
-                const missing = requiredAssets.filter(
-                  (assetName) => !names.has(assetName),
-                );
-                if (missing.length === 0) {
-                  return release;
-                }
-                core.info(
-                  `Asset check ${attempt}/${attempts}; missing: ${missing.join(', ')}`,
-                );
-                if (attempt < attempts) await sleep(delayMilliseconds);
+                statusComment = updated.data;
+              } else {
+                const created = await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  body: comment,
+                });
+                statusComment = created.data;
               }
-              return null;
             }
 
-            // A build was already dispatched by the first successful publisher
-            // run. Give it five minutes to finish before starting a replacement.
-            let verifiedRelease = await waitForAssets(20, 15000);
-            if (!verifiedRelease) {
+            async function releaseState() {
+              const response = await github.rest.repos.getReleaseByTag({
+                owner,
+                repo,
+                tag,
+              });
+              const names = response.data.assets.map((asset) => asset.name);
+              const missing = requiredAssets.filter((name) => !names.includes(name));
+              return { release: response.data, names, missing };
+            }
+
+            async function releaseRuns() {
+              const response = await github.rest.actions.listWorkflowRuns({
+                owner,
+                repo,
+                workflow_id: 'android-release-build.yml',
+                per_page: 20,
+              });
+              return response.data.workflow_runs
+                .filter((run) =>
+                  new Date(run.created_at) >= new Date('2026-08-03T18:00:00Z'),
+                )
+                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            }
+
+            function runsMarkdown(runs) {
+              if (runs.length === 0) return '- No recent release-build run found.';
+              return runs.slice(0, 5).map((run) =>
+                `- [Run #${run.run_number}](${run.html_url}): ` +
+                `\`${run.event}\` — **${run.status}**` +
+                `${run.conclusion ? ` / **${run.conclusion}**` : ''}`,
+              ).join('\n');
+            }
+
+            async function failureMarkdown(run) {
+              if (!run || run.status !== 'completed' || run.conclusion === 'success') {
+                return '';
+              }
+              const jobs = await github.paginate(
+                github.rest.actions.listJobsForWorkflowRun,
+                { owner, repo, run_id: run.id, per_page: 100 },
+              );
+              const failures = [];
+              for (const job of jobs) {
+                if (job.conclusion !== 'failure') continue;
+                const failedSteps = (job.steps ?? [])
+                  .filter((step) => step.conclusion === 'failure')
+                  .map((step) => `\`${step.name}\``)
+                  .join(', ');
+                failures.push(
+                  `- **${job.name}**${failedSteps ? ` — failed step: ${failedSteps}` : ''}`,
+                );
+              }
+              return failures.length > 0
+                ? `\n\nFailed jobs:\n${failures.join('\n')}`
+                : '';
+            }
+
+            const tagRef = await github.rest.git.getRef({
+              owner,
+              repo,
+              ref: `tags/${tag}`,
+            });
+            if (tagRef.data.object.type !== 'tag') {
+              throw new Error(`${tag} is not an annotated tag.`);
+            }
+            const annotatedTag = await github.rest.git.getTag({
+              owner,
+              repo,
+              tag_sha: tagRef.data.object.sha,
+            });
+            if (
+              annotatedTag.data.object.type !== 'commit' ||
+              annotatedTag.data.object.sha !== target
+            ) {
+              throw new Error(`${tag} does not point to ${target}.`);
+            }
+
+            let state = await releaseState();
+            let runs = await releaseRuns();
+            await publishStatus(
+              `🔎 **Checking Linthra v0.1.11 publication**\n\n` +
+              `Tag: \`${tag}\` → \`${target}\` ✅\n` +
+              `Release: ${state.release.html_url}\n\n` +
+              `Public assets now: ${state.names.length > 0 ? state.names.map((name) => `\`${name}\``).join(', ') : '_none yet_'}\n\n` +
+              `Missing signed assets: ${state.missing.length > 0 ? state.missing.map((name) => `\`${name}\``).join(', ') : '_none_'}\n\n` +
+              `Recent Android Release Build runs:\n${runsMarkdown(runs)}`,
+            );
+
+            if (state.missing.length === 0) {
+              await publishStatus(
+                `✅ **Linthra v0.1.11 is published and verified.**\n\n` +
+                `Tag: \`${tag}\` → \`${target}\`\n` +
+                `Release: ${state.release.html_url}\n\n` +
+                `Signed assets:\n${requiredAssets.map((name) => `- \`${name}\``).join('\n')}`,
+              );
+              return;
+            }
+
+            const activeRun = runs.find((run) =>
+              run.status === 'queued' || run.status === 'in_progress',
+            );
+            const latestRun = runs[0];
+            if (!activeRun && (!latestRun || latestRun.conclusion !== 'success')) {
               await github.rest.actions.createWorkflowDispatch({
                 owner,
                 repo,
                 workflow_id: 'android-release-build.yml',
                 ref: 'main',
-                inputs: {
-                  signed: 'true',
-                  release_tag: tag,
-                },
+                inputs: { signed: 'true', release_tag: tag },
               });
-              core.info(`Started a signed Android release build for ${tag}.`);
-              verifiedRelease = await waitForAssets(60, 15000);
+              core.info('Started a replacement signed release build.');
             }
 
-            if (!verifiedRelease) {
-              throw new Error(
-                `The signed ${tag} assets did not appear before the verification timeout.`,
-              );
+            for (let attempt = 1; attempt <= 60; attempt += 1) {
+              await sleep(15000);
+              state = await releaseState();
+              runs = await releaseRuns();
+              const newestRun = runs[0];
+
+              if (state.missing.length === 0) {
+                await publishStatus(
+                  `✅ **Linthra v0.1.11 is published and verified.**\n\n` +
+                  `Tag: \`${tag}\` → \`${target}\`\n` +
+                  `Release: ${state.release.html_url}\n\n` +
+                  `Signed assets:\n${requiredAssets.map((name) => `- \`${name}\``).join('\n')}`,
+                );
+                return;
+              }
+
+              if (
+                newestRun &&
+                newestRun.status === 'completed' &&
+                newestRun.conclusion !== 'success'
+              ) {
+                const failures = await failureMarkdown(newestRun);
+                await publishStatus(
+                  `❌ **The signed v0.1.11 build failed.**\n\n` +
+                  `Release: ${state.release.html_url}\n` +
+                  `Missing: ${state.missing.map((name) => `\`${name}\``).join(', ')}\n\n` +
+                  `Recent runs:\n${runsMarkdown(runs)}${failures}`,
+                );
+                throw new Error('The signed Android release build failed.');
+              }
+
+              if (attempt % 4 === 0) {
+                await publishStatus(
+                  `⏳ **Linthra v0.1.11 signed build is still running.**\n\n` +
+                  `Release: ${state.release.html_url}\n` +
+                  `Missing: ${state.missing.map((name) => `\`${name}\``).join(', ')}\n\n` +
+                  `Recent runs:\n${runsMarkdown(runs)}`,
+                );
+              }
             }
 
-            const comments = await github.paginate(
-              github.rest.issues.listComments,
-              {
-                owner,
-                repo,
-                issue_number: 293,
-                per_page: 100,
-              },
+            const newestRun = runs[0];
+            const failures = await failureMarkdown(newestRun);
+            await publishStatus(
+              `❌ **Timed out while waiting for the signed v0.1.11 assets.**\n\n` +
+              `Release: ${state.release.html_url}\n` +
+              `Missing: ${state.missing.map((name) => `\`${name}\``).join(', ')}\n\n` +
+              `Recent runs:\n${runsMarkdown(runs)}${failures}`,
             );
-            const alreadyCommented = comments.some((comment) =>
-              comment.body?.includes(verificationMarker),
-            );
-            if (!alreadyCommented) {
-              const assetLines = requiredAssets
-                .map((assetName) => `- \`${assetName}\``)
-                .join('\n');
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number: 293,
-                body: `${verificationMarker}\n✅ **Linthra v0.1.11 is published and verified.**\n\nTag: \`v0.1.11\` → \`${target}\`\nRelease: ${verifiedRelease.data.html_url}\n\nSigned assets:\n${assetLines}`,
-              });
-            }
-            core.info('All required signed v0.1.11 assets are public.');
+            throw new Error('Timed out waiting for signed release assets.');
