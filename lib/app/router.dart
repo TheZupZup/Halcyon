@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -27,16 +28,31 @@ import 'routes.dart';
 /// Single source of truth for navigation. Exposed through Riverpod so future
 /// guards (e.g. "onboarding complete?", multi-user) can depend on app state.
 final appRouterProvider = Provider<GoRouter>((ref) {
+  final GlobalKey<NavigatorState> rootNavigatorKey =
+      GlobalKey<NavigatorState>(debugLabel: 'root');
+  final List<GlobalKey<NavigatorState>> branchNavigatorKeys =
+      <GlobalKey<NavigatorState>>[
+    GlobalKey<NavigatorState>(debugLabel: 'libraryBranch'),
+    GlobalKey<NavigatorState>(debugLabel: 'playlistsBranch'),
+    GlobalKey<NavigatorState>(debugLabel: 'downloadsBranch'),
+    GlobalKey<NavigatorState>(debugLabel: 'settingsBranch'),
+  ];
+
   return GoRouter(
+    navigatorKey: rootNavigatorKey,
     initialLocation: AppRoutes.library,
     routes: [
       // Persistent bottom-nav shell with an independent navigation stack per
       // tab, so switching tabs preserves scroll position and history.
       StatefulShellRoute.indexedStack(
-        builder: (context, state, navigationShell) =>
-            HomeShell(navigationShell: navigationShell),
+        builder: (context, state, navigationShell) => HomeShell(
+          navigationShell: navigationShell,
+          rootNavigatorKey: rootNavigatorKey,
+          branchNavigatorKeys: branchNavigatorKeys,
+        ),
         branches: [
           StatefulShellBranch(
+            navigatorKey: branchNavigatorKeys[0],
             routes: [
               GoRoute(
                 path: AppRoutes.library,
@@ -59,6 +75,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ],
           ),
           StatefulShellBranch(
+            navigatorKey: branchNavigatorKeys[1],
             routes: [
               GoRoute(
                 path: AppRoutes.playlists,
@@ -91,6 +108,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ],
           ),
           StatefulShellBranch(
+            navigatorKey: branchNavigatorKeys[2],
             routes: [
               GoRoute(
                 path: AppRoutes.downloads,
@@ -99,6 +117,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ],
           ),
           StatefulShellBranch(
+            navigatorKey: branchNavigatorKeys[3],
             routes: [
               GoRoute(
                 path: AppRoutes.settings,
