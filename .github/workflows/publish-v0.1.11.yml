@@ -3,6 +3,7 @@ name: Publish Linthra v0.1.11
 # One-time publisher for the already-reviewed v0.1.11 release commit.
 # Remove this workflow after the tag, Release, and signed assets are verified.
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -20,7 +21,7 @@ jobs:
       RELEASE_TAG: v0.1.11
       RELEASE_NAME: Linthra v0.1.11
       TARGET_SHA: 379bcd2841b36d0ea78b12cc64435f619e6e5ccd
-      RELEASE_NOTES_PATH: ${{ runner.temp }}/linthra-v0.1.11-release-notes.md
+      RELEASE_NOTES_PATH: /tmp/linthra-v0.1.11-release-notes.md
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
