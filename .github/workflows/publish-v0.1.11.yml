@@ -1,6 +1,6 @@
-name: Diagnose Linthra v0.1.11 Release
+name: Publish Linthra v0.1.11 signed assets
 
-# Temporary, visible release verifier. Remove after v0.1.11 assets are confirmed.
+# Temporary one-time runner. Remove after the five v0.1.11 assets are verified.
 on:
   workflow_dispatch:
   push:
@@ -15,220 +15,167 @@ permissions:
   issues: write
 
 jobs:
-  diagnose-release:
+  publish-assets:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: v0.1.11
     steps:
-      - name: Inspect Release and follow signed build
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const tag = 'v0.1.11';
-            const target = '379bcd2841b36d0ea78b12cc64435f619e6e5ccd';
-            const issueNumber = 293;
-            const marker = '<!-- v0.1.11-release-diagnostic -->';
-            const requiredAssets = [
-              'linthra-v0.1.11-release-signed.apk',
-              'linthra-v0.1.11-release-signed.aab',
-              'linthra-v0.1.11-armeabi-v7a-release-signed.apk',
-              'linthra-v0.1.11-arm64-v8a-release-signed.apk',
-              'linthra-v0.1.11-x86_64-release-signed.apk',
-            ];
-            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      - name: Announce signed build start
+        run: |
+          gh issue comment 293 \
+            --repo "$GITHUB_REPOSITORY" \
+            --body "<!-- v0.1.11-release-build -->
+          🚀 **Starting the official signed Linthra v0.1.11 build.**
 
-            const comments = await github.paginate(
-              github.rest.issues.listComments,
-              { owner, repo, issue_number: issueNumber, per_page: 100 },
-            );
-            let statusComment = comments.find((comment) =>
-              comment.body?.includes(marker),
-            );
+          Tag: \`v0.1.11\` → \`379bcd2841b36d0ea78b12cc64435f619e6e5ccd\`
 
-            async function publishStatus(body) {
-              const comment = `${marker}\n${body}`;
-              if (statusComment) {
-                const updated = await github.rest.issues.updateComment({
-                  owner,
-                  repo,
-                  comment_id: statusComment.id,
-                  body: comment,
-                });
-                statusComment = updated.data;
-              } else {
-                const created = await github.rest.issues.createComment({
-                  owner,
-                  repo,
-                  issue_number: issueNumber,
-                  body: comment,
-                });
-                statusComment = created.data;
-              }
-            }
+          This run will build the universal APK, the three per-ABI APKs, and the AAB with the release keystore, attach them to the existing GitHub Release, and verify every public file name."
 
-            async function releaseState() {
-              const response = await github.rest.repos.getReleaseByTag({
-                owner,
-                repo,
-                tag,
-              });
-              const names = response.data.assets.map((asset) => asset.name);
-              const missing = requiredAssets.filter((name) => !names.includes(name));
-              return { release: response.data, names, missing };
-            }
+      - name: Dispatch official Android Release Build
+        id: dispatch
+        shell: bash
+        run: |
+          set -euo pipefail
 
-            async function releaseRuns() {
-              const response = await github.rest.actions.listWorkflowRuns({
-                owner,
-                repo,
-                workflow_id: 'android-release-build.yml',
-                per_page: 20,
-              });
-              return response.data.workflow_runs
-                .filter((run) =>
-                  new Date(run.created_at) >= new Date('2026-08-03T18:00:00Z'),
-                )
-                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-            }
+          before="$RUNNER_TEMP/runs-before.txt"
+          gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow android-release-build.yml \
+            --event workflow_dispatch \
+            --limit 30 \
+            --json databaseId \
+            --jq '.[].databaseId' > "$before"
 
-            function runsMarkdown(runs) {
-              if (runs.length === 0) return '- No recent release-build run found.';
-              return runs.slice(0, 5).map((run) =>
-                `- [Run #${run.run_number}](${run.html_url}): ` +
-                `\`${run.event}\` — **${run.status}**` +
-                `${run.conclusion ? ` / **${run.conclusion}**` : ''}`,
-              ).join('\n');
-            }
+          gh workflow run android-release-build.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f signed=true \
+            -f release_tag="$RELEASE_TAG"
 
-            async function failureMarkdown(run) {
-              if (!run || run.status !== 'completed' || run.conclusion === 'success') {
-                return '';
-              }
-              const jobs = await github.paginate(
-                github.rest.actions.listJobsForWorkflowRun,
-                { owner, repo, run_id: run.id, per_page: 100 },
-              );
-              const failures = [];
-              for (const job of jobs) {
-                if (job.conclusion !== 'failure') continue;
-                const failedSteps = (job.steps ?? [])
-                  .filter((step) => step.conclusion === 'failure')
-                  .map((step) => `\`${step.name}\``)
-                  .join(', ');
-                failures.push(
-                  `- **${job.name}**${failedSteps ? ` — failed step: ${failedSteps}` : ''}`,
-                );
-              }
-              return failures.length > 0
-                ? `\n\nFailed jobs:\n${failures.join('\n')}`
-                : '';
-            }
+          run_id=""
+          run_url=""
+          for attempt in $(seq 1 30); do
+            candidate="$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow android-release-build.yml \
+              --event workflow_dispatch \
+              --limit 10 \
+              --json databaseId,url \
+              --jq '.[0] | [.databaseId, .url] | @tsv')"
+            candidate_id="${candidate%%$'\t'*}"
+            candidate_url="${candidate#*$'\t'}"
+            if [ -n "$candidate_id" ] && ! grep -qx "$candidate_id" "$before"; then
+              run_id="$candidate_id"
+              run_url="$candidate_url"
+              break
+            fi
+            sleep 2
+          done
 
-            const tagRef = await github.rest.git.getRef({
-              owner,
-              repo,
-              ref: `tags/${tag}`,
-            });
-            if (tagRef.data.object.type !== 'tag') {
-              throw new Error(`${tag} is not an annotated tag.`);
-            }
-            const annotatedTag = await github.rest.git.getTag({
-              owner,
-              repo,
-              tag_sha: tagRef.data.object.sha,
-            });
-            if (
-              annotatedTag.data.object.type !== 'commit' ||
-              annotatedTag.data.object.sha !== target
-            ) {
-              throw new Error(`${tag} does not point to ${target}.`);
-            }
+          if [ -z "$run_id" ]; then
+            echo "::error::The dispatched Android Release Build did not appear."
+            exit 1
+          fi
 
-            let state = await releaseState();
-            let runs = await releaseRuns();
-            await publishStatus(
-              `🔎 **Checking Linthra v0.1.11 publication**\n\n` +
-              `Tag: \`${tag}\` → \`${target}\` ✅\n` +
-              `Release: ${state.release.html_url}\n\n` +
-              `Public assets now: ${state.names.length > 0 ? state.names.map((name) => `\`${name}\``).join(', ') : '_none yet_'}\n\n` +
-              `Missing signed assets: ${state.missing.length > 0 ? state.missing.map((name) => `\`${name}\``).join(', ') : '_none_'}\n\n` +
-              `Recent Android Release Build runs:\n${runsMarkdown(runs)}`,
-            );
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "run_url=$run_url" >> "$GITHUB_OUTPUT"
+          echo "Following Android Release Build run $run_id: $run_url"
 
-            if (state.missing.length === 0) {
-              await publishStatus(
-                `✅ **Linthra v0.1.11 is published and verified.**\n\n` +
-                `Tag: \`${tag}\` → \`${target}\`\n` +
-                `Release: ${state.release.html_url}\n\n` +
-                `Signed assets:\n${requiredAssets.map((name) => `- \`${name}\``).join('\n')}`,
-              );
-              return;
-            }
+          gh issue comment 293 \
+            --repo "$GITHUB_REPOSITORY" \
+            --body "⏳ Signed build started: $run_url"
 
-            const activeRun = runs.find((run) =>
-              run.status === 'queued' || run.status === 'in_progress',
-            );
-            const latestRun = runs[0];
-            if (!activeRun && (!latestRun || latestRun.conclusion !== 'success')) {
-              await github.rest.actions.createWorkflowDispatch({
-                owner,
-                repo,
-                workflow_id: 'android-release-build.yml',
-                ref: 'main',
-                inputs: { signed: 'true', release_tag: tag },
-              });
-              core.info('Started a replacement signed release build.');
-            }
+      - name: Wait for official signed build
+        env:
+          RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh run watch "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --exit-status
 
-            for (let attempt = 1; attempt <= 60; attempt += 1) {
-              await sleep(15000);
-              state = await releaseState();
-              runs = await releaseRuns();
-              const newestRun = runs[0];
+      - name: Verify every public Release asset
+        shell: bash
+        run: |
+          set -euo pipefail
 
-              if (state.missing.length === 0) {
-                await publishStatus(
-                  `✅ **Linthra v0.1.11 is published and verified.**\n\n` +
-                  `Tag: \`${tag}\` → \`${target}\`\n` +
-                  `Release: ${state.release.html_url}\n\n` +
-                  `Signed assets:\n${requiredAssets.map((name) => `- \`${name}\``).join('\n')}`,
-                );
-                return;
-              }
+          release_json="$RUNNER_TEMP/release.json"
+          gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json url,assets > "$release_json"
 
-              if (
-                newestRun &&
-                newestRun.status === 'completed' &&
-                newestRun.conclusion !== 'success'
-              ) {
-                const failures = await failureMarkdown(newestRun);
-                await publishStatus(
-                  `❌ **The signed v0.1.11 build failed.**\n\n` +
-                  `Release: ${state.release.html_url}\n` +
-                  `Missing: ${state.missing.map((name) => `\`${name}\``).join(', ')}\n\n` +
-                  `Recent runs:\n${runsMarkdown(runs)}${failures}`,
-                );
-                throw new Error('The signed Android release build failed.');
-              }
+          required=(
+            linthra-v0.1.11-release-signed.apk
+            linthra-v0.1.11-release-signed.aab
+            linthra-v0.1.11-armeabi-v7a-release-signed.apk
+            linthra-v0.1.11-arm64-v8a-release-signed.apk
+            linthra-v0.1.11-x86_64-release-signed.apk
+          )
 
-              if (attempt % 4 === 0) {
-                await publishStatus(
-                  `⏳ **Linthra v0.1.11 signed build is still running.**\n\n` +
-                  `Release: ${state.release.html_url}\n` +
-                  `Missing: ${state.missing.map((name) => `\`${name}\``).join(', ')}\n\n` +
-                  `Recent runs:\n${runsMarkdown(runs)}`,
-                );
-              }
-            }
+          missing=()
+          for asset in "${required[@]}"; do
+            if ! jq -e --arg name "$asset" \
+              '.assets[] | select(.name == $name)' \
+              "$release_json" >/dev/null; then
+              missing+=("$asset")
+            fi
+          done
 
-            const newestRun = runs[0];
-            const failures = await failureMarkdown(newestRun);
-            await publishStatus(
-              `❌ **Timed out while waiting for the signed v0.1.11 assets.**\n\n` +
-              `Release: ${state.release.html_url}\n` +
-              `Missing: ${state.missing.map((name) => `\`${name}\``).join(', ')}\n\n` +
-              `Recent runs:\n${runsMarkdown(runs)}${failures}`,
-            );
-            throw new Error('Timed out waiting for signed release assets.');
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf '::error::Missing Release asset: %s\n' "${missing[@]}"
+            exit 1
+          fi
+
+          release_url="$(jq -r '.url' "$release_json")"
+          receipt="$RUNNER_TEMP/verified.md"
+          {
+            echo '<!-- v0.1.11-release-verified -->'
+            echo '✅ **Linthra v0.1.11 is officially published and verified.**'
+            echo
+            echo 'Tag: `v0.1.11` → `379bcd2841b36d0ea78b12cc64435f619e6e5ccd`'
+            echo "Release: $release_url"
+            echo
+            echo 'Signed assets:'
+            for asset in "${required[@]}"; do
+              echo "- \`$asset\`"
+            done
+          } > "$receipt"
+
+          gh issue comment 293 \
+            --repo "$GITHUB_REPOSITORY" \
+            --body-file "$receipt"
+
+      - name: Report signed build failure
+        if: ${{ failure() }}
+        env:
+          RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+          RUN_URL: ${{ steps.dispatch.outputs.run_url }}
+        shell: bash
+        run: |
+          set +e
+          report="$RUNNER_TEMP/failure.md"
+          {
+            echo '<!-- v0.1.11-release-failed -->'
+            echo '❌ **The official signed Linthra v0.1.11 build failed.**'
+            echo
+            if [ -n "$RUN_URL" ]; then
+              echo "Run: $RUN_URL"
+            fi
+            echo
+            echo 'Failed log tail:'
+            echo '```text'
+            if [ -n "$RUN_ID" ]; then
+              gh run view "$RUN_ID" \
+                --repo "$GITHUB_REPOSITORY" \
+                --log-failed 2>&1 | tail -n 120
+            else
+              echo 'The workflow dispatch did not produce a run ID.'
+            fi
+            echo '```'
+          } > "$report"
+
+          gh issue comment 293 \
+            --repo "$GITHUB_REPOSITORY" \
+            --body-file "$report"
