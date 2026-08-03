@@ -5,16 +5,10 @@ on:
   workflow_dispatch:
   issue_comment:
     types: [created]
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/publish-v0.1.11.yml
 
 permissions:
   contents: read
   actions: write
-  issues: write
 
 jobs:
   publish-assets:
@@ -29,16 +23,15 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: v0.1.11
     steps:
-      - name: Announce signed build start
+      - name: Record signed build start
         run: |
-          gh issue comment 293 \
-            --repo "$GITHUB_REPOSITORY" \
-            --body "<!-- v0.1.11-release-build -->
-          🚀 **Starting the official signed Linthra v0.1.11 build.**
-
-          Tag: \`v0.1.11\` → \`379bcd2841b36d0ea78b12cc64435f619e6e5ccd\`
-
-          This run will build the universal APK, the three per-ABI APKs, and the AAB with the release keystore, attach them to the existing GitHub Release, and verify every public file name."
+          {
+            echo '## Linthra v0.1.11 signed publication'
+            echo
+            echo 'Starting the official signed Android release build.'
+            echo
+            echo 'Tag: `v0.1.11` → `379bcd2841b36d0ea78b12cc64435f619e6e5ccd`'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dispatch official Android Release Build
         id: dispatch
@@ -89,10 +82,10 @@ jobs:
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           echo "run_url=$run_url" >> "$GITHUB_OUTPUT"
           echo "Following Android Release Build run $run_id: $run_url"
-
-          gh issue comment 293 \
-            --repo "$GITHUB_REPOSITORY" \
-            --body "⏳ Signed build started: $run_url"
+          {
+            echo
+            echo "Official signed build: $run_url"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Wait for official signed build
         env:
@@ -136,23 +129,17 @@ jobs:
           fi
 
           release_url="$(jq -r '.url' "$release_json")"
-          receipt="$RUNNER_TEMP/verified.md"
           {
-            echo '<!-- v0.1.11-release-verified -->'
-            echo '✅ **Linthra v0.1.11 is officially published and verified.**'
             echo
-            echo 'Tag: `v0.1.11` → `379bcd2841b36d0ea78b12cc64435f619e6e5ccd`'
+            echo '## ✅ Linthra v0.1.11 is published and verified'
+            echo
             echo "Release: $release_url"
             echo
             echo 'Signed assets:'
             for asset in "${required[@]}"; do
               echo "- \`$asset\`"
             done
-          } > "$receipt"
-
-          gh issue comment 293 \
-            --repo "$GITHUB_REPOSITORY" \
-            --body-file "$receipt"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Report signed build failure
         if: ${{ failure() }}
@@ -162,15 +149,14 @@ jobs:
         shell: bash
         run: |
           set +e
-          report="$RUNNER_TEMP/failure.md"
           {
-            echo '<!-- v0.1.11-release-failed -->'
-            echo '❌ **The official signed Linthra v0.1.11 build failed.**'
+            echo
+            echo '## ❌ Signed v0.1.11 publication failed'
             echo
             if [ -n "$RUN_URL" ]; then
               echo "Run: $RUN_URL"
+              echo
             fi
-            echo
             echo 'Failed log tail:'
             echo '```text'
             if [ -n "$RUN_ID" ]; then
@@ -181,8 +167,4 @@ jobs:
               echo 'The workflow dispatch did not produce a run ID.'
             fi
             echo '```'
-          } > "$report"
-
-          gh issue comment 293 \
-            --repo "$GITHUB_REPOSITORY" \
-            --body-file "$report"
+          } >> "$GITHUB_STEP_SUMMARY"
