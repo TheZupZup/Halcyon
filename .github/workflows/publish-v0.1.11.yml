@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   publish:
@@ -37,7 +38,7 @@ jobs:
           git show "${TARGET_SHA}:docs/release-notes/v0.1.11.md" \
             > "${RELEASE_NOTES_PATH}"
 
-      - name: Create annotated tag and GitHub Release
+      - name: Create tag, publish Release, and start signed build
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -119,3 +120,15 @@ jobs:
               });
               core.info(`Published ${release.data.html_url}`);
             }
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner,
+              repo,
+              workflow_id: 'android-release-build.yml',
+              ref: 'main',
+              inputs: {
+                signed: 'true',
+                release_tag: tag,
+              },
+            });
+            core.info(`Started the signed Android release build for ${tag}.`);
