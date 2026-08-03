@@ -39,11 +39,12 @@ class _FolderBrowserTabState extends ConsumerState<FolderBrowserTab> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    return PopScope(
-      canPop: _trail.isEmpty,
-      onPopInvokedWithResult: (bool didPop, _) {
-        if (!didPop && _trail.isNotEmpty) _goBack();
-      },
+    // BackButtonListener talks directly to the Router used by go_router. A
+    // nested PopScope inside TabBarView is not reliable on every Android back
+    // implementation, while this listener can consume the physical/system
+    // Back event before the app's root route is closed.
+    return BackButtonListener(
+      onBackButtonPressed: _handleSystemBack,
       child: _trail.isEmpty
           ? _FolderRoots(
               sources: sources,
@@ -55,6 +56,32 @@ class _FolderBrowserTabState extends ConsumerState<FolderBrowserTab> {
               onOpen: _openChild,
             ),
     );
+  }
+
+  /// Consumes Android Back only when this TabBarView page is actually visible
+  /// and there is a folder level to leave. TabBarView keeps neighbouring pages
+  /// alive off-screen, so visibility is checked from the rendered page bounds;
+  /// otherwise a hidden Folders tab could swallow Back while viewing Songs.
+  Future<bool> _handleSystemBack() async {
+    if (_trail.isEmpty || !_isVisibleInViewport()) return false;
+    _goBack();
+    return true;
+  }
+
+  bool _isVisibleInViewport() {
+    final RenderObject? renderObject = context.findRenderObject();
+    if (renderObject is! RenderBox ||
+        !renderObject.attached ||
+        !renderObject.hasSize) {
+      return false;
+    }
+
+    final Offset topLeft = renderObject.localToGlobal(Offset.zero);
+    final Size viewport = MediaQuery.sizeOf(context);
+    return topLeft.dx < viewport.width &&
+        topLeft.dx + renderObject.size.width > 0 &&
+        topLeft.dy < viewport.height &&
+        topLeft.dy + renderObject.size.height > 0;
   }
 
   void _openRoot(FolderBrowsableMusicSource source, MusicFolder folder) {
