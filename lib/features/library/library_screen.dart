@@ -14,6 +14,7 @@ import '../../core/sources/local/folder_location.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../playlists/widgets/add_to_playlist_sheet.dart';
 import '../settings/jellyfin/jellyfin_sync_controller.dart';
+import 'folder_browser_providers.dart';
 import 'library_browse_providers.dart';
 import 'library_controller.dart';
 import 'library_search.dart';
@@ -24,13 +25,15 @@ import 'unified_library_providers.dart';
 import 'widgets/album_tile.dart';
 import 'widgets/alphabet_track_list.dart';
 import 'widgets/artist_tile.dart';
+import 'widgets/folder_browser_tab.dart';
 import 'widgets/library_search_field.dart';
 
-/// Browse the local catalog across three tabs — Songs, Albums, Artists — with a
-/// single search box that filters whichever tab is showing. Reads entirely from
-/// [libraryControllerProvider] (the flat track catalog) plus the derived
-/// [libraryAlbumsProvider]/[libraryArtistsProvider]; it has no knowledge of
-/// where tracks are stored or which plugin picks the folder.
+/// Browse the catalog across Songs, Albums, Artists, and provider folders.
+///
+/// The first three tabs read the de-duplicated local catalog and share one
+/// search box. Folders is an on-demand view of the real hierarchy exposed by a
+/// connected Jellyfin or Navidrome/Subsonic server, so it does not require the
+/// directory tree to be persisted or recursively synced first.
 ///
 /// Songs keeps the long-press multi-select and the A–Z fast-scroller from
 /// before. Switching tabs clears the query, so a search meant for one tab never
@@ -56,7 +59,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _tabController.addListener(_onTabChanged);
   }
 
@@ -68,13 +71,17 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     super.dispose();
   }
 
-  /// Clears the search once per real tab change. A query that filters songs is
-  /// meaningless against albums/artists, so resetting on switch keeps each tab
-  /// honest about what it's showing.
+  /// Clears the search once per real tab change. The setState is also needed
+  /// when entering/leaving Folders, where the catalog search field is hidden.
   void _onTabChanged() {
     if (_tabController.index == _lastTabIndex) return;
-    _lastTabIndex = _tabController.index;
-    if (_query.isNotEmpty) _clearSearch();
+    setState(() {
+      _lastTabIndex = _tabController.index;
+      if (_query.isNotEmpty) {
+        _query = '';
+        _searchController.clear();
+      }
+    });
   }
 
   void _onQueryChanged(String value) => setState(() => _query = value);
@@ -92,6 +99,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // The de-duplicated catalog the whole screen renders from: one row per
     // logical song, even when the same track is served by more than one provider.
     final List<Track> songs = ref.watch(libraryUnifiedTracksProvider);
+    final bool hasFolderSources =
+        ref.watch(folderBrowsableSourcesProvider).isNotEmpty;
     final AsyncValue<String?> selectedFolder =
         ref.watch(selectedFolderControllerProvider);
     // While the first Jellyfin sync is running, an empty catalog should read as
@@ -123,11 +132,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       );
     }
 
-    // Tabs and search only appear once there's a loaded, non-empty catalog to
-    // browse; loading, error, and the folder-pick empty state take the whole
-    // body (and no tabs), exactly as before.
-    final bool browsing =
-        state.status == LibraryStatus.loaded && songs.isNotEmpty;
+    // A connected folder-capable server is browseable before (or even without)
+    // a flat catalog sync, so it is enough to show the Library tabs on its own.
+    final bool browsing = state.status == LibraryStatus.loaded &&
+        (songs.isNotEmpty || hasFolderSources);
 
     return Scaffold(
       appBar: AppBar(
@@ -160,6 +168,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         Tab(text: 'Songs'),
         Tab(text: 'Albums'),
         Tab(text: 'Artists'),
+        Tab(text: 'Folders'),
       ],
     );
   }
@@ -194,15 +203,18 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     }
   }
 
-  /// Search box + the three browse tabs. Only built when there's content.
+  /// Catalog search + four browse tabs. Folders performs its own hierarchical
+  /// navigation, so the flat-catalog search field is hidden on that tab.
   Widget _browseBody(List<Track> songs) {
+    final bool foldersTab = _tabController.index == 3;
     return Column(
       children: <Widget>[
-        LibrarySearchField(
-          controller: _searchController,
-          onChanged: _onQueryChanged,
-          onClear: _clearSearch,
-        ),
+        if (!foldersTab)
+          LibrarySearchField(
+            controller: _searchController,
+            onChanged: _onQueryChanged,
+            onClear: _clearSearch,
+          ),
         Expanded(
           child: TabBarView(
             controller: _tabController,
@@ -210,6 +222,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
               _songsTab(songs),
               _albumsTab(),
               _artistsTab(),
+              const FolderBrowserTab(),
             ],
           ),
         ),
@@ -221,14 +234,28 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   Widget _songsTab(List<Track> songs) {
     final List<Track> filtered = _filteredSongs(songs);
-    if (filtered.isEmpty) return const _NoResults();
+    if (filtered.isEmpty) {
+      if (_query.isNotEmpty) return const _NoResults();
+      return const EmptyState(
+        icon: Icons.music_note_outlined,
+        title: 'No songs in the synced catalog',
+        message: 'You can still browse the connected server from Folders.',
+      );
+    }
     return _songsList(filtered);
   }
 
   Widget _albumsTab() {
     final List<Album> filtered =
         filterAlbums(ref.watch(libraryAlbumsProvider), _query);
-    if (filtered.isEmpty) return const _NoResults();
+    if (filtered.isEmpty) {
+      if (_query.isNotEmpty) return const _NoResults();
+      return const EmptyState(
+        icon: Icons.album_outlined,
+        title: 'No albums in the synced catalog',
+        message: 'You can still browse the connected server from Folders.',
+      );
+    }
     return ListView.builder(
       key: const Key('library_album_list'),
       itemCount: filtered.length,
@@ -245,7 +272,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   Widget _artistsTab() {
     final List<Artist> filtered =
         filterArtists(ref.watch(libraryArtistsProvider), _query);
-    if (filtered.isEmpty) return const _NoResults();
+    if (filtered.isEmpty) {
+      if (_query.isNotEmpty) return const _NoResults();
+      return const EmptyState(
+        icon: Icons.person_outline,
+        title: 'No artists in the synced catalog',
+        message: 'You can still browse the connected server from Folders.',
+      );
+    }
     return ListView.builder(
       key: const Key('library_artist_list'),
       itemCount: filtered.length,
