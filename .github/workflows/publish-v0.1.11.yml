@@ -13,10 +13,12 @@ on:
 permissions:
   contents: write
   actions: write
+  issues: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       RELEASE_TAG: v0.1.11
       RELEASE_NAME: Linthra v0.1.11
@@ -39,7 +41,7 @@ jobs:
           git show "${TARGET_SHA}:docs/release-notes/v0.1.11.md" \
             > "${RELEASE_NOTES_PATH}"
 
-      - name: Create tag, publish Release, and start signed build
+      - name: Create tag, publish Release, and verify signed assets
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -49,6 +51,16 @@ jobs:
             const repo = context.repo.repo;
             const tag = process.env.RELEASE_TAG;
             const target = process.env.TARGET_SHA;
+            const verificationMarker = '<!-- v0.1.11-release-verified -->';
+            const requiredAssets = [
+              'linthra-v0.1.11-release-signed.apk',
+              'linthra-v0.1.11-release-signed.aab',
+              'linthra-v0.1.11-armeabi-v7a-release-signed.apk',
+              'linthra-v0.1.11-arm64-v8a-release-signed.apk',
+              'linthra-v0.1.11-x86_64-release-signed.apk',
+            ];
+            const sleep = (milliseconds) =>
+              new Promise((resolve) => setTimeout(resolve, milliseconds));
 
             let tagRef;
             try {
@@ -71,10 +83,9 @@ jobs:
                 existingTag.data.object.type !== 'commit' ||
                 existingTag.data.object.sha !== target
               ) {
-                core.setFailed(
+                throw new Error(
                   `${tag} already exists but does not point to ${target}.`,
                 );
-                return;
               }
               core.info(`${tag} already exists on the expected commit.`);
             } else {
@@ -95,22 +106,21 @@ jobs:
               core.info(`Created annotated tag ${tag} on ${target}.`);
             }
 
+            let release;
             try {
-              const existingRelease = await github.rest.repos.getReleaseByTag({
+              release = await github.rest.repos.getReleaseByTag({
                 owner,
                 repo,
                 tag,
               });
-              core.info(
-                `Release already exists: ${existingRelease.data.html_url}`,
-              );
+              core.info(`Release exists: ${release.data.html_url}`);
             } catch (error) {
               if (error.status !== 404) throw error;
               const body = fs.readFileSync(
                 process.env.RELEASE_NOTES_PATH,
                 'utf8',
               );
-              const release = await github.rest.repos.createRelease({
+              release = await github.rest.repos.createRelease({
                 owner,
                 repo,
                 tag_name: tag,
@@ -122,14 +132,75 @@ jobs:
               core.info(`Published ${release.data.html_url}`);
             }
 
-            await github.rest.actions.createWorkflowDispatch({
-              owner,
-              repo,
-              workflow_id: 'android-release-build.yml',
-              ref: 'main',
-              inputs: {
-                signed: 'true',
-                release_tag: tag,
+            async function waitForAssets(attempts, delayMilliseconds) {
+              for (let attempt = 1; attempt <= attempts; attempt += 1) {
+                release = await github.rest.repos.getReleaseByTag({
+                  owner,
+                  repo,
+                  tag,
+                });
+                const names = new Set(
+                  release.data.assets.map((asset) => asset.name),
+                );
+                const missing = requiredAssets.filter(
+                  (assetName) => !names.has(assetName),
+                );
+                if (missing.length === 0) {
+                  return release;
+                }
+                core.info(
+                  `Asset check ${attempt}/${attempts}; missing: ${missing.join(', ')}`,
+                );
+                if (attempt < attempts) await sleep(delayMilliseconds);
+              }
+              return null;
+            }
+
+            // A build was already dispatched by the first successful publisher
+            // run. Give it five minutes to finish before starting a replacement.
+            let verifiedRelease = await waitForAssets(20, 15000);
+            if (!verifiedRelease) {
+              await github.rest.actions.createWorkflowDispatch({
+                owner,
+                repo,
+                workflow_id: 'android-release-build.yml',
+                ref: 'main',
+                inputs: {
+                  signed: 'true',
+                  release_tag: tag,
+                },
+              });
+              core.info(`Started a signed Android release build for ${tag}.`);
+              verifiedRelease = await waitForAssets(60, 15000);
+            }
+
+            if (!verifiedRelease) {
+              throw new Error(
+                `The signed ${tag} assets did not appear before the verification timeout.`,
+              );
+            }
+
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                owner,
+                repo,
+                issue_number: 293,
+                per_page: 100,
               },
-            });
-            core.info(`Started the signed Android release build for ${tag}.`);
+            );
+            const alreadyCommented = comments.some((comment) =>
+              comment.body?.includes(verificationMarker),
+            );
+            if (!alreadyCommented) {
+              const assetLines = requiredAssets
+                .map((assetName) => `- \`${assetName}\``)
+                .join('\n');
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: 293,
+                body: `${verificationMarker}\n✅ **Linthra v0.1.11 is published and verified.**\n\nTag: \`v0.1.11\` → \`${target}\`\nRelease: ${verifiedRelease.data.html_url}\n\nSigned assets:\n${assetLines}`,
+              });
+            }
+            core.info('All required signed v0.1.11 assets are public.');
