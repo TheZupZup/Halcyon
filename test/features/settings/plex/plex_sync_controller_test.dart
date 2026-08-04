@@ -594,6 +594,56 @@ void main() {
       );
     });
 
+    test('a library that only gained album metadata is still rebuilt',
+        () async {
+      // Regression (issue #281): the signature must cover every field the
+      // catalog persists. albumId/albumArtistName were added to Track after
+      // the signature existed; if they were left out, a server that starts
+      // reporting them — or a user upgrading with an unchanged library — would
+      // hash identically to before, skip the rebuild, and leave the new
+      // columns null forever.
+      final client = FakePlexClient(
+        sections: const [_musicSection],
+        itemsByType: <PlexMetadataType, List<PlexMetadata>>{
+          PlexMetadataType.track: const <PlexMetadata>[
+            PlexMetadata(ratingKey: '101', type: 'track', title: 'Aurora'),
+          ],
+        },
+      );
+      final repo = _RecordingRepository();
+      final container =
+          _container(client: client, session: _session, repository: repo);
+      final sync = container.read(plexSyncControllerProvider.notifier);
+      await container
+          .read(plexSettingsControllerProvider.notifier)
+          .ensureLoaded();
+
+      await sync.sync();
+      expect(repo.beginCount, 1);
+      expect(repo.stored.single.albumId, isNull);
+
+      // Same track id, title, duration, artwork — only the album linkage the
+      // new fields read from appears.
+      client.itemsByType = <PlexMetadataType, List<PlexMetadata>>{
+        PlexMetadataType.track: const <PlexMetadata>[
+          PlexMetadata(
+            ratingKey: '101',
+            type: 'track',
+            title: 'Aurora',
+            parentRatingKey: '201',
+            grandparentTitle: 'The Band',
+          ),
+        ],
+      };
+
+      await sync.sync();
+
+      // Rebuilt, not skipped — and the catalog now carries the album fields.
+      expect(repo.beginCount, 2);
+      expect(repo.stored.single.albumId, 'plex:201');
+      expect(repo.stored.single.albumArtistName, 'The Band');
+    });
+
     test('a signature stored for a different server is ignored', () async {
       final repo = _RecordingRepository();
       // The cache holds a fingerprint for some OTHER Plex server.

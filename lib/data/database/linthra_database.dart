@@ -18,6 +18,11 @@ part 'linthra_database.g.dart';
 ///  * **v2** — `tracks` re-keyed on the provider-namespaced `uri`, so the same
 ///    server-side `id` from two providers (e.g. Plex `101` and Subsonic `101`)
 ///    can coexist instead of overwriting each other. See [migration].
+///  * **v3** — nullable `album_id` / `album_artist_name` columns, so tracks
+///    whose per-track artist differs (collaborations) can still group under
+///    one album (`library_grouping.dart`). Purely additive: existing rows keep
+///    every value and read back with the new columns `null` until the next
+///    source re-scan populates them.
 @DriftDatabase(tables: [Tracks])
 class LinthraDatabase extends _$LinthraDatabase {
   LinthraDatabase() : super(_openConnection());
@@ -27,7 +32,7 @@ class LinthraDatabase extends _$LinthraDatabase {
   LinthraDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -36,7 +41,13 @@ class LinthraDatabase extends _$LinthraDatabase {
         },
         onUpgrade: (Migrator m, int from, int to) async {
           if (from < 2) {
+            // Rebuilds `tracks` from the *current* table definition, which
+            // already includes the v3 columns — so a v1 database arrives at
+            // the v3 shape here and must skip the add-column step below (a
+            // second ADD COLUMN of an existing column is an SQLite error).
             await _migrateTracksKeyToUri(m);
+          } else if (from < 3) {
+            await _addAlbumGroupingColumns(m);
           }
         },
       );
@@ -68,6 +79,24 @@ class LinthraDatabase extends _$LinthraDatabase {
         'duration_ms, track_number, artwork_uri FROM tracks_legacy_v1;',
       );
       await m.database.customStatement('DROP TABLE tracks_legacy_v1;');
+    });
+  }
+
+  /// v2 → v3: add the nullable `album_id` / `album_artist_name` columns that
+  /// let album grouping key off a source's own stable album id instead of the
+  /// track's per-track artist name (see `library_grouping.dart`).
+  ///
+  /// **Purely additive, and data is preserved.** Both columns are nullable
+  /// with no default, so SQLite's `ALTER TABLE … ADD COLUMN` rewrites no rows
+  /// and needs no table rebuild (unlike the v1 → v2 primary-key change above):
+  /// every existing row keeps all of its values and simply reads back with the
+  /// two new fields `null`. A null `album_id` falls through to the name-based
+  /// grouping tiers, i.e. exactly the pre-v3 behavior, until the next source
+  /// re-scan repopulates the catalog with the new metadata.
+  Future<void> _addAlbumGroupingColumns(Migrator m) async {
+    await transaction(() async {
+      await m.addColumn(tracks, tracks.albumId);
+      await m.addColumn(tracks, tracks.albumArtistName);
     });
   }
 }

@@ -12,6 +12,8 @@ class Track {
     required this.uri,
     this.artistName,
     this.albumName,
+    this.albumId,
+    this.albumArtistName,
     this.duration = Duration.zero,
     this.trackNumber,
     this.artworkUri,
@@ -23,6 +25,25 @@ class Track {
   final String uri;
   final String? artistName;
   final String? albumName;
+
+  /// The source's stable, provider-namespaced album id (e.g. `jellyfin:al-1`,
+  /// `plex:201`, `subsonic:al-27`), when the source exposes one. Mirrors
+  /// [uri]'s namespacing so two providers' same bare album id can never
+  /// collide. `null` for sources with no stable album id (local files) or when
+  /// the source didn't report one for this track. Preferred over [albumName] +
+  /// [artistName] for album grouping — see `library_grouping.dart`.
+  final String? albumId;
+
+  /// The album's artist, as reported by the source (e.g. Jellyfin's
+  /// `AlbumArtist`, Plex's grandparent title), distinct from [artistName]
+  /// (this track's own credited artist). Lets tracks that are collaborations —
+  /// same album, different per-track [artistName] — still group under one
+  /// album via `albumName + albumArtistName` when no [albumId] is available.
+  /// `null` when the source carries no separate album-artist concept, or when
+  /// it isn't a trustworthy fit (e.g. Subsonic's classic API has no reliable
+  /// per-song album-artist field).
+  final String? albumArtistName;
+
   final Duration duration;
   final int? trackNumber;
   final Uri? artworkUri;
@@ -48,6 +69,8 @@ class Track {
     String? uri,
     String? artistName,
     String? albumName,
+    String? albumId,
+    String? albumArtistName,
     Duration? duration,
     int? trackNumber,
     Uri? artworkUri,
@@ -59,6 +82,8 @@ class Track {
       uri: uri ?? this.uri,
       artistName: artistName ?? this.artistName,
       albumName: albumName ?? this.albumName,
+      albumId: albumId ?? this.albumId,
+      albumArtistName: albumArtistName ?? this.albumArtistName,
       duration: duration ?? this.duration,
       trackNumber: trackNumber ?? this.trackNumber,
       artworkUri: artworkUri ?? this.artworkUri,

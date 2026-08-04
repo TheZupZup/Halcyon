@@ -8,22 +8,33 @@ import 'text_folding.dart';
 /// Derives [Album] and [Artist] groupings from the flat track catalog.
 ///
 /// Why derive instead of persist: the only stable, offline catalog Linthra
-/// keeps is the track table — album/artist *IDs* from a source (e.g. Jellyfin's
-/// `AlbumId`) are not stored on a [Track] today, so there are no stable IDs to
-/// group by. Grouping here by the tracks' own metadata is therefore the honest,
-/// source-uniform approach: it works identically for Jellyfin tracks (which
-/// carry real album/artist names) and local files (which usually carry neither,
-/// and so fold into a single "Unknown Album" / "Unknown Artist"). Persisting
-/// source album/artist IDs for sharper grouping is a documented follow-up.
+/// keeps is the track table. Artist grouping still has no stable ID to key
+/// off, so it stays name-based. Album grouping, however, prefers a track's own
+/// [Track.albumId] when the source reported one (see [albumIdForTrack]), so
+/// tracks belonging to the same source album stay grouped together even when
+/// their per-track [Track.artistName] differs — e.g. one track is a
+/// collaboration/feature and another isn't. Sources with no stable album id
+/// (local files, or a source that didn't report one for a given track) fall
+/// back to name-based grouping, same as before.
 ///
 /// Lives in `core` so both the Library UI and the Android Auto browse tree share
 /// one grouping implementation (the browse tree must not reach into the library
 /// feature). Grouping keys are built from [foldText], so case and accents never
-/// split one album/artist into two. Album identity is (album title + artist) so
-/// two different artists' "Greatest Hits" stay distinct; tracks with no album
-/// fold into one "Unknown Album" regardless of artist. All ordering uses total
-/// comparators (every tie broken down to the stable id), so a given catalog
-/// always produces the exact same order — sorting is predictable and stable.
+/// split one album/artist into two. Album identity, from most to least
+/// specific:
+///  1. [Track.albumId] — a source-reported, provider-namespaced stable id
+///     (e.g. `jellyfin:al-1`), when present. This is the only tier that can
+///     group tracks with different [Track.artistName] values into one album.
+///  2. `albumName + albumArtistName` — when the source has no stable id but
+///     does report a distinct album-artist, e.g. Subsonic without ID3
+///     browsing.
+///  3. `albumName + artistName` — the original fallback, so two different
+///     artists' "Greatest Hits" still stay distinct without either signal.
+/// Tracks with no album title fold into one "Unknown Album" regardless of
+/// artist. Each tier's key is prefixed so ids from different tiers can never
+/// collide with one another. All ordering uses total comparators (every tie
+/// broken down to the stable id), so a given catalog always produces the exact
+/// same order — sorting is predictable and stable.
 
 /// Display label for tracks with no album metadata.
 const String kUnknownAlbum = 'Unknown Album';
@@ -43,16 +54,42 @@ String _encode(String key) =>
 String _albumKey(String album, String artist) =>
     '${album.length}|$album|$artist';
 
-/// The stable album id [track] belongs to. Tracks with no album title share the
-/// single [_unknownAlbumId]; otherwise the id is `al-` + a base64url encoding of
-/// the (title, artist) key. Every character is URL-safe (so the id can ride in
-/// a route path — or an Android Auto media id — untouched) and the `al-` prefix
-/// can never produce the unknown sentinel, so the two never collide.
+/// `value` trimmed to `null` when it is null or blank, so a source's
+/// empty-string field reads the same as an absent one.
+String? _nonBlank(String? value) {
+  final String? trimmed = value?.trim();
+  return (trimmed == null || trimmed.isEmpty) ? null : trimmed;
+}
+
+/// The stable album id [track] belongs to, tried in order:
+///
+///  1. [Track.albumId], when the source reported one — encoded behind an
+///     `id:` tier prefix so it can never collide with a name-derived key from
+///     tier 2/3 even if the raw strings happened to match.
+///  2. `albumName + albumArtistName`, behind an `aa:` tier prefix, when the
+///     source has no stable id but does report a distinct album artist.
+///  3. `albumName + artistName`, behind an `ar:` tier prefix — the original
+///     name-only fallback.
+///
+/// Tracks with no album title (and no [Track.albumId]) share the single
+/// [_unknownAlbumId] regardless of tier. Every produced id is `al-` + a
+/// base64url encoding of the tiered key: every character is URL-safe (so the
+/// id can ride in a route path — or an Android Auto media id — untouched) and
+/// the `al-` prefix can never produce the unknown sentinel, so the two never
+/// collide.
 String albumIdForTrack(Track track) {
+  final String? albumId = _nonBlank(track.albumId);
+  if (albumId != null) {
+    return 'al-${_encode('id:$albumId')}';
+  }
   final String album = foldText(track.albumName ?? '');
   if (album.isEmpty) return _unknownAlbumId;
+  final String? albumArtist = _nonBlank(foldText(track.albumArtistName ?? ''));
+  if (albumArtist != null) {
+    return 'al-${_encode('aa:${_albumKey(album, albumArtist)}')}';
+  }
   final String artist = foldText(track.artistName ?? '');
-  return 'al-${_encode(_albumKey(album, artist))}';
+  return 'al-${_encode('ar:${_albumKey(album, artist)}')}';
 }
 
 /// The stable artist id [track] belongs to. Tracks with no artist share the
@@ -177,7 +214,17 @@ int _trackForArtistCompare(Track a, Track b) {
 /// can't blank out a name the others provide.
 class _AlbumAgg {
   String? _title;
-  String? _artist;
+
+  /// The first [Track.albumArtistName] and the first [Track.artistName] seen,
+  /// kept **separate** until [toAlbum]. Collapsing them as tracks arrive would
+  /// make the label order-dependent: a first track carrying only a per-track
+  /// credit ("Main Artist feat. Guest") would win and then block the real
+  /// album artist a later track supplies. Resolving at the end lets any album
+  /// artist in the group supersede the track-artist fallback, whatever order
+  /// the tracks are aggregated in.
+  String? _albumArtist;
+  String? _trackArtist;
+
   Uri? _artwork;
   int _count = 0;
 
@@ -189,20 +236,19 @@ class _AlbumAgg {
         album.isNotEmpty) {
       _title = album;
     }
-    final String? artist = track.artistName;
-    if ((_artist == null || _artist!.isEmpty) &&
-        artist != null &&
-        artist.isNotEmpty) {
-      _artist = artist;
-    }
+    _albumArtist ??= _nonBlank(track.albumArtistName);
+    _trackArtist ??= _nonBlank(track.artistName);
     _artwork ??= track.artworkUri;
   }
 
   Album toAlbum(String id) {
+    // The album artist labels the album whenever *any* track in the group
+    // carries one; otherwise the first track artist seen, which is the
+    // pre-existing behavior for sources that report no album artist.
     return Album(
       id: id,
       title: (_title == null || _title!.isEmpty) ? kUnknownAlbum : _title!,
-      artistName: (_artist != null && _artist!.isNotEmpty) ? _artist : null,
+      artistName: _albumArtist ?? _trackArtist,
       artworkUri: _artwork,
       trackCount: _count,
     );

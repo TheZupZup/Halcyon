@@ -76,6 +76,66 @@ void main() {
         Duration.zero,
       );
     });
+
+    // Issue #281: the album id is what keeps a collaboration track grouped
+    // with its album, since Subsonic's classic response has no reliable
+    // per-song album-artist field.
+    test('maps the album id, namespaced like the track uri', () {
+      const song = SubsonicSongDto(id: 's', title: 't', albumId: 'al-27');
+      expect(SubsonicTrackMapper.toTrack(song).albumId, 'subsonic:al-27');
+    });
+
+    test('leaves the album id null when the server reports none', () {
+      const song = SubsonicSongDto(id: 's', title: 't');
+      expect(SubsonicTrackMapper.toTrack(song).albumId, isNull);
+    });
+
+    test('leaves the album id null for a blank server value', () {
+      const song = SubsonicSongDto(id: 's', title: 't', albumId: '  ');
+      expect(SubsonicTrackMapper.toTrack(song).albumId, isNull);
+    });
+
+    test('never guesses an album artist', () {
+      // The classic Subsonic response carries no album-artist field distinct
+      // from the song's own artist, so this stays null rather than reusing
+      // `artist` — grouping falls back to the name-based tiers instead.
+      const song = SubsonicSongDto(
+        id: 's',
+        title: 't',
+        artist: 'Main Artist feat. Guest',
+        album: 'The Album',
+      );
+      expect(SubsonicTrackMapper.toTrack(song).albumArtistName, isNull);
+    });
+
+    test('the album id never embeds a credential', () {
+      const song = SubsonicSongDto(id: 's', title: 't', albumId: 'al-27');
+      final track = SubsonicTrackMapper.toTrack(song);
+      expect(track.albumId, isNot(contains('?')));
+      expect(track.albumId, isNot(contains('t=')));
+      expect(track.albumId, isNot(contains('http')));
+    });
+  });
+
+  group('SubsonicSongDto.fromJson', () {
+    test('parses the albumId the server reports', () {
+      final dto = SubsonicSongDto.fromJson(<String, dynamic>{
+        'id': 'tr-397',
+        'title': 'As I Please',
+        'album': '.limbo messiah',
+        'albumId': 'al-27',
+        'artist': 'Beatsteaks',
+      })!;
+      expect(dto.albumId, 'al-27');
+    });
+
+    test('leaves albumId null when the server omits it', () {
+      final dto = SubsonicSongDto.fromJson(<String, dynamic>{
+        'id': 'tr-397',
+        'title': 'As I Please',
+      })!;
+      expect(dto.albumId, isNull);
+    });
   });
 
   group('SubsonicTrackMapper album/artist', () {

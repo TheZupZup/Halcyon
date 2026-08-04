@@ -89,6 +89,15 @@ abstract final class LocalTrackMapper {
         folderArtist,
       ]),
       albumName: _firstNonBlank(<String?>[metadata?.album, folderAlbum]),
+      // No stable local album id exists (there is no server to mint one), so
+      // [Track.albumId] stays null — grouping falls to the name-based tiers.
+      // [Track.albumArtistName], though, comes straight from the file's own
+      // embedded album-artist tag when present: it is already a trustworthy,
+      // stable local value (used above for [artistName] too), so a tagged
+      // "various artists" / collaboration album groups correctly even for
+      // local files, the same as a server that reports a distinct album
+      // artist.
+      albumArtistName: _blankToNull(metadata?.albumArtist),
       trackNumber: metadata?.trackNumber ?? parts.trackNumber,
       duration: metadata?.duration ?? Duration.zero,
       // Embedded cover art has no filename fallback — it is present only when the
