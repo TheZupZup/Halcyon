@@ -71,7 +71,7 @@ More in [`phoneScreenshots/`](fastlane/metadata/android/en-US/images/phoneScreen
 
 New versions land on
 [GitHub Releases](https://github.com/thezupzup/linthra/releases) first, as
-signed APKs. The current stable is v0.1.10. Linthra is also on
+signed APKs. The current stable is v0.1.11. Linthra is also on
 [F-Droid](https://f-droid.org/packages/io.github.thezupzup.linthra/); F-Droid
 builds may arrive a bit later while their build and review process runs. Not on
 Google Play yet.
