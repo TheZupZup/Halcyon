@@ -6,12 +6,15 @@ import 'package:linthra/app/theme.dart';
 
 /// Contrast guardrails for the light themes.
 ///
-/// Linthra still runs dark-only (`themeMode: ThemeMode.dark`), so nothing here
-/// is user-visible yet — that is exactly why it needs a test. The light themes
-/// were built alongside the dark ones and then never rendered, so their tones
+/// These ratios are now user-visible: Linthra follows the phone's light/dark
+/// setting by default, and the light themes render for real.
+///
+/// They did not used to be. The light themes were built alongside the dark ones
+/// and then never rendered — the app pinned `ThemeMode.dark` — so their tones
 /// silently drifted out of the accessible range: before this suite, Classic's
 /// `primaryBright` carried text buttons at 2.71:1 and its `accent` carried
-/// SnackBar action text at 1.65:1.
+/// SnackBar action text at 1.65:1. That is what this suite exists to prevent
+/// recurring now that the tones are on screen.
 ///
 /// Every expectation below is read off a real [ThemeData] rather than off the
 /// palette constants, so it fails both when a colour regresses *and* when a

@@ -2,15 +2,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/custom_theme_settings.dart';
+import 'package:linthra/core/models/theme_mode_preference.dart';
 import 'package:linthra/data/repositories/app_icon_variant_store_provider.dart';
 import 'package:linthra/data/repositories/custom_theme_store_provider.dart';
 import 'package:linthra/data/repositories/in_memory_app_icon_variant_store.dart';
 import 'package:linthra/data/repositories/in_memory_custom_theme_store.dart';
+import 'package:linthra/data/repositories/in_memory_theme_mode_store.dart';
+import 'package:linthra/data/repositories/theme_mode_store_provider.dart';
 import 'package:linthra/features/appearance/app_icon_controller.dart';
 import 'package:linthra/features/appearance/app_icon_variant.dart';
 import 'package:linthra/features/appearance/appearance_settings_screen.dart';
 import 'package:linthra/features/appearance/custom_theme_controller.dart';
 import 'package:linthra/features/appearance/linthra_logo_mark.dart';
+import 'package:linthra/features/appearance/theme_mode_controller.dart';
 import 'package:linthra/features/settings/hub/about_screen.dart';
 import 'package:linthra/features/support/support_actions_provider.dart';
 import 'package:linthra/features/support/supporter_entitlement.dart';
@@ -146,6 +150,49 @@ void main() {
       expect(find.textContaining('active monthly GitHub Sponsors'),
           findsOneWidget);
       expect(find.byKey(const Key('custom-theme-enabled')), findsNothing);
+    });
+
+    testWidgets('offers System, Light, and Dark, starting on System',
+        (tester) async {
+      final ProviderContainer container = await pump(tester);
+
+      for (final ThemeModePreference preference in ThemeModePreference.values) {
+        expect(
+          find.text(preference.label),
+          findsOneWidget,
+          reason: '${preference.label} must be offered',
+        );
+      }
+      expect(
+        container.read(themeModeControllerProvider),
+        ThemeModePreference.system,
+      );
+      expect(find.textContaining('follows your phone'), findsOneWidget);
+    });
+
+    testWidgets('picking Light selects and persists it', (tester) async {
+      final ProviderContainer container = await pump(tester);
+
+      await tester.tap(find.text('Light'));
+      await tester.pumpAndSettle();
+
+      expect(
+        container.read(themeModeControllerProvider),
+        ThemeModePreference.light,
+      );
+      expect(
+        container.read(themeModeStoreProvider),
+        isA<InMemoryThemeModeStore>().having(
+          (InMemoryThemeModeStore store) => store.preference,
+          'persisted preference',
+          ThemeModePreference.light,
+        ),
+      );
+      // The blurb switches away from the "follows your phone" wording once a
+      // mode is pinned, so the card always states what is actually happening.
+      expect(find.textContaining('follows your phone'), findsNothing);
+      expect(
+          find.textContaining('always uses the light theme'), findsOneWidget);
     });
   });
 

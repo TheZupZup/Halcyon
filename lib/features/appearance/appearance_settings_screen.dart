@@ -9,6 +9,7 @@ import 'app_icon_controller.dart';
 import 'app_icon_variant.dart';
 import 'custom_theme_card.dart';
 import 'linthra_logo_mark.dart';
+import 'theme_mode_card.dart';
 
 /// "App icon & branding" — reached from Settings → Appearance.
 ///
@@ -35,6 +36,8 @@ class AppearanceSettingsScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(AppSpacing.md),
         children: <Widget>[
+          const ThemeModeCard(),
+          const SizedBox(height: AppSpacing.lg),
           _IntroCard(showCustomPalette: showCustomPalette),
           const SizedBox(height: AppSpacing.md),
           _VariantGrid(
