@@ -214,7 +214,17 @@ int _trackForArtistCompare(Track a, Track b) {
 /// can't blank out a name the others provide.
 class _AlbumAgg {
   String? _title;
-  String? _artist;
+
+  /// The first [Track.albumArtistName] and the first [Track.artistName] seen,
+  /// kept **separate** until [toAlbum]. Collapsing them as tracks arrive would
+  /// make the label order-dependent: a first track carrying only a per-track
+  /// credit ("Main Artist feat. Guest") would win and then block the real
+  /// album artist a later track supplies. Resolving at the end lets any album
+  /// artist in the group supersede the track-artist fallback, whatever order
+  /// the tracks are aggregated in.
+  String? _albumArtist;
+  String? _trackArtist;
+
   Uri? _artwork;
   int _count = 0;
 
@@ -226,27 +236,19 @@ class _AlbumAgg {
         album.isNotEmpty) {
       _title = album;
     }
-    // Prefer the track's own [Track.albumArtistName] over its per-track
-    // [Track.artistName] for the album's displayed artist: on a collaboration
-    // album grouped by [Track.albumId]/[albumArtistName], the per-track artist
-    // can be "Main Artist feat. Someone Else" — the album artist is the
-    // consistent, correct label. Falls back to [Track.artistName] when a
-    // source didn't report a distinct album artist, matching pre-existing
-    // behavior exactly.
-    final String? artist = _nonBlank(track.albumArtistName) ?? track.artistName;
-    if ((_artist == null || _artist!.isEmpty) &&
-        artist != null &&
-        artist.isNotEmpty) {
-      _artist = artist;
-    }
+    _albumArtist ??= _nonBlank(track.albumArtistName);
+    _trackArtist ??= _nonBlank(track.artistName);
     _artwork ??= track.artworkUri;
   }
 
   Album toAlbum(String id) {
+    // The album artist labels the album whenever *any* track in the group
+    // carries one; otherwise the first track artist seen, which is the
+    // pre-existing behavior for sources that report no album artist.
     return Album(
       id: id,
       title: (_title == null || _title!.isEmpty) ? kUnknownAlbum : _title!,
-      artistName: (_artist != null && _artist!.isNotEmpty) ? _artist : null,
+      artistName: _albumArtist ?? _trackArtist,
       artworkUri: _artwork,
       trackCount: _count,
     );

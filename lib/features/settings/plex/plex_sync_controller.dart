@@ -329,6 +329,15 @@ class PlexSyncController extends Notifier<PlexSyncState> {
   /// the rebuild. Order-independent over tracks (a server reordering its listing
   /// is not a real change); the selection and track count are folded in so a
   /// changed selection or a different count always re-syncs.
+  ///
+  /// **Every field the catalog persists must be hashed here**, or a change
+  /// confined to an unhashed field would look like "nothing changed" and never
+  /// reach the database. `albumId`/`albumArtistName` are included for that
+  /// reason: they also mean a signature persisted by a build that predates
+  /// those fields can never match one computed now, so an existing Plex
+  /// catalog rebuilds exactly once after upgrading and actually fills its new
+  /// album-grouping columns instead of leaving them null until the library
+  /// happens to change.
   String _signatureFor(List<String> sectionKeys, List<Track> tracks) {
     final List<String> sortedSections = List<String>.of(sectionKeys)..sort();
     final Iterable<int> trackHashes = tracks.map(
@@ -337,6 +346,8 @@ class PlexSyncController extends Notifier<PlexSyncState> {
         t.title,
         t.artistName,
         t.albumName,
+        t.albumId,
+        t.albumArtistName,
         t.duration.inMilliseconds,
         t.trackNumber,
         t.artworkUri?.toString(),

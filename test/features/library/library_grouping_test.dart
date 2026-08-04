@@ -103,6 +103,50 @@ void main() {
       expect(albums.single.artistName, 'Main Artist');
     });
 
+    test('the album artist labels the group whatever the track order', () {
+      // Regression: the first track carries only a per-track credit. If the
+      // aggregate collapsed artist choice as tracks arrived, that credit would
+      // stick and block the real album artist the second track supplies.
+      List<Track> input() => <Track>[
+            _jelly('1',
+                title: 'Feature',
+                artist: 'Main Artist feat. Guest',
+                album: 'The Album',
+                albumId: 'jellyfin:al-1'),
+            _jelly('2',
+                title: 'Solo',
+                artist: 'Main Artist',
+                album: 'The Album',
+                albumId: 'jellyfin:al-1',
+                albumArtist: 'Main Artist'),
+          ];
+
+      expect(groupAlbums(input()).single.artistName, 'Main Artist');
+      // ...and the same in the other order.
+      expect(
+        groupAlbums(input().reversed.toList()).single.artistName,
+        'Main Artist',
+      );
+    });
+
+    test('falls back to the track artist when no track has an album artist',
+        () {
+      final List<Album> albums = groupAlbums(<Track>[
+        _jelly('1',
+            title: 'a',
+            artist: 'Only Artist',
+            album: 'LP',
+            albumId: 'jellyfin:al-1'),
+        _jelly('2',
+            title: 'b',
+            artist: 'Other Credit',
+            album: 'LP',
+            albumId: 'jellyfin:al-1'),
+      ]);
+
+      expect(albums.single.artistName, 'Only Artist');
+    });
+
     test('the same album title under different albumIds stays distinct', () {
       final List<Album> albums = groupAlbums(<Track>[
         _jelly('1',
