@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Android 11 and lower. Linthra can rebuild its catalog from the user's
      selected sources, so restoring an old database or preferences after an
-     uninstall would create stale tracks, folder URIs, and account state. -->
+     uninstall would create stale tracks, folder URIs, and account state.
+
+     Keep this file to the five storage domains accepted by the Android lint
+     schema used by Linthra's release toolchain. android:allowBackup="false"
+     remains the primary no-restore guard for every build type. -->
 <full-backup-content>
     <exclude domain="root" path="." />
     <exclude domain="file" path="." />
     <exclude domain="database" path="." />
     <exclude domain="sharedpref" path="." />
     <exclude domain="external" path="." />
-    <exclude domain="device_root" path="." />
-    <exclude domain="device_file" path="." />
-    <exclude domain="device_database" path="." />
-    <exclude domain="device_sharedpref" path="." />
 </full-backup-content>
