@@ -20,10 +20,10 @@ class WhatsNewSection extends StatelessWidget {
   /// handful of concise bullets and updated when cutting a new build; exposed so
   /// the widget test can assert each line renders without duplicating the copy.
   static const List<String> releaseNotes = <String>[
-    'Browse Jellyfin and Navidrome/Subsonic through their real folder hierarchy.',
-    'Open nested folders and start songs directly from the Folders tab.',
-    'Android Back now returns through Linthra before the app exits.',
-    'Folder browsing loads one level at a time for fast, lightweight navigation.',
+    'Fresh installs no longer restore old songs or settings after uninstalling Linthra.',
+    'Switching from a debug APK to the stable app now starts with a clean library.',
+    'Normal app updates still keep accounts, settings, playlists, catalog, and cache.',
+    'Android backup and device transfer no longer resurrect inaccessible local folders.',
   ];
 
   @override

@@ -1,0 +1,240 @@
+name: Publish stable release
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  actions: write
+  pull-requests: read
+
+jobs:
+  publish:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.comment.user.login == github.repository_owner &&
+      startsWith(github.event.comment.body, '/publish-stable v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      COMMAND_BODY: ${{ github.event.comment.body }}
+      PR_NUMBER: ${{ github.event.issue.number }}
+    steps:
+      - name: Resolve merged release commit and requested tag
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$COMMAND_BODY" =~ ^/publish-stable\ v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Use exactly: /publish-stable vX.Y.Z"
+            exit 1
+          fi
+          tag="${COMMAND_BODY#'/publish-stable '}"
+
+          pr_json="$(gh pr view "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json mergedAt,mergeCommit,url)"
+          merged_at="$(jq -r '.mergedAt // empty' <<<"$pr_json")"
+          target_sha="$(jq -r '.mergeCommit.oid // empty' <<<"$pr_json")"
+          pr_url="$(jq -r '.url' <<<"$pr_json")"
+
+          if [ -z "$merged_at" ] || [ -z "$target_sha" ]; then
+            echo "::error::PR #$PR_NUMBER must be merged before publishing."
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "target_sha=$target_sha" >> "$GITHUB_OUTPUT"
+          echo "pr_url=$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the merged release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.target_sha }}
+          fetch-depth: 0
+
+      - name: Verify version and release notes
+        id: verify
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(awk '/^version: / {print $2; exit}' pubspec.yaml)"
+          version_name="${version%%+*}"
+          expected_tag="v$version_name"
+          notes_file="docs/release-notes/$RELEASE_TAG.md"
+
+          if [ "$RELEASE_TAG" != "$expected_tag" ]; then
+            echo "::error::Requested tag $RELEASE_TAG does not match pubspec.yaml ($expected_tag)."
+            exit 1
+          fi
+          if ! grep -Fq "_devVersionName = '$version_name'" lib/core/app_info.dart; then
+            echo "::error::AppInfo does not match pubspec.yaml version $version_name."
+            exit 1
+          fi
+          if [ ! -f "$notes_file" ]; then
+            echo "::error::Missing release notes: $notes_file"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $RELEASE_TAG already exists; stable tags are immutable."
+            exit 1
+          fi
+
+          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "notes_file=$notes_file" >> "$GITHUB_OUTPUT"
+
+      - name: Create annotated tag and GitHub Release
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          TARGET_SHA: ${{ steps.release.outputs.target_sha }}
+          NOTES_FILE: ${{ steps.verify.outputs.notes_file }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$RELEASE_TAG" "$TARGET_SHA" -m "Linthra $RELEASE_TAG"
+          git push origin "refs/tags/$RELEASE_TAG"
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Linthra $RELEASE_TAG" \
+            --notes-file "$NOTES_FILE" \
+            --verify-tag
+
+      - name: Dispatch official signed Android build
+        id: dispatch
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          before="$RUNNER_TEMP/runs-before.txt"
+          gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow android-release-build.yml \
+            --event workflow_dispatch \
+            --limit 30 \
+            --json databaseId \
+            --jq '.[].databaseId' > "$before"
+
+          gh workflow run android-release-build.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f signed=true \
+            -f release_tag="$RELEASE_TAG"
+
+          run_id=""
+          run_url=""
+          for attempt in $(seq 1 30); do
+            candidate="$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow android-release-build.yml \
+              --event workflow_dispatch \
+              --limit 10 \
+              --json databaseId,url \
+              --jq '.[0] | [.databaseId, .url] | @tsv')"
+            candidate_id="${candidate%%$'\t'*}"
+            candidate_url="${candidate#*$'\t'}"
+            if [ -n "$candidate_id" ] && ! grep -qx "$candidate_id" "$before"; then
+              run_id="$candidate_id"
+              run_url="$candidate_url"
+              break
+            fi
+            sleep 2
+          done
+
+          if [ -z "$run_id" ]; then
+            echo "::error::The signed Android build did not appear."
+            exit 1
+          fi
+
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "run_url=$run_url" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for official signed build
+        env:
+          RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        run: gh run watch "$RUN_ID" --repo "$GITHUB_REPOSITORY" --exit-status
+
+      - name: Verify every public Release asset
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RUN_URL: ${{ steps.dispatch.outputs.run_url }}
+          PR_URL: ${{ steps.release.outputs.pr_url }}
+          TARGET_SHA: ${{ steps.release.outputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_json="$RUNNER_TEMP/release.json"
+          gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json url,assets > "$release_json"
+
+          required=(
+            "linthra-$RELEASE_TAG-release-signed.apk"
+            "linthra-$RELEASE_TAG-release-signed.aab"
+            "linthra-$RELEASE_TAG-armeabi-v7a-release-signed.apk"
+            "linthra-$RELEASE_TAG-arm64-v8a-release-signed.apk"
+            "linthra-$RELEASE_TAG-x86_64-release-signed.apk"
+          )
+
+          missing=()
+          for asset in "${required[@]}"; do
+            if ! jq -e --arg name "$asset" \
+              '.assets[] | select(.name == $name)' \
+              "$release_json" >/dev/null; then
+              missing+=("$asset")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf '::error::Missing Release asset: %s\n' "${missing[@]}"
+            exit 1
+          fi
+
+          release_url="$(jq -r '.url' "$release_json")"
+          {
+            echo "## ✅ $RELEASE_TAG published and verified"
+            echo
+            echo "Release PR: $PR_URL"
+            echo "Tagged commit: \`$TARGET_SHA\`"
+            echo "Signed build: $RUN_URL"
+            echo "Release: $release_url"
+            echo
+            echo 'Signed assets:'
+            for asset in "${required[@]}"; do
+              echo "- \`$asset\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report publication failure
+        if: ${{ failure() }}
+        env:
+          RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+          RUN_URL: ${{ steps.dispatch.outputs.run_url }}
+        shell: bash
+        run: |
+          set +e
+          {
+            echo '## ❌ Stable release publication failed'
+            echo
+            if [ -n "$RUN_URL" ]; then
+              echo "Signed build: $RUN_URL"
+              echo
+            fi
+            if [ -n "$RUN_ID" ]; then
+              echo 'Failed build log tail:'
+              echo '```text'
+              gh run view "$RUN_ID" \
+                --repo "$GITHUB_REPOSITORY" \
+                --log-failed 2>&1 | tail -n 120
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
