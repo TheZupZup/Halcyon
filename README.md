@@ -3,7 +3,7 @@
 [![License: MPL-2.0](https://img.shields.io/badge/License-MPL--2.0-brightgreen.svg)](./LICENSE)
 [![Platform: Android](https://img.shields.io/badge/platform-Android-3ddc84.svg)](#install)
 [![Built with Flutter](https://img.shields.io/badge/built%20with-Flutter-02569B.svg)](https://flutter.dev)
-[![Latest release: v0.1.8](https://img.shields.io/badge/release-v0.1.10-7C5CFF.svg)](https://github.com/thezupzup/linthra/releases/latest)
+[![Latest release: v0.1.11](https://img.shields.io/badge/release-v0.1.11-7C5CFF.svg)](https://github.com/thezupzup/linthra/releases/latest)
 [![Releases](https://img.shields.io/badge/download-releases-blue.svg)](https://github.com/thezupzup/linthra/releases)
 [![Community: r/Linthra](https://img.shields.io/badge/community-r%2FLinthra-FF9F43.svg)](https://reddit.com/r/Linthra)
 
