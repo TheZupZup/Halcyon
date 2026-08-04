@@ -68,15 +68,27 @@ don't use the rail.
 ## How grouping works
 
 Albums and artists are **derived from the track catalog** rather than stored as
-separate rows. Grouping keys are built from the tracks' own album/artist names
-(folded for case and accents), so:
+separate rows. Artists group by their folded name. Albums use the most specific
+signal each track carries, in order:
 
+1. **the source's own album ID**, when it reports one — stored
+   provider-namespaced (`jellyfin:al-1`, `plex:201`, `subsonic:al-27`) so two
+   servers' identically-named album IDs can never collide;
+2. **album title + album artist**, when there is no ID but the source
+   distinguishes the album artist from the track artist;
+3. **album title + track artist** — the original fallback.
+
+Keys are folded for case and accents at every tier, so:
+
+- an album whose tracks credit different collaborating artists
+  ("Main Artist feat. Guest") stays **one** album rather than splitting into a
+  row per credit;
 - the same album title by two different artists stays distinct (two "Greatest
   Hits" don't merge), and
 - case/accent differences in tags don't split one album into two.
 
-This is source-uniform: it works the same for Jellyfin/Subsonic tracks and
-local files.
+This is source-uniform: it works the same for Jellyfin/Subsonic/Plex tracks and
+local files, each simply falling to the most specific tier it has data for.
 
 ## Jellyfin / Subsonic metadata
 
@@ -102,10 +114,14 @@ only at play time.
 - **Artwork may be missing** for some tracks (a local file with no embedded
   cover, or a Subsonic/Navidrome track); a calm placeholder is shown instead,
   and the layout never jumps.
-- **No stable source album/artist IDs yet.** Grouping uses folded names because
-  source album/artist IDs (e.g. Jellyfin's `AlbumId`) aren't persisted on a
-  track today. Persisting them — for sharper disambiguation and richer
-  album/artist art — is a follow-up.
+- **Album IDs need a re-sync, and artists still group by name.** A track picks
+  up its source album ID on the next library sync, so albums grouped before
+  upgrading keep using the name-based tiers until then. Artist grouping still
+  keys on the folded name only — persisting source *artist* IDs (for sharper
+  disambiguation and richer artist art) is a follow-up.
+- **Subsonic reports no album artist.** The classic Subsonic API carries no
+  per-song album-artist field, so Subsonic tracks rely on the album ID tier;
+  a server that omits `albumId` falls back to track-artist grouping.
 
 ## Future
 

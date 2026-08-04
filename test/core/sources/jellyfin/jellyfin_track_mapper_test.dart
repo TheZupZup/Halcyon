@@ -74,6 +74,39 @@ void main() {
       final track = JellyfinTrackMapper.toTrack(item, baseUrl: _baseUrl);
       expect(track.artworkUri, isNull);
     });
+
+    // Issue #281: these drive album grouping, so a collaboration track stays
+    // with its album instead of splitting off into its own entry.
+    test('maps the album id, namespaced like the track uri', () {
+      const item = JellyfinItemDto(id: 't', name: 'n', albumId: 'al-1');
+      final track = JellyfinTrackMapper.toTrack(item, baseUrl: _baseUrl);
+      expect(track.albumId, 'jellyfin:al-1');
+    });
+
+    test('maps the album artist separately from the track artist', () {
+      const item = JellyfinItemDto(
+        id: 't',
+        name: 'n',
+        albumArtist: 'Main Artist',
+        artists: <String>['Main Artist feat. Guest'],
+      );
+      final track = JellyfinTrackMapper.toTrack(item, baseUrl: _baseUrl);
+      expect(track.albumArtistName, 'Main Artist');
+    });
+
+    test('leaves both album grouping fields null when absent', () {
+      const item = JellyfinItemDto(id: 't', name: 'n');
+      final track = JellyfinTrackMapper.toTrack(item, baseUrl: _baseUrl);
+      expect(track.albumId, isNull);
+      expect(track.albumArtistName, isNull);
+    });
+
+    test('the album id never embeds a credential', () {
+      const item = JellyfinItemDto(id: 't', name: 'n', albumId: 'al-1');
+      final track = JellyfinTrackMapper.toTrack(item, baseUrl: _baseUrl);
+      expect(track.albumId, isNot(contains('http')));
+      expect(track.albumId, isNot(contains('ApiKey')));
+    });
   });
 
   group('JellyfinTrackMapper.toAlbum', () {

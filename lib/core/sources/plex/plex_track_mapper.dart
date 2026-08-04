@@ -27,17 +27,26 @@ import 'plex_api.dart';
 ///    catalog. The token (and server address) are woven in only at render time
 ///    by the artwork resolver (a later PR).
 ///
-/// Relationships: the domain models reference artists/albums by *name* — there
-/// is no album/artist id slot on [Track]/[Album] today (grouping is name-based,
-/// see `library_grouping.dart`) — so the parent/grandparent links Plex reports
-/// are carried via their titles: a track's `grandparentTitle` (its album
-/// artist) → [Track.artistName] and `parentTitle` → [Track.albumName]; an
-/// album's `parentTitle` → [Album.artistName]. A track with no album-artist
-/// link falls back to its own credited `originalTitle`, and a track with no
-/// `thumb` to its album's `parentThumb`, so a Plex track carries the same
-/// artist + cover a Subsonic/Jellyfin track does (see [toTrack]). When PMS omits
-/// every candidate they stay `null` and the grouping layer folds the item into
-/// its Unknown Album/Artist buckets.
+/// Relationships: the domain models reference artists/albums mainly by *name*
+/// — so the parent/grandparent links Plex reports are carried via their
+/// titles: a track's `grandparentTitle` (its album artist) → [Track.artistName]
+/// and `parentTitle` → [Track.albumName]; an album's `parentTitle` →
+/// [Album.artistName]. A track with no album-artist link falls back to its own
+/// credited `originalTitle`, and a track with no `thumb` to its album's
+/// `parentThumb`, so a Plex track carries the same artist + cover a
+/// Subsonic/Jellyfin track does (see [toTrack]). When PMS omits every
+/// candidate they stay `null` and the grouping layer folds the item into its
+/// Unknown Album/Artist buckets.
+///
+/// [Track] does carry one real id: [Track.albumId], namespaced the same way as
+/// [Track.uri] (`plex:` + the track's `parentRatingKey` — its album's
+/// `ratingKey`). [Track.albumArtistName] is `grandparentTitle` *without* the
+/// `originalTitle` fallback used for [Track.artistName], since that fallback
+/// is a track's own credited artist and using it here would defeat the point —
+/// a collaboration track's `originalTitle` legitimately differs from the rest
+/// of its album's. Both let `library_grouping.dart` keep a collaboration track
+/// grouped with the rest of its album even though its per-track
+/// [Track.artistName] differs.
 abstract final class PlexTrackMapper {
   /// Prefix marking a [Track.uri] as a Plex item (`plex:<ratingKey>`) rather
   /// than a file path or another provider's item.
@@ -67,6 +76,10 @@ abstract final class PlexTrackMapper {
   ///    splitting a compilation per track — the same reason
   ///    `JellyfinTrackMapper` prefers `albumArtist` over the per-track artist.
   ///  - **album** ([Track.albumName]) from `parentTitle`.
+  ///  - **album id** ([Track.albumId]) from `parentRatingKey`, namespaced
+  ///    `plex:<parentRatingKey>`; `null` when PMS omits it.
+  ///  - **album artist** ([Track.albumArtistName]) from `grandparentTitle`
+  ///    only — no `originalTitle` fallback, see the class doc.
   ///  - **artwork** ([Track.artworkUri]) from the track's own `thumb`, falling
   ///    back to its album cover (`parentThumb`) so a track without distinct art
   ///    still shows its album cover — exactly as a Subsonic track (whose
@@ -85,6 +98,8 @@ abstract final class PlexTrackMapper {
       uri: '$uriScheme${item.ratingKey}',
       artistName: _firstNonBlank(item.grandparentTitle, item.originalTitle),
       albumName: _nonBlank(item.parentTitle),
+      albumId: _albumIdReference(item.parentRatingKey),
+      albumArtistName: _nonBlank(item.grandparentTitle),
       duration: _durationFromMillis(item.duration),
       trackNumber: _positiveOrNull(item.index),
       artworkUri: _artworkReference(
@@ -182,6 +197,15 @@ abstract final class PlexTrackMapper {
   static int? _positiveOrNull(int? value) {
     if (value == null || value <= 0) return null;
     return value;
+  }
+
+  /// A persistable `plex:<ratingKey>` album-id reference, or `null` when
+  /// [ratingKey] is absent or blank. Mirrors [Track.uri]'s namespacing so this
+  /// can never collide with another provider's album id in
+  /// `library_grouping.dart`.
+  static String? _albumIdReference(String? ratingKey) {
+    final String? key = _nonBlank(ratingKey);
+    return key == null ? null : '$uriScheme$key';
   }
 
   /// The first of [primary] / [fallback] that carries real (non-blank) text, or

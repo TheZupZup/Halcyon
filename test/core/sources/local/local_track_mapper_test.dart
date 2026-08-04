@@ -142,6 +142,59 @@ void main() {
       );
       expect(artistOnly.artistName, 'Track Artist');
     });
+
+    // Issue #281: local files have no server to mint a stable album id, so
+    // albumId always stays null and grouping uses the name-based tiers.
+    test('never sets an albumId — there is no stable local album id', () {
+      final tagged = LocalTrackMapper.fromPath(
+        '/music/Artist/Album/01 - Song.mp3',
+        scanRoot: '/music',
+        metadata: const LocalAudioMetadata(
+          album: 'Tagged Album',
+          albumArtist: 'Album Artist',
+        ),
+      );
+      final untagged = LocalTrackMapper.fromPath('/music/song.mp3');
+      expect(tagged.albumId, isNull);
+      expect(untagged.albumId, isNull);
+    });
+
+    test('carries the embedded album-artist tag as albumArtistName', () {
+      // A real, stable local value straight off the file's own tag — so a
+      // tagged collaboration album groups correctly for local files too.
+      final track = LocalTrackMapper.fromPath(
+        '/music/song.mp3',
+        metadata: const LocalAudioMetadata(
+          artist: 'Main Artist feat. Guest',
+          albumArtist: 'Main Artist',
+          album: 'The Album',
+        ),
+      );
+      expect(track.albumArtistName, 'Main Artist');
+      // The per-track artist stays distinct.
+      expect(track.artistName, 'Main Artist');
+    });
+
+    test('leaves albumArtistName null without an album-artist tag', () {
+      final noTag = LocalTrackMapper.fromPath(
+        '/music/song.mp3',
+        metadata: const LocalAudioMetadata(artist: 'Track Artist'),
+      );
+      final blankTag = LocalTrackMapper.fromPath(
+        '/music/song.mp3',
+        metadata: const LocalAudioMetadata(albumArtist: '   '),
+      );
+      final untagged = LocalTrackMapper.fromPath('/music/song.mp3');
+      // Never derived from a folder name — only a real tag counts.
+      final folderOnly = LocalTrackMapper.fromPath(
+        '/music/Artist/Album/song.mp3',
+        scanRoot: '/music',
+      );
+      expect(noTag.albumArtistName, isNull);
+      expect(blankTag.albumArtistName, isNull);
+      expect(untagged.albumArtistName, isNull);
+      expect(folderOnly.albumArtistName, isNull);
+    });
   });
 
   group('LocalTrackMapper.fromSafDocument', () {

@@ -72,4 +72,61 @@ void main() {
       expect(trackFromRow(row).artworkUri, isNull);
     });
   });
+
+  // Issue #281: album grouping keys off these, so they must survive the
+  // catalog round-trip or a restart would re-split collaboration albums.
+  group('track album grouping fields persistence', () {
+    test('albumId and albumArtistName round-trip', () {
+      const Track track = Track(
+        id: 'track-1',
+        title: 'Feature',
+        uri: 'jellyfin:track-1',
+        artistName: 'Main Artist feat. Guest',
+        albumName: 'The Album',
+        albumId: 'jellyfin:al-1',
+        albumArtistName: 'Main Artist',
+      );
+
+      final companion = trackToCompanion(track, 'jellyfin');
+      expect(companion.albumId.value, 'jellyfin:al-1');
+      expect(companion.albumArtistName.value, 'Main Artist');
+
+      final TrackRow row = TrackRow(
+        id: track.id,
+        sourceId: 'jellyfin',
+        title: track.title,
+        uri: track.uri,
+        artistName: track.artistName,
+        albumName: track.albumName,
+        albumId: companion.albumId.value,
+        albumArtistName: companion.albumArtistName.value,
+        durationMs: 0,
+      );
+
+      final Track restored = trackFromRow(row);
+      expect(restored.albumId, 'jellyfin:al-1');
+      expect(restored.albumArtistName, 'Main Artist');
+      // The per-track artist stays distinct from the album artist.
+      expect(restored.artistName, 'Main Artist feat. Guest');
+    });
+
+    test('a track with neither field stores and reads back nulls', () {
+      final companion = trackToCompanion(
+        const Track(id: '/music/a.mp3', title: 'A', uri: '/music/a.mp3'),
+        'local',
+      );
+      expect(companion.albumId.value, isNull);
+      expect(companion.albumArtistName.value, isNull);
+
+      const TrackRow row = TrackRow(
+        id: '/music/a.mp3',
+        sourceId: 'local',
+        title: 'A',
+        uri: '/music/a.mp3',
+        durationMs: 0,
+      );
+      expect(trackFromRow(row).albumId, isNull);
+      expect(trackFromRow(row).albumArtistName, isNull);
+    });
+  });
 }

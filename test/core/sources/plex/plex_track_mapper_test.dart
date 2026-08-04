@@ -131,6 +131,74 @@ void main() {
       expect(PlexTrackMapper.toTrack(blank).artistName, 'Aphex Twin');
     });
 
+    // Issue #281: these drive album grouping, so a collaboration track stays
+    // with its album instead of splitting off into its own entry.
+    test('maps the album id from parentRatingKey, namespaced like the uri', () {
+      const item = PlexMetadata(
+        ratingKey: '301',
+        title: 'Nightcall',
+        parentRatingKey: '201',
+        grandparentRatingKey: '101',
+      );
+      // The album's ratingKey (parent), never the artist's (grandparent).
+      expect(PlexTrackMapper.toTrack(item).albumId, 'plex:201');
+    });
+
+    test('maps the album artist from grandparentTitle', () {
+      const item = PlexMetadata(
+        ratingKey: '301',
+        title: 'Nightcall',
+        grandparentTitle: 'Kavinsky',
+      );
+      expect(PlexTrackMapper.toTrack(item).albumArtistName, 'Kavinsky');
+    });
+
+    test('never falls back to originalTitle for the album artist', () {
+      const item = PlexMetadata(
+        ratingKey: '301',
+        title: 'Nightcall',
+        originalTitle: 'Lovefoxxx',
+      );
+      final track = PlexTrackMapper.toTrack(item);
+      // originalTitle is a track's *own* credited artist — exactly what
+      // differs across a collaboration album — so using it as the album
+      // artist would re-split the album it is meant to hold together. The
+      // per-track artistName still surfaces it.
+      expect(track.albumArtistName, isNull);
+      expect(track.artistName, 'Lovefoxxx');
+    });
+
+    test('leaves both album grouping fields null when PMS omits them', () {
+      const item = PlexMetadata(ratingKey: '301', title: 'x');
+      final track = PlexTrackMapper.toTrack(item);
+      expect(track.albumId, isNull);
+      expect(track.albumArtistName, isNull);
+    });
+
+    test('treats a blank parentRatingKey/grandparentTitle as absent', () {
+      const item = PlexMetadata(
+        ratingKey: '301',
+        title: 'x',
+        parentRatingKey: '   ',
+        grandparentTitle: '  ',
+      );
+      final track = PlexTrackMapper.toTrack(item);
+      expect(track.albumId, isNull);
+      expect(track.albumArtistName, isNull);
+    });
+
+    test('the album id never embeds a credential or server', () {
+      const item = PlexMetadata(
+        ratingKey: '301',
+        title: 'x',
+        parentRatingKey: '201',
+      );
+      final track = PlexTrackMapper.toTrack(item);
+      expect(track.albumId, isNot(contains('?')));
+      expect(track.albumId, isNot(contains('X-Plex-Token')));
+      expect(track.albumId, isNot(contains('http')));
+    });
+
     test('prefers the track\'s own thumb over the album cover (parentThumb)',
         () {
       const item = PlexMetadata(

@@ -28,6 +28,17 @@ class Tracks extends Table {
   TextColumn get uri => text()();
   TextColumn get artistName => text().nullable()();
   TextColumn get albumName => text().nullable()();
+
+  /// The source's provider-namespaced album id (e.g. `jellyfin:al-1`), when
+  /// reported — the primary album-grouping key (`library_grouping.dart`).
+  /// Nullable: local files and older rows carry none and fall back to
+  /// name-based grouping. Added in schema v3.
+  TextColumn get albumId => text().nullable()();
+
+  /// The album's artist as the source reported it, distinct from the track's
+  /// own [artistName] — the second album-grouping tier when [albumId] is
+  /// absent. Nullable, added in schema v3.
+  TextColumn get albumArtistName => text().nullable()();
   IntColumn get durationMs => integer().withDefault(const Constant(0))();
   IntColumn get trackNumber => integer().nullable()();
   TextColumn get artworkUri => text().nullable()();

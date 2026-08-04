@@ -41,6 +41,18 @@ class $TracksTable extends Tracks with TableInfo<$TracksTable, TrackRow> {
   late final GeneratedColumn<String> albumName = GeneratedColumn<String>(
       'album_name', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _albumIdMeta =
+      const VerificationMeta('albumId');
+  @override
+  late final GeneratedColumn<String> albumId = GeneratedColumn<String>(
+      'album_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _albumArtistNameMeta =
+      const VerificationMeta('albumArtistName');
+  @override
+  late final GeneratedColumn<String> albumArtistName = GeneratedColumn<String>(
+      'album_artist_name', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   static const VerificationMeta _durationMsMeta =
       const VerificationMeta('durationMs');
   @override
@@ -69,6 +81,8 @@ class $TracksTable extends Tracks with TableInfo<$TracksTable, TrackRow> {
         uri,
         artistName,
         albumName,
+        albumId,
+        albumArtistName,
         durationMs,
         trackNumber,
         artworkUri
@@ -116,6 +130,16 @@ class $TracksTable extends Tracks with TableInfo<$TracksTable, TrackRow> {
       context.handle(_albumNameMeta,
           albumName.isAcceptableOrUnknown(data['album_name']!, _albumNameMeta));
     }
+    if (data.containsKey('album_id')) {
+      context.handle(_albumIdMeta,
+          albumId.isAcceptableOrUnknown(data['album_id']!, _albumIdMeta));
+    }
+    if (data.containsKey('album_artist_name')) {
+      context.handle(
+          _albumArtistNameMeta,
+          albumArtistName.isAcceptableOrUnknown(
+              data['album_artist_name']!, _albumArtistNameMeta));
+    }
     if (data.containsKey('duration_ms')) {
       context.handle(
           _durationMsMeta,
@@ -155,6 +179,10 @@ class $TracksTable extends Tracks with TableInfo<$TracksTable, TrackRow> {
           .read(DriftSqlType.string, data['${effectivePrefix}artist_name']),
       albumName: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}album_name']),
+      albumId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}album_id']),
+      albumArtistName: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}album_artist_name']),
       durationMs: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}duration_ms'])!,
       trackNumber: attachedDatabase.typeMapping
@@ -177,6 +205,17 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
   final String uri;
   final String? artistName;
   final String? albumName;
+
+  /// The source's provider-namespaced album id (e.g. `jellyfin:al-1`), when
+  /// reported — the primary album-grouping key (`library_grouping.dart`).
+  /// Nullable: local files and older rows carry none and fall back to
+  /// name-based grouping. Added in schema v3.
+  final String? albumId;
+
+  /// The album's artist as the source reported it, distinct from the track's
+  /// own [artistName] — the second album-grouping tier when [albumId] is
+  /// absent. Nullable, added in schema v3.
+  final String? albumArtistName;
   final int durationMs;
   final int? trackNumber;
   final String? artworkUri;
@@ -187,6 +226,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
       required this.uri,
       this.artistName,
       this.albumName,
+      this.albumId,
+      this.albumArtistName,
       required this.durationMs,
       this.trackNumber,
       this.artworkUri});
@@ -202,6 +243,12 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
     }
     if (!nullToAbsent || albumName != null) {
       map['album_name'] = Variable<String>(albumName);
+    }
+    if (!nullToAbsent || albumId != null) {
+      map['album_id'] = Variable<String>(albumId);
+    }
+    if (!nullToAbsent || albumArtistName != null) {
+      map['album_artist_name'] = Variable<String>(albumArtistName);
     }
     map['duration_ms'] = Variable<int>(durationMs);
     if (!nullToAbsent || trackNumber != null) {
@@ -225,6 +272,12 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
       albumName: albumName == null && nullToAbsent
           ? const Value.absent()
           : Value(albumName),
+      albumId: albumId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(albumId),
+      albumArtistName: albumArtistName == null && nullToAbsent
+          ? const Value.absent()
+          : Value(albumArtistName),
       durationMs: Value(durationMs),
       trackNumber: trackNumber == null && nullToAbsent
           ? const Value.absent()
@@ -245,6 +298,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
       uri: serializer.fromJson<String>(json['uri']),
       artistName: serializer.fromJson<String?>(json['artistName']),
       albumName: serializer.fromJson<String?>(json['albumName']),
+      albumId: serializer.fromJson<String?>(json['albumId']),
+      albumArtistName: serializer.fromJson<String?>(json['albumArtistName']),
       durationMs: serializer.fromJson<int>(json['durationMs']),
       trackNumber: serializer.fromJson<int?>(json['trackNumber']),
       artworkUri: serializer.fromJson<String?>(json['artworkUri']),
@@ -260,6 +315,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
       'uri': serializer.toJson<String>(uri),
       'artistName': serializer.toJson<String?>(artistName),
       'albumName': serializer.toJson<String?>(albumName),
+      'albumId': serializer.toJson<String?>(albumId),
+      'albumArtistName': serializer.toJson<String?>(albumArtistName),
       'durationMs': serializer.toJson<int>(durationMs),
       'trackNumber': serializer.toJson<int?>(trackNumber),
       'artworkUri': serializer.toJson<String?>(artworkUri),
@@ -273,6 +330,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
           String? uri,
           Value<String?> artistName = const Value.absent(),
           Value<String?> albumName = const Value.absent(),
+          Value<String?> albumId = const Value.absent(),
+          Value<String?> albumArtistName = const Value.absent(),
           int? durationMs,
           Value<int?> trackNumber = const Value.absent(),
           Value<String?> artworkUri = const Value.absent()}) =>
@@ -283,6 +342,10 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
         uri: uri ?? this.uri,
         artistName: artistName.present ? artistName.value : this.artistName,
         albumName: albumName.present ? albumName.value : this.albumName,
+        albumId: albumId.present ? albumId.value : this.albumId,
+        albumArtistName: albumArtistName.present
+            ? albumArtistName.value
+            : this.albumArtistName,
         durationMs: durationMs ?? this.durationMs,
         trackNumber: trackNumber.present ? trackNumber.value : this.trackNumber,
         artworkUri: artworkUri.present ? artworkUri.value : this.artworkUri,
@@ -296,6 +359,10 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
       artistName:
           data.artistName.present ? data.artistName.value : this.artistName,
       albumName: data.albumName.present ? data.albumName.value : this.albumName,
+      albumId: data.albumId.present ? data.albumId.value : this.albumId,
+      albumArtistName: data.albumArtistName.present
+          ? data.albumArtistName.value
+          : this.albumArtistName,
       durationMs:
           data.durationMs.present ? data.durationMs.value : this.durationMs,
       trackNumber:
@@ -314,6 +381,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
           ..write('uri: $uri, ')
           ..write('artistName: $artistName, ')
           ..write('albumName: $albumName, ')
+          ..write('albumId: $albumId, ')
+          ..write('albumArtistName: $albumArtistName, ')
           ..write('durationMs: $durationMs, ')
           ..write('trackNumber: $trackNumber, ')
           ..write('artworkUri: $artworkUri')
@@ -323,7 +392,7 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
 
   @override
   int get hashCode => Object.hash(id, sourceId, title, uri, artistName,
-      albumName, durationMs, trackNumber, artworkUri);
+      albumName, albumId, albumArtistName, durationMs, trackNumber, artworkUri);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -334,6 +403,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
           other.uri == this.uri &&
           other.artistName == this.artistName &&
           other.albumName == this.albumName &&
+          other.albumId == this.albumId &&
+          other.albumArtistName == this.albumArtistName &&
           other.durationMs == this.durationMs &&
           other.trackNumber == this.trackNumber &&
           other.artworkUri == this.artworkUri);
@@ -346,6 +417,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
   final Value<String> uri;
   final Value<String?> artistName;
   final Value<String?> albumName;
+  final Value<String?> albumId;
+  final Value<String?> albumArtistName;
   final Value<int> durationMs;
   final Value<int?> trackNumber;
   final Value<String?> artworkUri;
@@ -357,6 +430,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
     this.uri = const Value.absent(),
     this.artistName = const Value.absent(),
     this.albumName = const Value.absent(),
+    this.albumId = const Value.absent(),
+    this.albumArtistName = const Value.absent(),
     this.durationMs = const Value.absent(),
     this.trackNumber = const Value.absent(),
     this.artworkUri = const Value.absent(),
@@ -369,6 +444,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
     required String uri,
     this.artistName = const Value.absent(),
     this.albumName = const Value.absent(),
+    this.albumId = const Value.absent(),
+    this.albumArtistName = const Value.absent(),
     this.durationMs = const Value.absent(),
     this.trackNumber = const Value.absent(),
     this.artworkUri = const Value.absent(),
@@ -384,6 +461,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
     Expression<String>? uri,
     Expression<String>? artistName,
     Expression<String>? albumName,
+    Expression<String>? albumId,
+    Expression<String>? albumArtistName,
     Expression<int>? durationMs,
     Expression<int>? trackNumber,
     Expression<String>? artworkUri,
@@ -396,6 +475,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
       if (uri != null) 'uri': uri,
       if (artistName != null) 'artist_name': artistName,
       if (albumName != null) 'album_name': albumName,
+      if (albumId != null) 'album_id': albumId,
+      if (albumArtistName != null) 'album_artist_name': albumArtistName,
       if (durationMs != null) 'duration_ms': durationMs,
       if (trackNumber != null) 'track_number': trackNumber,
       if (artworkUri != null) 'artwork_uri': artworkUri,
@@ -410,6 +491,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
       Value<String>? uri,
       Value<String?>? artistName,
       Value<String?>? albumName,
+      Value<String?>? albumId,
+      Value<String?>? albumArtistName,
       Value<int>? durationMs,
       Value<int?>? trackNumber,
       Value<String?>? artworkUri,
@@ -421,6 +504,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
       uri: uri ?? this.uri,
       artistName: artistName ?? this.artistName,
       albumName: albumName ?? this.albumName,
+      albumId: albumId ?? this.albumId,
+      albumArtistName: albumArtistName ?? this.albumArtistName,
       durationMs: durationMs ?? this.durationMs,
       trackNumber: trackNumber ?? this.trackNumber,
       artworkUri: artworkUri ?? this.artworkUri,
@@ -449,6 +534,12 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
     if (albumName.present) {
       map['album_name'] = Variable<String>(albumName.value);
     }
+    if (albumId.present) {
+      map['album_id'] = Variable<String>(albumId.value);
+    }
+    if (albumArtistName.present) {
+      map['album_artist_name'] = Variable<String>(albumArtistName.value);
+    }
     if (durationMs.present) {
       map['duration_ms'] = Variable<int>(durationMs.value);
     }
@@ -473,6 +564,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
           ..write('uri: $uri, ')
           ..write('artistName: $artistName, ')
           ..write('albumName: $albumName, ')
+          ..write('albumId: $albumId, ')
+          ..write('albumArtistName: $albumArtistName, ')
           ..write('durationMs: $durationMs, ')
           ..write('trackNumber: $trackNumber, ')
           ..write('artworkUri: $artworkUri, ')
@@ -500,6 +593,8 @@ typedef $$TracksTableCreateCompanionBuilder = TracksCompanion Function({
   required String uri,
   Value<String?> artistName,
   Value<String?> albumName,
+  Value<String?> albumId,
+  Value<String?> albumArtistName,
   Value<int> durationMs,
   Value<int?> trackNumber,
   Value<String?> artworkUri,
@@ -512,6 +607,8 @@ typedef $$TracksTableUpdateCompanionBuilder = TracksCompanion Function({
   Value<String> uri,
   Value<String?> artistName,
   Value<String?> albumName,
+  Value<String?> albumId,
+  Value<String?> albumArtistName,
   Value<int> durationMs,
   Value<int?> trackNumber,
   Value<String?> artworkUri,
@@ -544,6 +641,13 @@ class $$TracksTableFilterComposer
 
   ColumnFilters<String> get albumName => $composableBuilder(
       column: $table.albumName, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get albumId => $composableBuilder(
+      column: $table.albumId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get albumArtistName => $composableBuilder(
+      column: $table.albumArtistName,
+      builder: (column) => ColumnFilters(column));
 
   ColumnFilters<int> get durationMs => $composableBuilder(
       column: $table.durationMs, builder: (column) => ColumnFilters(column));
@@ -582,6 +686,13 @@ class $$TracksTableOrderingComposer
   ColumnOrderings<String> get albumName => $composableBuilder(
       column: $table.albumName, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get albumId => $composableBuilder(
+      column: $table.albumId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get albumArtistName => $composableBuilder(
+      column: $table.albumArtistName,
+      builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<int> get durationMs => $composableBuilder(
       column: $table.durationMs, builder: (column) => ColumnOrderings(column));
 
@@ -618,6 +729,12 @@ class $$TracksTableAnnotationComposer
 
   GeneratedColumn<String> get albumName =>
       $composableBuilder(column: $table.albumName, builder: (column) => column);
+
+  GeneratedColumn<String> get albumId =>
+      $composableBuilder(column: $table.albumId, builder: (column) => column);
+
+  GeneratedColumn<String> get albumArtistName => $composableBuilder(
+      column: $table.albumArtistName, builder: (column) => column);
 
   GeneratedColumn<int> get durationMs => $composableBuilder(
       column: $table.durationMs, builder: (column) => column);
@@ -658,6 +775,8 @@ class $$TracksTableTableManager extends RootTableManager<
             Value<String> uri = const Value.absent(),
             Value<String?> artistName = const Value.absent(),
             Value<String?> albumName = const Value.absent(),
+            Value<String?> albumId = const Value.absent(),
+            Value<String?> albumArtistName = const Value.absent(),
             Value<int> durationMs = const Value.absent(),
             Value<int?> trackNumber = const Value.absent(),
             Value<String?> artworkUri = const Value.absent(),
@@ -670,6 +789,8 @@ class $$TracksTableTableManager extends RootTableManager<
             uri: uri,
             artistName: artistName,
             albumName: albumName,
+            albumId: albumId,
+            albumArtistName: albumArtistName,
             durationMs: durationMs,
             trackNumber: trackNumber,
             artworkUri: artworkUri,
@@ -682,6 +803,8 @@ class $$TracksTableTableManager extends RootTableManager<
             required String uri,
             Value<String?> artistName = const Value.absent(),
             Value<String?> albumName = const Value.absent(),
+            Value<String?> albumId = const Value.absent(),
+            Value<String?> albumArtistName = const Value.absent(),
             Value<int> durationMs = const Value.absent(),
             Value<int?> trackNumber = const Value.absent(),
             Value<String?> artworkUri = const Value.absent(),
@@ -694,6 +817,8 @@ class $$TracksTableTableManager extends RootTableManager<
             uri: uri,
             artistName: artistName,
             albumName: albumName,
+            albumId: albumId,
+            albumArtistName: albumArtistName,
             durationMs: durationMs,
             trackNumber: trackNumber,
             artworkUri: artworkUri,

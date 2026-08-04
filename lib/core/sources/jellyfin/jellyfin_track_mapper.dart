@@ -17,6 +17,13 @@ import 'jellyfin_endpoints.dart';
 ///    persisted catalog.
 ///  - Artwork is a plain URL to the item's primary image; it needs no token, so
 ///    it's safe to cache.
+///
+/// [Track.albumId] is namespaced the same way as [Track.uri] (`jellyfin:` +
+/// the server's `AlbumId`), so it can never collide with another provider's
+/// album id in `library_grouping.dart`. [Track.albumArtistName] is Jellyfin's
+/// own `AlbumArtist`, passed through as-is — both let a collaboration track
+/// (whose per-track [Track.artistName] differs from the rest of the album's)
+/// still group under the one album it belongs to.
 abstract final class JellyfinTrackMapper {
   /// Prefix marking a [Track.uri] as a Jellyfin item rather than a file path.
   static const String uriScheme = 'jellyfin:';
@@ -28,6 +35,8 @@ abstract final class JellyfinTrackMapper {
       uri: '$uriScheme${item.id}',
       artistName: _primaryArtist(item),
       albumName: item.album,
+      albumId: _albumIdReference(item.albumId),
+      albumArtistName: item.albumArtist,
       duration: _durationFromTicks(item.runTimeTicks),
       trackNumber: item.indexNumber,
       artworkUri: _artworkUri(baseUrl, item),
@@ -60,6 +69,17 @@ abstract final class JellyfinTrackMapper {
       return Duration.zero;
     }
     return Duration(microseconds: ticks ~/ 10);
+  }
+
+  /// A persistable `jellyfin:<albumId>` album-id reference, or `null` when
+  /// [albumId] is absent or blank ([JellyfinItemDto.albumId] is already
+  /// blank-filtered by `_coerceString`, but this guard is cheap insurance
+  /// against a future DTO change). Mirrors [Track.uri]'s namespacing so this
+  /// can never collide with another provider's album id in
+  /// `library_grouping.dart`.
+  static String? _albumIdReference(String? albumId) {
+    if (albumId == null || albumId.isEmpty) return null;
+    return '$uriScheme$albumId';
   }
 
   static String? _primaryArtist(JellyfinItemDto item) {

@@ -217,6 +217,7 @@ class SubsonicSongDto {
     required this.id,
     required this.title,
     this.album,
+    this.albumId,
     this.artist,
     this.track,
     this.durationSeconds,
@@ -226,6 +227,13 @@ class SubsonicSongDto {
   final String id;
   final String title;
   final String? album;
+
+  /// The server's stable id for this song's album (the classic API's
+  /// `albumId`, e.g. `al-27`), when present. Maps to the track's album id — no
+  /// per-song "album artist" field exists in the classic (non-ID3) response
+  /// this DTO reads, so that stays unset; see `SubsonicTrackMapper`.
+  final String? albumId;
+
   final String? artist;
 
   /// The track number within its album, when present.
@@ -249,6 +257,7 @@ class SubsonicSongDto {
       id: id,
       title: title,
       album: json['album'] as String?,
+      albumId: json['albumId'] as String?,
       artist: json['artist'] as String?,
       track: (json['track'] as num?)?.toInt(),
       durationSeconds: (json['duration'] as num?)?.toInt(),
