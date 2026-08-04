@@ -56,17 +56,20 @@ void main() {
       (name: 'scaffold background', color: theme.scaffoldBackgroundColor),
       (name: 'card / dialog / bottom sheet', color: theme.cardTheme.color!),
       (name: 'popup menu', color: theme.popupMenuTheme.color!),
-      (name: 'navigation bar', color: theme.navigationBarTheme.backgroundColor!),
+      (
+        name: 'navigation bar',
+        color: theme.navigationBarTheme.backgroundColor!
+      ),
     ];
   }
 
-  Color? selectedNavIconColor(ThemeData theme) => theme
-      .navigationBarTheme.iconTheme
-      ?.resolve(<WidgetState>{WidgetState.selected})?.color;
+  Color? selectedNavIconColor(ThemeData theme) =>
+      theme.navigationBarTheme.iconTheme
+          ?.resolve(<WidgetState>{WidgetState.selected})?.color;
 
-  Color? selectedNavLabelColor(ThemeData theme) => theme
-      .navigationBarTheme.labelTextStyle
-      ?.resolve(<WidgetState>{WidgetState.selected})?.color;
+  Color? selectedNavLabelColor(ThemeData theme) =>
+      theme.navigationBarTheme.labelTextStyle
+          ?.resolve(<WidgetState>{WidgetState.selected})?.color;
 
   Color? textButtonColor(ThemeData theme) =>
       theme.textButtonTheme.style?.foregroundColor?.resolve(<WidgetState>{});
@@ -324,10 +327,14 @@ void main() {
       // "Accessible" must not mean "beige". Classic stays a violet identity
       // paired with a warm orange energy accent — the same two hue families as
       // dark mode, only re-toned for light surfaces.
-      final HSLColor violet = HSLColor.fromColor(BrandPalettes.classicLight.primary);
-      final HSLColor darkViolet = HSLColor.fromColor(BrandPalettes.classic.primary);
-      final HSLColor orange = HSLColor.fromColor(BrandPalettes.classicLight.accent);
-      final HSLColor darkOrange = HSLColor.fromColor(BrandPalettes.classic.accent);
+      final HSLColor violet =
+          HSLColor.fromColor(BrandPalettes.classicLight.primary);
+      final HSLColor darkViolet =
+          HSLColor.fromColor(BrandPalettes.classic.primary);
+      final HSLColor orange =
+          HSLColor.fromColor(BrandPalettes.classicLight.accent);
+      final HSLColor darkOrange =
+          HSLColor.fromColor(BrandPalettes.classic.accent);
 
       expect(
         (violet.hue - darkViolet.hue).abs(),
