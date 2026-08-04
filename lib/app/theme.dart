@@ -27,6 +27,10 @@ abstract final class AppTheme {
         onSurface: AppColors.darkOnSurface,
         onSurfaceMuted: AppColors.darkOnSurfaceMuted,
         outline: AppColors.darkOutline,
+        // Dark mode draws control borders and dividers with one tone, so both
+        // slots take the same value and the rendered dark theme is unchanged.
+        outlineVariant: AppColors.darkOutline,
+        error: AppColors.error,
       );
 
   static ThemeData light(BrandPalette palette) => _build(
@@ -38,7 +42,11 @@ abstract final class AppTheme {
         surfaceHighest: AppColors.lightSurfaceHighest,
         onSurface: AppColors.lightOnSurface,
         onSurfaceMuted: AppColors.lightOnSurfaceMuted,
+        // Light mode splits the two: controls need a 3:1 edge, dividers are
+        // decorative and stay softer. See the AppColors doc comments.
         outline: AppColors.lightOutline,
+        outlineVariant: AppColors.lightOutlineVariant,
+        error: AppColors.lightError,
       );
 
   static ThemeData _build({
@@ -51,6 +59,8 @@ abstract final class AppTheme {
     required Color onSurface,
     required Color onSurfaceMuted,
     required Color outline,
+    required Color outlineVariant,
+    required Color error,
   }) {
     final colorScheme = ColorScheme.fromSeed(
       seedColor: palette.primary,
@@ -71,8 +81,8 @@ abstract final class AppTheme {
       surfaceContainerHigh: surfaceHigh,
       surfaceContainerHighest: surfaceHighest,
       outline: outline,
-      outlineVariant: outline,
-      error: AppColors.error,
+      outlineVariant: outlineVariant,
+      error: error,
     );
 
     final pillShape = RoundedRectangleBorder(
@@ -262,7 +272,9 @@ abstract final class AppTheme {
         shape: smallShape,
       ),
       dividerTheme: DividerThemeData(
-        color: outline,
+        // Separators, not control edges — they take the softer variant. In dark
+        // mode this is the same colour as [outline], so nothing changes there.
+        color: outlineVariant,
         thickness: 0.5,
         space: 0.5,
       ),
