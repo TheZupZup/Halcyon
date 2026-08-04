@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      A normal in-place app update keeps Linthra's private data. These settings
+      only stop Android Backup / device-transfer restore from resurrecting a
+      stale catalog, server configuration, or folder URI after uninstalling and
+      reinstalling the app.
+    -->
+    <application
+        android:allowBackup="false"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules" />
+</manifest>
