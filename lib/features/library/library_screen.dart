@@ -13,12 +13,12 @@ import '../../core/services/bulk_track_actions.dart';
 import '../../core/sources/local/folder_location.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../playlists/widgets/add_to_playlist_sheet.dart';
-import '../settings/jellyfin/jellyfin_sync_controller.dart';
 import 'folder_browser_providers.dart';
 import 'library_browse_providers.dart';
 import 'library_controller.dart';
 import 'library_search.dart';
 import 'library_state.dart';
+import 'library_sync_activity.dart';
 import 'selected_folder_controller.dart';
 import 'song_actions.dart';
 import 'unified_library_providers.dart';
@@ -103,12 +103,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         ref.watch(folderBrowsableSourcesProvider).isNotEmpty;
     final AsyncValue<String?> selectedFolder =
         ref.watch(selectedFolderControllerProvider);
-    // While the first Jellyfin sync is running, an empty catalog should read as
+    // While a first library sync is running, an empty catalog should read as
     // "filling up", not "nothing here" — so the library never looks broken
-    // during onboarding.
-    final bool jellyfinSyncing = ref.watch(
-      jellyfinSyncControllerProvider.select((s) => s.isSyncing),
-    );
+    // during onboarding. Covers every server source, not just Jellyfin: Plex
+    // exposes no folder hierarchy, so before this a scanning Plex library fell
+    // through to the local-folder prompt.
+    final List<String> syncingSources = ref.watch(syncingSourceNamesProvider);
 
     // Drop any selected rows no longer in the catalog (e.g. after a removal) so
     // the count and actions stay accurate. Keyed by the provider-namespaced uri,
@@ -150,8 +150,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         bottom: browsing ? _tabBar() : null,
       ),
       body: browsing
-          ? _browseBody(songs)
-          : _statusBody(state, selectedFolder.valueOrNull, jellyfinSyncing),
+          ? _browseBody(songs, syncingSources)
+          : _statusBody(state, selectedFolder.valueOrNull, syncingSources),
     );
   }
 
@@ -177,7 +177,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   Widget _statusBody(
     LibraryState state,
     String? selectedFolder,
-    bool jellyfinSyncing,
+    List<String> syncingSources,
   ) {
     switch (state.status) {
       case LibraryStatus.loading:
@@ -188,11 +188,13 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           onRetry: () => ref.read(libraryControllerProvider.notifier).refresh(),
         );
       case LibraryStatus.loaded:
-        // A first Jellyfin sync in flight takes precedence over the folder-pick
-        // prompt: tell the user their library is on its way rather than implying
-        // it's empty.
-        if (jellyfinSyncing) {
-          return const _LibrarySyncing();
+        // A first sync in flight — from any connected server — takes precedence
+        // over the folder-pick prompt: tell the user their library is on its way
+        // rather than implying it's empty, or (for Plex, which has no folder
+        // hierarchy to fall back on) asking them for a folder they don't want.
+        final String? headline = syncingHeadline(syncingSources);
+        if (headline != null) {
+          return _LibrarySyncing(headline: headline);
         }
         return _LibraryEmpty(
           selectedFolder: selectedFolder,
@@ -205,8 +207,13 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   /// Catalog search + four browse tabs. Folders performs its own hierarchical
   /// navigation, so the flat-catalog search field is hidden on that tab.
-  Widget _browseBody(List<Track> songs) {
+  Widget _browseBody(List<Track> songs, List<String> syncingSources) {
     final bool foldersTab = _tabController.index == 3;
+    // A connected folder-capable server (Jellyfin, Navidrome/Subsonic) shows the
+    // tabs the moment it connects, so its *first* sync lands here rather than in
+    // [_statusBody]. Pass the syncing sources down so the catalog tabs say
+    // "still filling" instead of "nothing in the synced catalog".
+    final String? syncHeadline = syncingHeadline(syncingSources);
     return Column(
       children: <Widget>[
         if (!foldersTab)
@@ -219,9 +226,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           child: TabBarView(
             controller: _tabController,
             children: <Widget>[
-              _songsTab(songs),
-              _albumsTab(),
-              _artistsTab(),
+              _songsTab(songs, syncHeadline),
+              _albumsTab(syncHeadline),
+              _artistsTab(syncHeadline),
               const FolderBrowserTab(),
             ],
           ),
@@ -232,10 +239,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   // --- Tabs -------------------------------------------------------------
 
-  Widget _songsTab(List<Track> songs) {
+  Widget _songsTab(List<Track> songs, String? syncHeadline) {
     final List<Track> filtered = _filteredSongs(songs);
     if (filtered.isEmpty) {
       if (_query.isNotEmpty) return const _NoResults();
+      if (syncHeadline != null) return _CatalogFilling(headline: syncHeadline);
       return const EmptyState(
         icon: Icons.music_note_outlined,
         title: 'No songs in the synced catalog',
@@ -245,11 +253,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     return _songsList(filtered);
   }
 
-  Widget _albumsTab() {
+  Widget _albumsTab(String? syncHeadline) {
     final List<Album> filtered =
         filterAlbums(ref.watch(libraryAlbumsProvider), _query);
     if (filtered.isEmpty) {
       if (_query.isNotEmpty) return const _NoResults();
+      if (syncHeadline != null) return _CatalogFilling(headline: syncHeadline);
       return const EmptyState(
         icon: Icons.album_outlined,
         title: 'No albums in the synced catalog',
@@ -263,11 +272,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     );
   }
 
-  Widget _artistsTab() {
+  Widget _artistsTab(String? syncHeadline) {
     final List<Artist> filtered =
         filterArtists(ref.watch(libraryArtistsProvider), _query);
     if (filtered.isEmpty) {
       if (_query.isNotEmpty) return const _NoResults();
+      if (syncHeadline != null) return _CatalogFilling(headline: syncHeadline);
       return const EmptyState(
         icon: Icons.person_outline,
         title: 'No artists in the synced catalog',
@@ -404,6 +414,27 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   }
 }
 
+/// The catalog-tab counterpart to [_LibrarySyncing], for the case where a
+/// folder-capable server is connected (so the tabs are already showing) but its
+/// first sync hasn't landed any tracks yet. Says the catalog is still filling
+/// rather than that it is empty, and still points at Folders — which *is*
+/// browseable right now, ahead of the sync.
+class _CatalogFilling extends StatelessWidget {
+  const _CatalogFilling({required this.headline});
+
+  final String headline;
+
+  @override
+  Widget build(BuildContext context) {
+    return EmptyState(
+      icon: Icons.sync_outlined,
+      title: headline,
+      message: 'Your songs will appear here as soon as they’re in. '
+          'You can browse the connected server from Folders meanwhile.',
+    );
+  }
+}
+
 /// The "no search matches" state, shown when a query filters every row out of
 /// the active tab. Deliberately friendly and identical across tabs.
 class _NoResults extends StatelessWidget {
@@ -419,11 +450,16 @@ class _NoResults extends StatelessWidget {
   }
 }
 
-/// Shown when the catalog is still empty but a first Jellyfin sync is running,
+/// Shown when the catalog is still empty but a first library sync is running,
 /// so onboarding reads as "your library is on its way" rather than "nothing
 /// here". Replaced automatically once the synced tracks land.
+///
+/// [headline] names the syncing source when exactly one is running and stays
+/// general when several are — see `syncingHeadline`.
 class _LibrarySyncing extends StatelessWidget {
-  const _LibrarySyncing();
+  const _LibrarySyncing({required this.headline});
+
+  final String headline;
 
   @override
   Widget build(BuildContext context) {
@@ -440,7 +476,7 @@ class _LibrarySyncing extends StatelessWidget {
             ),
             const SizedBox(height: AppSpacing.md),
             Text(
-              'Your Jellyfin library is syncing',
+              headline,
               style: theme.textTheme.titleMedium,
               textAlign: TextAlign.center,
             ),
