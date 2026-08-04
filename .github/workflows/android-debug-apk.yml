@@ -1,8 +1,7 @@
 name: Android Debug APK
 
-# Builds an unsigned debug APK for manual on-device testing.
-# This is for testing only: it does not sign release builds, create
-# GitHub releases, or publish anything.
+# Builds an unsigned debug APK for manual on-device testing and validates the
+# Android release lint path used by stable APK/AAB builds.
 on:
   workflow_dispatch:
   pull_request:
@@ -47,6 +46,13 @@ jobs:
 
       - name: Build debug APK
         run: flutter build apk --debug
+
+      # A debug APK does not execute lintVitalRelease. Run that task explicitly
+      # so invalid release-only Android resources fail on the PR instead of
+      # breaking a stable tag after it has already been created.
+      - name: Validate release Android lint
+        working-directory: android
+        run: ./gradlew lintVitalRelease
 
       # Fail fast if the build produced no usable artifact. The upload step
       # below also guards with if-no-files-found: error, but checking here gives
