@@ -1,0 +1,7 @@
+Linthra 0.1.13 — F-Droid release build reliability fix.
+
+- Fixed the Android release-only lint failure that prevented v0.1.12 from building on F-Droid.
+- Backup rules now use only storage domains accepted by Linthra's pinned Android toolchain.
+- Release CI now runs lintVitalRelease so similar F-Droid-breaking resource errors are caught before tagging.
+- Clean reinstall protection remains enabled, while normal in-place updates continue to preserve app data.
+- No ads, tracking, analytics, or telemetry.
