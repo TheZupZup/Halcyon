@@ -35,15 +35,25 @@ void main() {
     });
 
     test('falls back to Classic for null, empty, or unknown ids', () {
-      // The same "unknown → Classic" rule AppIconVariants.byId follows.
+      // The same "unknown → Classic" rule AppIconVariants.byId follows. The
+      // fallback is brightness-correct: an unknown id in light mode must land
+      // on light Classic, not on the dark palette.
       for (final Brightness b in Brightness.values) {
-        expect(BrandPalettes.byId(null, brightness: b), BrandPalettes.classic);
-        expect(BrandPalettes.byId('', brightness: b), BrandPalettes.classic);
-        expect(
-          BrandPalettes.byId('does-not-exist', brightness: b),
-          BrandPalettes.classic,
-        );
+        final BrandPalette expected =
+            BrandPalettes.byId('classic', brightness: b);
+        expect(BrandPalettes.byId(null, brightness: b), expected);
+        expect(BrandPalettes.byId('', brightness: b), expected);
+        expect(BrandPalettes.byId('does-not-exist', brightness: b), expected);
       }
+      // And that fallback really is the mode-appropriate Classic.
+      expect(
+        BrandPalettes.byId(null, brightness: Brightness.dark),
+        BrandPalettes.classic,
+      );
+      expect(
+        BrandPalettes.byId(null, brightness: Brightness.light),
+        BrandPalettes.classicLight,
+      );
     });
 
     test('Classic is a black + orange + purple palette built from AppColors',
@@ -64,8 +74,12 @@ void main() {
     test('the neutral themes are a single accent (primary == accent)', () {
       // No second hue for Neon/Gold/Black & White: each variant's identity
       // colour is its accent. Classic is excluded — it pairs purple + orange.
-      final Iterable<BrandPalette> neutral =
-          BrandPalettes.all.where((BrandPalette p) => p.id != 'classic');
+      // Holds in both brightnesses, so the light palettes cannot quietly
+      // introduce a second hue the dark ones do not have.
+      final Iterable<BrandPalette> neutral = <BrandPalette>[
+        ...BrandPalettes.all,
+        ...BrandPalettes.allLight,
+      ].where((BrandPalette p) => p.id != 'classic');
       for (final BrandPalette p in neutral) {
         expect(p.primary, p.accent, reason: '${p.id} primary == accent');
         expect(
@@ -83,8 +97,13 @@ void main() {
 
     test('every palette keeps a legible accent/onAccent contrast', () {
       // onAccent rides on top of an accent fill (e.g. the play button glyph), so
-      // the two must stay clearly distinguishable for accessibility.
-      for (final BrandPalette p in BrandPalettes.all) {
+      // the two must stay clearly distinguishable for accessibility. Checked in
+      // both brightnesses; test/app/light_contrast_test.dart pins the light
+      // palettes to the stricter WCAG ratios.
+      for (final BrandPalette p in <BrandPalette>[
+        ...BrandPalettes.all,
+        ...BrandPalettes.allLight,
+      ]) {
         final double delta =
             (p.accent.computeLuminance() - p.onAccent.computeLuminance()).abs();
         expect(

@@ -66,8 +66,20 @@ A small, data-driven feature that mirrors the Support module's per-build seam:
   buttons, and input focus. So each variant reads as a black UI with one clear
   accent: **Classic** orange, **Neon** neon cyan/blue, **Gold** gold, **Black &
   White** white. There is no second hue (no purple). Each palette sets `primary`
-  to its `accent`; `primaryBright` is the accessible-on-dark tone for accent
-  text/icons. **Error / destructive colours are kept separate and never themed.**
+  to its `accent`; `primaryBright` is the tone that carries accent text/icons at
+  the contrast bar for its mode. **Error / destructive colours are kept separate
+  and never themed by variant** (the light themes do use a deeper red than the
+  dark ones, so error copy stays readable on light surfaces — see
+  `AppColors.lightError`).
+- **Light palettes** — every variant has both a dark palette (`BrandPalettes.all`)
+  and a light one (`BrandPalettes.allLight`, suffixed `Light`); `byId` picks
+  between them by `Brightness`, and its unknown-id fallback is itself
+  brightness-correct. The light palettes are *not* the dark tones on pale
+  surfaces: accents chosen for black backgrounds fall far below WCAG AA on white
+  ones, so each is re-toned at the same hue. `test/app/light_contrast_test.dart`
+  enforces the ratios off a real `ThemeData`, so a regression fails CI rather
+  than shipping. Linthra still runs dark-only today (`themeMode: ThemeMode.dark`)
+  — these palettes exist so light mode can be switched on safely.
   (The brand marks/launcher icons keep their own gradients — e.g. Classic's
   signature violet→orange mark and the default launcher icon are unchanged.)
 - **Launcher icon (Android)** — the same selection also switches the real

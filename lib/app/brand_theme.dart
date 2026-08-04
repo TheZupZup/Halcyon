@@ -59,9 +59,13 @@ class BrandPalette {
   /// Text/icon colour on a [primary] fill (and the selected switch thumb).
   final Color onPrimary;
 
-  /// A brighter take on [primary] for the identity text/icons/borders on the
-  /// dark surfaces — selected navigation, text buttons, selected rows, input
-  /// focus — where [primary] itself can fall short of the text-contrast bar.
+  /// The identity tone for text/icons/borders — selected navigation, text
+  /// buttons, selected rows, input focus — where [primary] itself can fall
+  /// short of the text-contrast bar.
+  ///
+  /// "Bright" is relative to the surfaces it sits on: a *lighter* take on
+  /// [primary] for the dark palettes, and a *deeper* one for the light
+  /// palettes. Either way it is the tone that carries small text safely.
   final Color primaryBright;
 
   /// The energy accent (warm orange for Classic) on filled call-to-action
@@ -131,8 +135,12 @@ class LinthraAccents extends ThemeExtension<LinthraAccents> {
 /// themes are a single accent with no second hue: [neon] neon cyan/blue, [gold]
 /// gold, and [blackWhite] pure black/white, each setting [primary] equal to its
 /// [accent] so the whole UI reads as one accent on black. [primaryBright] is the
-/// accessible-on-dark tone for identity text/icons. Error/destructive colours
-/// are never themed.
+/// tone that carries identity text/icons at the contrast bar for its mode.
+///
+/// Each variant has both a dark palette (in [all]) and a light one (in
+/// [allLight], suffixed `Light`); [byId] picks between them by brightness.
+/// Error/destructive colours are never themed by variant, though the light
+/// themes do use a deeper red than the dark ones — see [AppColors.lightError].
 abstract final class BrandPalettes {
   /// The default — black + orange + purple: a warm orange energy accent with a
   /// Linthra-purple identity ([primary]) for selected navigation, text buttons,
@@ -194,10 +202,8 @@ abstract final class BrandPalettes {
   );
 
   /// The light-mode counterpart of [blackWhite]: pure black accents/brand on
-  /// light surfaces. Kept strictly black-and-white too. (Linthra runs dark-only
-  /// today, so this is defensive: if light mode ever ships, Black & White stays
-  /// legible instead of going invisible-white on white.)
-  static const BrandPalette _blackWhiteLight = BrandPalette(
+  /// light surfaces. Kept strictly black-and-white too.
+  static const BrandPalette blackWhiteLight = BrandPalette(
     id: 'blackwhite',
     primary: Color(0xFF000000),
     onPrimary: Color(0xFFFFFFFF),
@@ -209,7 +215,58 @@ abstract final class BrandPalettes {
     accentContainer: Color(0xFFFFFFFF),
   );
 
-  /// Every palette in [AppIconVariants.all] order; Classic first.
+  /// The light-mode counterpart of [classic] — the same purple identity and
+  /// warm orange energy accent, re-toned for light surfaces.
+  ///
+  /// The dark tones are not merely dimmer here, they are unreadable: on
+  /// [AppColors.lightBackground] the dark [primaryBright] reaches 2.71:1 and the
+  /// dark [accent] 2.04:1, both far under the 4.5:1 text bar. Hue is preserved
+  /// exactly (251.8° violet, 29.4° orange) so Classic still reads as Linthra —
+  /// only lightness moves. See `AppColors` for the per-token contrast figures
+  /// and `test/app/light_contrast_test.dart` for the enforced matrix.
+  static const BrandPalette classicLight = BrandPalette(
+    id: 'classic',
+    primary: AppColors.brandLight,
+    onPrimary: Color(0xFFFFFFFF),
+    primaryBright: AppColors.brandBrightLight,
+    accent: AppColors.accentLight,
+    accentBright: AppColors.accentBrightLight,
+    accentDeep: AppColors.accentDeepLight,
+    onAccent: AppColors.onAccentLight,
+    accentContainer: AppColors.accentContainerLight,
+  );
+
+  /// The light-mode counterpart of [neon]: the same single electric blue accent,
+  /// deepened until it carries text on light surfaces (the dark `0xFF34C5FF`
+  /// manages 1.9:1 on white).
+  static const BrandPalette neonLight = BrandPalette(
+    id: 'neon',
+    primary: Color(0xFF0A6E96),
+    onPrimary: Color(0xFFFFFFFF),
+    primaryBright: Color(0xFF085B7C),
+    accent: Color(0xFF0A6E96),
+    accentBright: Color(0xFF085B7C),
+    accentDeep: Color(0xFF064A66),
+    onAccent: Color(0xFFFFFFFF),
+    accentContainer: Color(0xFFD2EEFA),
+  );
+
+  /// The light-mode counterpart of [gold]: the same single gold accent, deepened
+  /// into a bronze-gold that survives light surfaces (the dark `0xFFF5C518`
+  /// manages 1.7:1 on white — gold is the worst offender of the four).
+  static const BrandPalette goldLight = BrandPalette(
+    id: 'gold',
+    primary: Color(0xFF7A5C00),
+    onPrimary: Color(0xFFFFFFFF),
+    primaryBright: Color(0xFF6B5000),
+    accent: Color(0xFF7A5C00),
+    accentBright: Color(0xFF6B5000),
+    accentDeep: Color(0xFF574100),
+    onAccent: Color(0xFFFFFFFF),
+    accentContainer: Color(0xFFFBEFC2),
+  );
+
+  /// Every dark palette in [AppIconVariants.all] order; Classic first.
   static const List<BrandPalette> all = <BrandPalette>[
     classic,
     neon,
@@ -217,26 +274,38 @@ abstract final class BrandPalettes {
     blackWhite,
   ];
 
+  /// Every light palette, in the same order as [all] — one per entry, so a
+  /// variant can never have a dark palette but no light one.
+  static const List<BrandPalette> allLight = <BrandPalette>[
+    classicLight,
+    neonLight,
+    goldLight,
+    blackWhiteLight,
+  ];
+
   /// Resolves a stored/selected variant [id] to its palette for [brightness],
-  /// falling back to [classic] for a null, empty, or unrecognised value — the
-  /// same "unknown → Classic" rule [AppIconVariants.byId] uses, so the theme can
-  /// never land on a palette that does not exist.
+  /// falling back to Classic for a null, empty, or unrecognised value — the same
+  /// "unknown → Classic" rule [AppIconVariants.byId] uses, so the theme can
+  /// never land on a palette that does not exist. The fallback is itself
+  /// brightness-correct: an unknown id in light mode yields [classicLight], not
+  /// the dark Classic.
   ///
-  /// Only Black & White differs by brightness (white-on-dark vs black-on-light);
-  /// every other variant uses one palette for both, since accents chosen for the
-  /// dark surfaces stay legible either way.
+  /// Every variant now differs by brightness. Accents chosen for dark surfaces
+  /// do *not* stay legible on light ones — that assumption held only while
+  /// Linthra was dark-only, and each light palette exists to replace it.
   static BrandPalette byId(String? id, {required Brightness brightness}) {
+    final List<BrandPalette> palettes =
+        brightness == Brightness.light ? allLight : all;
+    final BrandPalette fallback =
+        brightness == Brightness.light ? classicLight : classic;
     if (id == null || id.isEmpty) {
-      return classic;
+      return fallback;
     }
-    if (id == blackWhite.id) {
-      return brightness == Brightness.light ? _blackWhiteLight : blackWhite;
-    }
-    for (final BrandPalette palette in all) {
+    for (final BrandPalette palette in palettes) {
       if (palette.id == id) {
         return palette;
       }
     }
-    return classic;
+    return fallback;
   }
 }
