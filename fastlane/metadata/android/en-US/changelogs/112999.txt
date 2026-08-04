@@ -1,0 +1,7 @@
+Linthra 0.1.12 — clean reinstalls and safer Android data handling.
+
+- Reinstalling Linthra no longer restores stale songs, settings, server state, or inaccessible folder references.
+- Switching from a debug APK to stable now starts with a clean library after uninstall.
+- Normal in-place updates still keep accounts, playlists, settings, catalog, and cache.
+- Android cloud backup and device transfer now exclude Linthra's rebuildable private state.
+- No ads, tracking, analytics, or telemetry.
