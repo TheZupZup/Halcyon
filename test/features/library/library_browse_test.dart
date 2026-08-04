@@ -7,7 +7,7 @@ import 'package:linthra/data/repositories/in_memory_playlist_store.dart';
 import 'package:linthra/data/repositories/music_library_repository_provider.dart';
 import 'package:linthra/data/repositories/playlist_repository_provider.dart';
 import 'package:linthra/features/library/library_screen.dart';
-import 'package:linthra/features/library/widgets/album_tile.dart';
+import 'package:linthra/features/library/widgets/album_grid_card.dart';
 import 'package:linthra/features/library/widgets/artist_tile.dart';
 import 'package:linthra/features/player/player_providers.dart';
 
@@ -164,16 +164,17 @@ void main() {
       expect(find.text('Gamma'), findsOneWidget);
     });
 
-    testWidgets('the Albums tab renders grouped albums with title/artist/count',
+    testWidgets('the Albums tab renders grouped albums with title and artist',
         (tester) async {
       await _pump(tester);
       await tester.tap(find.text('Albums'));
       await tester.pumpAndSettle();
 
-      expect(find.byType(AlbumTile), findsNWidgets(2));
+      expect(find.byType(AlbumGridCard), findsNWidgets(2));
       expect(find.text('Discovery'), findsOneWidget);
       expect(find.text('25'), findsOneWidget);
-      expect(find.text('Daft Punk • 2 songs'), findsOneWidget);
+      expect(find.text('Daft Punk'), findsOneWidget);
+      expect(find.text('Adele'), findsOneWidget);
     });
 
     testWidgets('long-pressing an album opens its bulk playlist sheet',

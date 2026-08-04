@@ -22,7 +22,7 @@ import 'library_state.dart';
 import 'selected_folder_controller.dart';
 import 'song_actions.dart';
 import 'unified_library_providers.dart';
-import 'widgets/album_tile.dart';
+import 'widgets/album_grid.dart';
 import 'widgets/alphabet_track_list.dart';
 import 'widgets/artist_tile.dart';
 import 'widgets/folder_browser_tab.dart';
@@ -256,16 +256,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         message: 'You can still browse the connected server from Folders.',
       );
     }
-    return ListView.builder(
-      key: const Key('library_album_list'),
-      itemCount: filtered.length,
-      itemBuilder: (context, index) {
-        final Album album = filtered[index];
-        return AlbumTile(
-          album: album,
-          onTap: () => context.push(AppRoutes.albumDetailPath(album.id)),
-        );
-      },
+    return AlbumGrid(
+      albums: filtered,
+      onOpen: (Album album) =>
+          context.push(AppRoutes.albumDetailPath(album.id)),
     );
   }
 
