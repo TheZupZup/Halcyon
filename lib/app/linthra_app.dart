@@ -8,6 +8,7 @@ import '../core/services/stability_diagnostics.dart';
 import '../features/appearance/app_icon_controller.dart';
 import '../features/appearance/custom_brand_palette.dart';
 import '../features/appearance/custom_theme_controller.dart';
+import '../features/appearance/theme_mode_controller.dart';
 import '../features/library/remote_library_refresher.dart';
 import '../features/player/player_providers.dart';
 import '../features/support/support_actions_provider.dart';
@@ -25,8 +26,10 @@ final notificationPermissionProvider = Provider<NotificationPermission>((ref) {
   return const PermissionHandlerNotificationPermission();
 });
 
-/// Root widget. Dark mode is the primary experience; the light theme follows
-/// the system setting when the user opts out of dark.
+/// Root widget. Linthra follows the phone's light/dark setting by default; the
+/// user can pin Light or Dark in Settings → Appearance, and that choice is read
+/// from storage before the first frame (see `readStoredThemeMode`) so launching
+/// never flashes the wrong theme.
 ///
 /// On first build it asks for the notification permission once, after the first
 /// frame, so the Android 13+ `POST_NOTIFICATIONS` prompt has an attached
@@ -100,6 +103,7 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
   @override
   Widget build(BuildContext context) {
     final router = ref.watch(appRouterProvider);
+    final themeMode = ref.watch(themeModeControllerProvider);
     final variant = ref.watch(appIconControllerProvider);
     final customTheme = ref.watch(customThemeControllerProvider);
     final distribution = ref.watch(supportDistributionProvider);
@@ -120,7 +124,10 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(paletteFor(Brightness.light)),
       darkTheme: AppTheme.dark(paletteFor(Brightness.dark)),
-      themeMode: ThemeMode.dark,
+      // Watching the controller means a change repaints every screen at once.
+      // ThemeMode.system additionally makes MaterialApp rebuild when the phone
+      // flips light/dark while Linthra is open — no listener of our own needed.
+      themeMode: themeMode.materialThemeMode,
       routerConfig: router,
     );
   }

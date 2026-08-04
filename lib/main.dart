@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app/linthra_app.dart';
 import 'core/models/plex_session.dart';
 import 'core/models/subsonic_session.dart';
+import 'core/models/theme_mode_preference.dart';
 import 'core/services/linthra_audio_handler.dart';
 import 'core/sources/plex/plex_artwork.dart';
 import 'core/sources/subsonic/subsonic_artwork.dart';
@@ -30,6 +31,8 @@ import 'data/repositories/selected_music_folder_repository_provider.dart';
 import 'data/repositories/share_service_provider.dart';
 import 'data/repositories/subsonic_auto_sync_store_provider.dart';
 import 'data/repositories/subsonic_session_store_provider.dart';
+import 'data/repositories/theme_mode_store_provider.dart';
+import 'features/appearance/theme_mode_controller.dart';
 import 'features/downloads/download_providers.dart';
 import 'features/library/playback_candidates_provider.dart';
 import 'features/player/cast/cast_providers.dart';
@@ -45,6 +48,14 @@ import 'shared/widgets/artwork_image.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Read the saved theme mode *before* the container exists, so the very first
+  // frame already paints in the user's chosen mode. Loading it after startup
+  // would make someone who picked Light on a dark phone watch the app flash
+  // dark and then flip. This is the one preference worth blocking startup on,
+  // and only barely: it is a single string read, and it fails soft to
+  // "follow the phone" rather than throwing.
+  final ThemeModePreference storedThemeMode = await readStoredThemeMode();
 
   // One container backs the whole app so the *same* PlaybackController and
   // MusicLibraryRepository instances drive both the UI (through providers) and
@@ -112,6 +123,10 @@ Future<void> main() async {
       // Persist the user's chosen in-app branding variant (Settings →
       // Appearance). A single non-secret variant id; purely cosmetic.
       sharedPreferencesAppIconVariantStoreOverride,
+      // Persist the System / Light / Dark choice, and seed the controller with
+      // the value already read above so the first frame is correct.
+      sharedPreferencesThemeModeStoreOverride,
+      initialThemeModeProvider.overrideWithValue(storedThemeMode),
       // Switch the real Android launcher icon to match that choice (a no-op off
       // Android); toggles <activity-alias> entries, never touching playback.
       platformLauncherIconServiceOverride,

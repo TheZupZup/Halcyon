@@ -78,8 +78,20 @@ A small, data-driven feature that mirrors the Support module's per-build seam:
   surfaces: accents chosen for black backgrounds fall far below WCAG AA on white
   ones, so each is re-toned at the same hue. `test/app/light_contrast_test.dart`
   enforces the ratios off a real `ThemeData`, so a regression fails CI rather
-  than shipping. Linthra still runs dark-only today (`themeMode: ThemeMode.dark`)
-  — these palettes exist so light mode can be switched on safely.
+  than shipping. These palettes are what makes the light theme safe to reach.
+- **Theme mode (System / Light / Dark)** — `ThemeModeController`
+  (`lib/features/appearance/theme_mode_controller.dart`) holds the choice and
+  persists it through `ThemeModeStore`; `LinthraApp` watches it, so a change
+  repaints every screen at once. The default is `ThemeMode.system`, which also
+  makes `MaterialApp` re-render when the phone flips light/dark while Linthra is
+  open — no listener of our own. `main` awaits `readStoredThemeMode()` *before*
+  `runApp` and seeds `initialThemeModeProvider` with the result, so the first
+  frame is already correct; loading it asynchronously afterwards would make
+  someone who picked Light on a dark phone watch the app flash dark and flip.
+  That seeding is also why the controller has no async load of its own, which
+  removes the race where a stored value lands after the user has already tapped
+  a different option. A read or write that throws falls back to "follow the
+  phone" rather than taking startup down.
   (The brand marks/launcher icons keep their own gradients — e.g. Classic's
   signature violet→orange mark and the default launcher icon are unchanged.)
 - **Launcher icon (Android)** — the same selection also switches the real
