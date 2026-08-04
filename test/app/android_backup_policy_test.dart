@@ -70,7 +70,8 @@ void main() {
       expect(
         rules,
         isNot(contains('domain="device_')),
-        reason: 'Device-protected domains break lintVitalRelease in the pinned toolchain.',
+        reason:
+            'Device-protected domains break lintVitalRelease in the pinned toolchain.',
       );
     });
 
@@ -97,7 +98,8 @@ void main() {
       expect(
         rules,
         isNot(contains('domain="device_')),
-        reason: 'Device-protected domains break lintVitalRelease in the pinned toolchain.',
+        reason:
+            'Device-protected domains break lintVitalRelease in the pinned toolchain.',
       );
     });
   });
