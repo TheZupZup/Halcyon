@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/track.dart';
+import 'package:linthra/core/repositories/download_repository.dart';
 import 'package:linthra/data/repositories/download_repository_provider.dart';
+import 'package:linthra/features/downloads/download_providers.dart';
 import 'package:linthra/features/library/widgets/track_tile.dart';
 import 'package:linthra/features/player/player_providers.dart';
 
@@ -337,6 +339,68 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.byTooltip('Add to favorites'), findsOneWidget);
       expect(find.byTooltip('More actions'), findsOneWidget);
+    });
+
+    testWidgets('the heart groups with the menu, not the download glyph',
+        (tester) async {
+      // Proximity is what makes the trailing edge read as one action group.
+      // Centred in its box the heart measured 12dp from the status glyph and
+      // 24dp from the menu — visually part of the *status* cluster. It is now
+      // right-aligned inside the same box, which flips that.
+      _useNarrowPhone(tester);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: <Override>[
+            remoteTrackDownloaderProvider
+                .overrideWithValue(FakeRemoteTrackDownloader()),
+            // A downloaded remote track, so the status glyph is actually drawn.
+            trackDownloadStatusProvider.overrideWith(
+              (ref, key) =>
+                  Stream<DownloadStatus>.value(DownloadStatus.downloaded),
+            ),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(
+              body: TrackTile(
+                tracks: <Track>[
+                  Track(id: '1', title: 'Song One', uri: 'jellyfin:1'),
+                ],
+                index: 0,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final Rect glyph = tester.getRect(find.byIcon(Icons.download_done));
+      final Rect heart = tester.getRect(find.byIcon(Icons.favorite_border));
+      final Rect menu = tester.getRect(find.byIcon(Icons.more_vert));
+
+      final double toMenu = menu.left - heart.right;
+      final double toGlyph = heart.left - glyph.right;
+      expect(
+        toMenu,
+        lessThan(toGlyph),
+        reason: 'the heart must sit closer to the overflow menu ($toMenu) '
+            'than to the download glyph ($toGlyph)',
+      );
+
+      // Grouping is a pure re-alignment inside the existing box, so the tap
+      // target must not have shrunk — otherwise we'd have traded accessibility
+      // for looks. IconButton pads the hit area out to Material's 48dp minimum
+      // around the 40dp visual box, so this floor is what a finger actually
+      // gets.
+      final Size target = tester.getSize(
+        find
+            .ancestor(
+              of: find.byIcon(Icons.favorite_border),
+              matching: find.byType(IconButton),
+            )
+            .first,
+      );
+      expect(target.width, greaterThanOrEqualTo(48));
+      expect(target.height, greaterThanOrEqualTo(48));
     });
 
     testWidgets('the heart stays tappable at a 2.0 text scale', (tester) async {

@@ -238,10 +238,21 @@ class _StatusGlyph extends StatelessWidget {
 /// (see `SyncedFavoritesRepository`). Routing is by the provider-namespaced
 /// [Track.uri], so a Jellyfin and a Navidrome copy keep separate hearts.
 ///
-/// Sized 40x48 rather than the default 48x48: it is the third control in the
-/// row's trailing edge (after the download glyph and before the menu), and the
-/// narrower box buys back space for the title on small screens without dropping
-/// the tap target below a comfortable height.
+/// Given a 40dp-wide visual box rather than the default 48dp: it is the third
+/// control on the row's trailing edge (after the download glyph, before the
+/// menu), and the narrower box buys back space for the title on small screens.
+/// The *tap* target is unaffected — IconButton pads the hit area out to
+/// Material's 48x48 minimum around it.
+///
+/// The glyph sits at the *right* of that box rather than centred, so the heart
+/// reads as part of the trailing action group with the overflow menu instead of
+/// drifting toward the download indicator. Centred, the measured gaps on a
+/// 320dp screen were 12dp to the status glyph and 24dp to the menu — the heart
+/// looked like it belonged to the status cluster. Right-aligned they become
+/// 20dp and 16dp, so it groups with the menu. This only moves the icon inside
+/// the existing box: the trailing group's total width — and therefore the room
+/// left for the title, and the clearance beside the alphabet rail — is
+/// unchanged, measured at 104dp of title either way on a 320dp screen.
 class _FavoriteButton extends ConsumerWidget {
   const _FavoriteButton({required this.track});
 
@@ -259,6 +270,8 @@ class _FavoriteButton extends ConsumerWidget {
       // constraints and shrink the target further than intended.
       constraints: const BoxConstraints.tightFor(width: 40, height: 48),
       padding: EdgeInsets.zero,
+      // Biases the glyph toward the menu without changing the box (see above).
+      alignment: Alignment.centerRight,
       icon: Icon(isFavorite ? Icons.favorite : Icons.favorite_border),
       color: isFavorite ? theme.colorScheme.secondary : null,
       tooltip: isFavorite ? 'Remove from favorites' : 'Add to favorites',
