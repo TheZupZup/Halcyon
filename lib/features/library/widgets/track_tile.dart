@@ -262,9 +262,8 @@ class _FavoriteButton extends ConsumerWidget {
       icon: Icon(isFavorite ? Icons.favorite : Icons.favorite_border),
       color: isFavorite ? theme.colorScheme.secondary : null,
       tooltip: isFavorite ? 'Remove from favorites' : 'Add to favorites',
-      onPressed: () => ref
-          .read(favoritesRepositoryProvider)
-          .setFavorite(track, !isFavorite),
+      onPressed: () =>
+          ref.read(favoritesRepositoryProvider).setFavorite(track, !isFavorite),
     );
   }
 }

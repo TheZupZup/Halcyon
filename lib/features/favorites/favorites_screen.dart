@@ -36,8 +36,7 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen>
     with TrackSelectionMixin<FavoritesScreen> {
   @override
   Widget build(BuildContext context) {
-    final AsyncValue<List<Track>> favorites =
-        ref.watch(favoriteTracksProvider);
+    final AsyncValue<List<Track>> favorites = ref.watch(favoriteTracksProvider);
 
     return favorites.when(
       loading: () => Scaffold(
