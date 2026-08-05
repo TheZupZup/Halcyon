@@ -44,6 +44,16 @@ class AlphabetTrackList extends StatefulWidget {
   /// Starts selection with a track (long-press).
   final void Function(Track track)? onSelectStart;
 
+  /// The order rows are displayed in: by title, case-insensitively.
+  ///
+  /// Exposed so a host screen's Play / Shuffle queues exactly what the user
+  /// sees, instead of the catalog order it happened to receive. Tapping a row
+  /// already queues in this order (rows are built from the sorted list), so a
+  /// header button that used the unsorted list would disagree with the very
+  /// list it sits above.
+  static List<Track> sortedByTitle(List<Track> tracks) => <Track>[...tracks]
+    ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+
   @override
   State<AlphabetTrackList> createState() => _AlphabetTrackListState();
 }
@@ -98,8 +108,7 @@ class _AlphabetTrackListState extends State<AlphabetTrackList> {
   /// (Re)derives the sorted list, the flat header/track entry list, and the
   /// per-letter scroll offsets from the current tracks.
   void _rebuildIndex() {
-    _sorted = [...widget.tracks]
-      ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+    _sorted = AlphabetTrackList.sortedByTitle(widget.tracks);
 
     _entries = <_Entry>[];
     _letters = <String>[];

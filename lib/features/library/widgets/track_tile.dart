@@ -34,10 +34,11 @@ enum _TrackAction {
 /// A single library track row.
 ///
 /// The row is deliberately calm: artwork (or a placeholder), the title, and a
-/// clean artist • album subtitle. Per-track actions live behind a trailing
-/// 3-dots overflow menu rather than a dedicated button, so the list stays
-/// uncluttered. Download state is still surfaced — but only as a subtle leading
-/// glyph next to the menu, never as a large control.
+/// clean artist • album subtitle. The trailing edge carries a visible favourite
+/// heart (the one action common enough to earn a permanent control) and the
+/// 3-dots overflow menu for everything else, so the list stays uncluttered
+/// without hiding liking behind a menu. Download state is still surfaced — but
+/// only as a subtle glyph before them, never as a large control.
 ///
 /// Tapping the row plays the tapped track and queues the rest of [tracks]
 /// behind it, then opens the now-playing screen — unchanged from before.
@@ -140,6 +141,7 @@ class TrackTile extends ConsumerWidget {
                   isRemote: isRemote,
                   progress: downloadFraction,
                 ),
+                _FavoriteButton(track: track),
                 _OverflowMenu(
                   track: track,
                   status: status,
@@ -219,6 +221,51 @@ class _StatusGlyph extends StatelessWidget {
       case DownloadStatus.notDownloaded:
         return const SizedBox.shrink();
     }
+  }
+}
+
+/// The visible favourite toggle on a track row.
+///
+/// Liking a song used to be reachable only from the row's 3-dot menu (or the
+/// full player), which made the app's most-used action its least discoverable —
+/// and left the Favorites empty state telling users to "tap the heart" on rows
+/// that had none. This is that heart. The overflow menu keeps its own
+/// favourite entry as the secondary path, so nothing that worked before stops
+/// working.
+///
+/// Offered for every track, exactly like the menu entry it mirrors: favourites
+/// persist locally for any source and mirror to whichever server owns the track
+/// (see `SyncedFavoritesRepository`). Routing is by the provider-namespaced
+/// [Track.uri], so a Jellyfin and a Navidrome copy keep separate hearts.
+///
+/// Sized 40x48 rather than the default 48x48: it is the third control in the
+/// row's trailing edge (after the download glyph and before the menu), and the
+/// narrower box buys back space for the title on small screens without dropping
+/// the tap target below a comfortable height.
+class _FavoriteButton extends ConsumerWidget {
+  const _FavoriteButton({required this.track});
+
+  final Track track;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ThemeData theme = Theme.of(context);
+    // Keyed by the namespaced uri so this row reflects its own copy's heart, and
+    // stays live if the favourite changes elsewhere (the player, a server sync).
+    final bool isFavorite = ref.watch(isFavoriteProvider(track.uri));
+    return IconButton(
+      // A tight 40x48 box rather than the default 48x48. Sizing is set here and
+      // nowhere else — adding visualDensity on top would compound with these
+      // constraints and shrink the target further than intended.
+      constraints: const BoxConstraints.tightFor(width: 40, height: 48),
+      padding: EdgeInsets.zero,
+      icon: Icon(isFavorite ? Icons.favorite : Icons.favorite_border),
+      color: isFavorite ? theme.colorScheme.secondary : null,
+      tooltip: isFavorite ? 'Remove from favorites' : 'Add to favorites',
+      onPressed: () => ref
+          .read(favoritesRepositoryProvider)
+          .setFavorite(track, !isFavorite),
+    );
   }
 }
 

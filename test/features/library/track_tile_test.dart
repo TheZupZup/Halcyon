@@ -13,6 +13,7 @@ Future<void> _pump(
   WidgetTester tester,
   List<Track> tracks, {
   FakePlaybackController? controller,
+  TextScaler? textScaler,
 }) async {
   await tester.pumpWidget(
     ProviderScope(
@@ -23,18 +24,35 @@ Future<void> _pump(
           playbackControllerProvider.overrideWithValue(controller),
       ],
       child: MaterialApp(
-        home: Scaffold(
-          body: ListView(
-            children: [
-              for (var i = 0; i < tracks.length; i++)
-                TrackTile(tracks: tracks, index: i),
-            ],
-          ),
+        home: Builder(
+          builder: (BuildContext context) {
+            final Widget scaffold = Scaffold(
+              body: ListView(
+                children: [
+                  for (var i = 0; i < tracks.length; i++)
+                    TrackTile(tracks: tracks, index: i),
+                ],
+              ),
+            );
+            if (textScaler == null) return scaffold;
+            return MediaQuery(
+              data: MediaQuery.of(context).copyWith(textScaler: textScaler),
+              child: scaffold,
+            );
+          },
         ),
       ),
     ),
   );
   await tester.pumpAndSettle();
+}
+
+/// Shrinks the test surface to a narrow phone for the crowding checks, and
+/// restores it afterwards.
+void _useNarrowPhone(WidgetTester tester) {
+  tester.view.physicalSize = const Size(320 * 3, 640 * 3);
+  tester.view.devicePixelRatio = 3.0;
+  addTearDown(tester.view.reset);
 }
 
 void main() {
@@ -114,7 +132,9 @@ void main() {
 
       expect(find.text('Add to favorites'), findsOneWidget);
       expect(find.text('Remove from favorites'), findsNothing);
-      expect(find.byIcon(Icons.favorite_border), findsOneWidget);
+      // Two outline hearts while the menu is open: the row's own visible
+      // toggle, plus the menu entry that remains as the secondary path.
+      expect(find.byIcon(Icons.favorite_border), findsNWidgets(2));
     });
 
     testWidgets(
@@ -142,7 +162,197 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Remove from favorites'), findsOneWidget);
       expect(find.text('Add to favorites'), findsNothing);
+      // Row toggle + menu entry, both now filled (see the outline case above).
+      expect(find.byIcon(Icons.favorite), findsNWidgets(2));
+    });
+  });
+
+  group('TrackTile visible favorite heart', () {
+    testWidgets('every row shows an outline heart when not favorited',
+        (tester) async {
+      await _pump(tester, const <Track>[
+        Track(id: '1', title: 'Song One', uri: 'file:///s1.mp3'),
+        Track(id: '2', title: 'Song Two', uri: 'file:///s2.mp3'),
+      ]);
+
+      // Visible without opening any menu — the whole point of the change.
+      expect(find.byTooltip('Add to favorites'), findsNWidgets(2));
+      expect(find.byIcon(Icons.favorite_border), findsNWidgets(2));
+      expect(find.byIcon(Icons.favorite), findsNothing);
+    });
+
+    testWidgets('tapping the heart favorites the track and fills it',
+        (tester) async {
+      final FakePlaybackController controller = FakePlaybackController();
+      await _pump(
+        tester,
+        const <Track>[Track(id: '1', title: 'Song One', uri: 'file:///s1.mp3')],
+        controller: controller,
+      );
+
+      await tester.tap(find.byTooltip('Add to favorites'));
+      await tester.pumpAndSettle();
+
       expect(find.byIcon(Icons.favorite), findsOneWidget);
+      expect(find.byIcon(Icons.favorite_border), findsNothing);
+      expect(find.byTooltip('Remove from favorites'), findsOneWidget);
+      // Liking is a pure like: nothing plays and the queue is untouched.
+      expect(controller.playedTracks, isEmpty);
+      expect(controller.state.upNext, isEmpty);
+    });
+
+    testWidgets('tapping a filled heart unfavorites the track', (tester) async {
+      await _pump(tester, const <Track>[
+        Track(id: '1', title: 'Song One', uri: 'file:///s1.mp3'),
+      ]);
+
+      await tester.tap(find.byTooltip('Add to favorites'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Remove from favorites'));
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.favorite_border), findsOneWidget);
+      expect(find.byIcon(Icons.favorite), findsNothing);
+    });
+
+    testWidgets('only the tapped row is favorited, not its neighbours',
+        (tester) async {
+      await _pump(tester, const <Track>[
+        Track(id: '1', title: 'Song One', uri: 'file:///s1.mp3'),
+        Track(id: '2', title: 'Song Two', uri: 'file:///s2.mp3'),
+      ]);
+
+      await tester.tap(find.byTooltip('Add to favorites').first);
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.favorite), findsOneWidget);
+      expect(find.byIcon(Icons.favorite_border), findsOneWidget);
+    });
+
+    testWidgets('two provider copies of one id keep separate hearts',
+        (tester) async {
+      // Favourites are keyed by the provider-namespaced uri, so liking the
+      // Jellyfin copy must not light up the Navidrome one.
+      await _pump(tester, const <Track>[
+        Track(id: '101', title: 'Shared', uri: 'jellyfin:101'),
+        Track(id: '101', title: 'Shared', uri: 'subsonic:101'),
+      ]);
+
+      await tester.tap(find.byTooltip('Add to favorites').first);
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.favorite), findsOneWidget);
+      expect(find.byIcon(Icons.favorite_border), findsOneWidget);
+    });
+
+    testWidgets('the heart does not replace the overflow menu', (tester) async {
+      await _pump(tester, const <Track>[
+        Track(id: '1', title: 'Song One', uri: 'file:///s1.mp3'),
+      ]);
+
+      // Both paths coexist: the menu keeps its favourite entry as the
+      // secondary route.
+      expect(find.byTooltip('Add to favorites'), findsOneWidget);
+      expect(find.byTooltip('More actions'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('More actions'));
+      await tester.pumpAndSettle();
+      expect(find.text('Add to favorites'), findsOneWidget);
+    });
+
+    testWidgets('selection mode hides the heart in favour of the checkbox',
+        (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            remoteTrackDownloaderProvider
+                .overrideWithValue(FakeRemoteTrackDownloader()),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(
+              body: TrackTile(
+                tracks: <Track>[
+                  Track(id: '1', title: 'Song One', uri: 'file:///s1.mp3'),
+                ],
+                index: 0,
+                selectable: true,
+                selectionActive: true,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(Checkbox), findsOneWidget);
+      expect(find.byTooltip('Add to favorites'), findsNothing);
+      expect(find.byTooltip('More actions'), findsNothing);
+    });
+  });
+
+  group('TrackTile row layout under pressure', () {
+    testWidgets('a very long title and subtitle do not overflow a narrow row',
+        (tester) async {
+      _useNarrowPhone(tester);
+      await _pump(tester, const <Track>[
+        Track(
+          id: '1',
+          title: 'An Extraordinarily Long Song Title That Keeps Going Well '
+              'Past Any Reasonable Width For A Phone Screen',
+          uri: 'file:///s1.mp3',
+          artistName: 'A Band With An Unreasonably Long Name Indeed',
+          albumName: 'And An Album Title That Is Similarly Overlong',
+        ),
+      ]);
+
+      // No RenderFlex overflow from the trailing glyph + heart + menu row.
+      expect(tester.takeException(), isNull);
+      // Both controls survive, and the text ellipsizes rather than pushing.
+      expect(find.byTooltip('Add to favorites'), findsOneWidget);
+      expect(find.byTooltip('More actions'), findsOneWidget);
+      final Text title = tester.widget<Text>(
+        find.textContaining('An Extraordinarily Long Song Title'),
+      );
+      expect(title.maxLines, 1);
+      expect(title.overflow, TextOverflow.ellipsis);
+    });
+
+    testWidgets('the row survives a 2.0 text scale without overflowing',
+        (tester) async {
+      _useNarrowPhone(tester);
+      await _pump(
+        tester,
+        const <Track>[
+          Track(
+            id: '1',
+            title: 'Song One',
+            uri: 'file:///s1.mp3',
+            artistName: 'Artist A',
+            albumName: 'Album X',
+          ),
+        ],
+        textScaler: const TextScaler.linear(2.0),
+      );
+
+      expect(tester.takeException(), isNull);
+      expect(find.byTooltip('Add to favorites'), findsOneWidget);
+      expect(find.byTooltip('More actions'), findsOneWidget);
+    });
+
+    testWidgets('the heart stays tappable at a 2.0 text scale', (tester) async {
+      _useNarrowPhone(tester);
+      await _pump(
+        tester,
+        const <Track>[Track(id: '1', title: 'Song One', uri: 'file:///s1.mp3')],
+        textScaler: const TextScaler.linear(2.0),
+      );
+
+      // A control that renders but can't be hit is no better than a hidden one.
+      await tester.tap(find.byTooltip('Add to favorites'));
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.favorite), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 
