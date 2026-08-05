@@ -1,0 +1,7 @@
+Linthra 0.1.14
+
+- Keeps compilation and collaboration albums grouped using provider album IDs. Sync your library once after updating.
+- Shows albums in a responsive cover grid, with two columns on phones.
+- Adds System, Light, and Dark appearance modes.
+- Improves first-sync messages for Jellyfin, Navidrome/Subsonic, and Plex.
+- Preserves normal update data and includes the release-build safeguards added after 0.1.12.
