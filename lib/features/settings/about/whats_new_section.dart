@@ -20,10 +20,10 @@ class WhatsNewSection extends StatelessWidget {
   /// handful of concise bullets and updated when cutting a new build; exposed so
   /// the widget test can assert each line renders without duplicating the copy.
   static const List<String> releaseNotes = <String>[
-    'Fresh installs no longer restore old songs or settings after uninstalling Linthra.',
-    'Switching from a debug APK to the stable app now starts with a clean library.',
-    'Normal app updates still keep accounts, settings, playlists, catalog, and cache.',
-    'Android backup and device transfer no longer resurrect inaccessible local folders.',
+    'Compilation and collaboration albums now stay together after a library sync.',
+    'The Albums tab now uses a responsive cover grid with two columns on phones.',
+    'Linthra can follow your phone’s theme, or stay in Light or Dark mode.',
+    'First sync screens now correctly identify Jellyfin, Navidrome, and Plex.',
   ];
 
   @override
