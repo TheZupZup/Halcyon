@@ -20,10 +20,9 @@ class WhatsNewSection extends StatelessWidget {
   /// handful of concise bullets and updated when cutting a new build; exposed so
   /// the widget test can assert each line renders without duplicating the copy.
   static const List<String> releaseNotes = <String>[
-    'Compilation and collaboration albums now stay together after a library sync.',
-    'The Albums tab now uses a responsive cover grid with two columns on phones.',
-    'Linthra can follow your phone’s theme, or stay in Light or Dark mode.',
-    'First sync screens now correctly identify Jellyfin, Navidrome, and Plex.',
+    'The Now Playing screen no longer jumps when Navidrome, Jellyfin, or Plex playback changes status.',
+    'Streaming, buffering, cache, casting, and error indicators now share a stable layout.',
+    'Playback status stays readable with larger system text without moving the controls.',
   ];
 
   @override
