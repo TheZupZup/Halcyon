@@ -196,13 +196,7 @@ class _LiveControls extends ConsumerWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Every source/buffering/casting/error state shares one fixed-height
-        // slot. Their icon and text metrics differ slightly, but the progress
-        // bar and transport controls must never move when the state changes.
-        SizedBox(
-          height: 24,
-          child: Center(child: _SourceOrError(state: state)),
-        ),
+        _StatusSlot(child: _SourceOrError(state: state)),
         const SizedBox(height: AppSpacing.md),
         PlaybackProgressBar(
           position: state.position,
@@ -213,6 +207,36 @@ class _LiveControls extends ConsumerWidget {
         const SizedBox(height: AppSpacing.sm),
         PlaybackControls(state: state),
       ],
+    );
+  }
+}
+
+/// A stable status area that still grows enough for the user's text scale.
+/// Every source/buffering/casting/error state uses the same computed height, so
+/// switching states cannot move the artwork or metadata above the controls.
+class _StatusSlot extends StatelessWidget {
+  const _StatusSlot({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scaler = MediaQuery.textScalerOf(context);
+    final labelStyle = theme.textTheme.labelLarge;
+    final bodyStyle = theme.textTheme.bodyMedium;
+    final labelHeight = scaler.scale(labelStyle?.fontSize ?? 14) *
+        (labelStyle?.height ?? 1.2);
+    final bodyHeight = scaler.scale(bodyStyle?.fontSize ?? 14) *
+        (bodyStyle?.height ?? 1.2);
+    final textHeight = labelHeight > bodyHeight ? labelHeight : bodyHeight;
+    final preferredHeight = textHeight + AppSpacing.xs;
+    final slotHeight = preferredHeight > 24 ? preferredHeight : 24.0;
+
+    return SizedBox(
+      key: const ValueKey('player-status-slot'),
+      height: slotHeight,
+      child: Center(child: child),
     );
   }
 }
@@ -260,9 +284,7 @@ class _SourceOrError extends ConsumerWidget {
     }
     final source = state.source;
     if (source == null) {
-      // Reserve the inline chip's height so the column doesn't shift when the
-      // source resolves a beat after the track loads.
-      return const SizedBox(height: 22);
+      return const SizedBox.shrink();
     }
     return PlaybackSourceChip(
       source: source,
