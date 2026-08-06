@@ -19,33 +19,49 @@ const _track = Track(
 
 Future<void> _pumpPlayer(
   WidgetTester tester,
-  FakePlaybackController controller,
-) async {
+  FakePlaybackController controller, {
+  TextScaler? textScaler,
+}) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
         playbackControllerProvider.overrideWithValue(controller),
       ],
-      child: const MaterialApp(home: PlayerScreen()),
+      child: MaterialApp(
+        builder: (context, child) {
+          final mediaQuery = MediaQuery.of(context);
+          return MediaQuery(
+            data: mediaQuery.copyWith(
+              textScaler: textScaler ?? mediaQuery.textScaler,
+            ),
+            child: child!,
+          );
+        },
+        home: const PlayerScreen(),
+      ),
     ),
   );
   await tester.pumpAndSettle();
 }
 
+FakePlaybackController _streamingController() {
+  return FakePlaybackController(
+    initial: const PlaybackState(
+      status: PlaybackStatus.playing,
+      currentTrack: _track,
+      source: PlaybackSource.streamingDirect,
+      duration: Duration(minutes: 4),
+    ),
+  );
+}
+
 void main() {
-  testWidgets('status changes do not move the progress controls', (tester) async {
-    final controller = FakePlaybackController(
-      initial: const PlaybackState(
-        status: PlaybackStatus.playing,
-        currentTrack: _track,
-        source: PlaybackSource.streamingDirect,
-        duration: Duration(minutes: 4),
-      ),
-    );
+  testWidgets('status changes do not move the track metadata', (tester) async {
+    final controller = _streamingController();
     await _pumpPlayer(tester, controller);
 
-    final slider = find.byType(Slider);
-    final directStreamY = tester.getTopLeft(slider).dy;
+    final title = find.text('Remote song');
+    final directStreamY = tester.getTopLeft(title).dy;
     expect(find.text('Playing from Navidrome'), findsOneWidget);
 
     controller.emit(
@@ -60,7 +76,7 @@ void main() {
 
     expect(find.text('Buffering…'), findsOneWidget);
     expect(
-      tester.getTopLeft(slider).dy,
+      tester.getTopLeft(title).dy,
       moreOrLessEquals(directStreamY, epsilon: 0.01),
     );
 
@@ -77,8 +93,22 @@ void main() {
 
     expect(find.text('Playing from Cache'), findsOneWidget);
     expect(
-      tester.getTopLeft(slider).dy,
+      tester.getTopLeft(title).dy,
       moreOrLessEquals(directStreamY, epsilon: 0.01),
     );
+  });
+
+  testWidgets('status slot grows with the system text scale', (tester) async {
+    await _pumpPlayer(
+      tester,
+      _streamingController(),
+      textScaler: TextScaler.linear(2),
+    );
+
+    final statusSlot = find.byKey(const ValueKey('player-status-slot'));
+    expect(statusSlot, findsOneWidget);
+    expect(tester.getSize(statusSlot).height, greaterThan(24));
+    expect(find.text('Playing from Navidrome'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }
