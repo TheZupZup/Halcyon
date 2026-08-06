@@ -44,6 +44,14 @@ Future<void> _pumpPlayer(
   await tester.pumpAndSettle();
 }
 
+Future<void> _pumpStreamUpdate(WidgetTester tester) async {
+  // The playback stream can publish after the first frame. Pump one more
+  // bounded frame rather than using pumpAndSettle: the buffering spinner is a
+  // continuous animation and would otherwise keep the test waiting forever.
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 16));
+}
+
 FakePlaybackController _streamingController() {
   return FakePlaybackController(
     initial: const PlaybackState(
@@ -72,7 +80,7 @@ void main() {
         position: Duration(minutes: 2),
       ),
     );
-    await tester.pump();
+    await _pumpStreamUpdate(tester);
 
     expect(find.text('Buffering…'), findsOneWidget);
     expect(
@@ -89,7 +97,7 @@ void main() {
         position: Duration(minutes: 2),
       ),
     );
-    await tester.pump();
+    await _pumpStreamUpdate(tester);
 
     expect(find.text('Playing from Cache'), findsOneWidget);
     expect(
