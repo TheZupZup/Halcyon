@@ -225,10 +225,12 @@ class _StatusSlot extends StatelessWidget {
     final scaler = MediaQuery.textScalerOf(context);
     final labelStyle = theme.textTheme.labelLarge;
     final bodyStyle = theme.textTheme.bodyMedium;
-    final labelHeight = scaler.scale(labelStyle?.fontSize ?? 14) *
-        (labelStyle?.height ?? 1.2);
-    final bodyHeight = scaler.scale(bodyStyle?.fontSize ?? 14) *
-        (bodyStyle?.height ?? 1.2);
+    final labelFontSize = labelStyle?.fontSize ?? 14.0;
+    final bodyFontSize = bodyStyle?.fontSize ?? 14.0;
+    final labelLineHeight = labelStyle?.height ?? 1.2;
+    final bodyLineHeight = bodyStyle?.height ?? 1.2;
+    final labelHeight = scaler.scale(labelFontSize) * labelLineHeight;
+    final bodyHeight = scaler.scale(bodyFontSize) * bodyLineHeight;
     final textHeight = labelHeight > bodyHeight ? labelHeight : bodyHeight;
     final preferredHeight = textHeight + AppSpacing.xs;
     final slotHeight = preferredHeight > 24 ? preferredHeight : 24.0;
