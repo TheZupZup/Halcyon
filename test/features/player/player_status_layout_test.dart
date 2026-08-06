@@ -102,7 +102,7 @@ void main() {
     await _pumpPlayer(
       tester,
       _streamingController(),
-      textScaler: TextScaler.linear(2),
+      textScaler: const TextScaler.linear(2),
     );
 
     final statusSlot = find.byKey(const ValueKey('player-status-slot'));
