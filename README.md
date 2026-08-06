@@ -3,7 +3,7 @@
 [![License: MPL-2.0](https://img.shields.io/badge/License-MPL--2.0-brightgreen.svg)](./LICENSE)
 [![Platform: Android](https://img.shields.io/badge/platform-Android-3ddc84.svg)](#install)
 [![Built with Flutter](https://img.shields.io/badge/built%20with-Flutter-02569B.svg)](https://flutter.dev)
-[![Latest release: v0.1.14](https://img.shields.io/badge/release-v0.1.14-7C5CFF.svg)](https://github.com/thezupzup/linthra/releases/latest)
+[![Latest release: v0.1.15](https://img.shields.io/badge/release-v0.1.15-7C5CFF.svg)](https://github.com/thezupzup/linthra/releases/latest)
 [![Releases](https://img.shields.io/badge/download-releases-blue.svg)](https://github.com/thezupzup/linthra/releases)
 [![Community: r/Linthra](https://img.shields.io/badge/community-r%2FLinthra-FF9F43.svg)](https://reddit.com/r/Linthra)
 
@@ -71,7 +71,7 @@ More in [`phoneScreenshots/`](fastlane/metadata/android/en-US/images/phoneScreen
 
 New versions land on
 [GitHub Releases](https://github.com/thezupzup/linthra/releases) first, as
-signed APKs. The current stable is v0.1.14. Linthra is also on
+signed APKs. The current stable is v0.1.15. Linthra is also on
 [F-Droid](https://f-droid.org/packages/io.github.thezupzup.linthra/); F-Droid
 builds may arrive a bit later while their build and review process runs. Not on
 Google Play yet.
