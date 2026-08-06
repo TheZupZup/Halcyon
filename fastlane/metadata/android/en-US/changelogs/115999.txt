@@ -1,0 +1,4 @@
+Linthra 0.1.15
+
+- Keeps the Now Playing screen steady when Navidrome, Jellyfin, or Plex playback changes between streaming, buffering, cache, casting, and error states.
+- Improves playback-status accessibility at larger system text sizes without shifting the progress bar or controls.
