@@ -196,7 +196,13 @@ class _LiveControls extends ConsumerWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _SourceOrError(state: state),
+        // Every source/buffering/casting/error state shares one fixed-height
+        // slot. Their icon and text metrics differ slightly, but the progress
+        // bar and transport controls must never move when the state changes.
+        SizedBox(
+          height: 24,
+          child: Center(child: _SourceOrError(state: state)),
+        ),
         const SizedBox(height: AppSpacing.md),
         PlaybackProgressBar(
           position: state.position,
@@ -243,6 +249,8 @@ class _SourceOrError extends ConsumerWidget {
           color: theme.colorScheme.error,
         ),
         textAlign: TextAlign.center,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       );
     }
     // A mid-stream re-buffer: a calm "Buffering…" hint rather than the source
