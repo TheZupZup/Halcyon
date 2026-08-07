@@ -1,0 +1,70 @@
+use std::time::{Duration, Instant};
+
+use linthra_core::{LibraryIndex, TrackRecord};
+
+const TRACK_COUNT: usize = 200_000;
+const SEARCH_ITERATIONS: usize = 500;
+
+fn main() {
+    let tracks = synthetic_library(TRACK_COUNT);
+
+    let build_started = Instant::now();
+    let index = LibraryIndex::build(tracks);
+    let build_elapsed = build_started.elapsed();
+
+    let queries = [
+        "artist 421 track 199421",
+        "album 311 artist 731",
+        "navidrome track 150000",
+        "jellyfin album 42",
+        "local artist 11",
+    ];
+
+    let search_started = Instant::now();
+    let mut hit_count = 0usize;
+    for iteration in 0..SEARCH_ITERATIONS {
+        let query = queries[iteration % queries.len()];
+        hit_count += index.search(query, 50).len();
+    }
+    let search_elapsed = search_started.elapsed();
+    let average = search_elapsed / SEARCH_ITERATIONS as u32;
+
+    println!("Linthra large-library benchmark");
+    println!("tracks: {TRACK_COUNT}");
+    println!("index build: {} ms", build_elapsed.as_millis());
+    println!(
+        "{SEARCH_ITERATIONS} searches: {} ms (avg {} µs)",
+        search_elapsed.as_millis(),
+        average.as_micros()
+    );
+    println!("total returned hits: {hit_count}");
+
+    // This is a regression smoke threshold, not a marketing benchmark. It is
+    // deliberately generous enough for shared CI runners while still catching
+    // an accidental O(catalog × query) implementation.
+    assert!(
+        average < Duration::from_millis(50),
+        "average search exceeded the 50 ms large-library budget: {average:?}"
+    );
+}
+
+fn synthetic_library(count: usize) -> Vec<TrackRecord> {
+    (0..count)
+        .map(|index| {
+            let provider = match index % 4 {
+                0 => "local",
+                1 => "jellyfin",
+                2 => "navidrome",
+                _ => "plex",
+            };
+            TrackRecord::new(
+                format!("track-{index}"),
+                format!("Track {index} Midnight Signal"),
+                format!("Artist {}", index % 1_500),
+                format!("Album {}", index % 2_500),
+                Some(format!("Artist {}", index % 1_500)),
+                provider,
+            )
+        })
+        .collect()
+}
