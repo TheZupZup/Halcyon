@@ -1,0 +1,20 @@
+[package]
+name = "linthra_core"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "High-performance library indexing and search core for Linthra"
+publish = false
+
+[lib]
+name = "linthra_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "benchmark_200k"
+path = "src/bin/benchmark_200k.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
