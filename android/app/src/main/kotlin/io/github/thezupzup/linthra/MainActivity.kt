@@ -37,6 +37,12 @@ class MainActivity : AudioServiceActivity() {
         NetworkStatusChannel(applicationContext)
     }
 
+    // Reports only Linthra's own first-install/update timestamps so the Dart
+    // bootstrap can keep onboarding first-install-only across app updates.
+    private val installHistoryChannel by lazy {
+        InstallHistoryChannel(applicationContext)
+    }
+
     override fun onResume() {
         super.onResume()
         displayRefreshRate.onResume()
@@ -108,6 +114,9 @@ class MainActivity : AudioServiceActivity() {
         // change stream. Separate from SAF/share/icon channels so the data guard
         // stays small and auditable.
         networkStatusChannel.configure(flutterEngine.dartExecutor.binaryMessenger)
+
+        // First-install/update history for the v0.2.0 onboarding migration.
+        installHistoryChannel.configure(flutterEngine.dartExecutor.binaryMessenger)
 
         // Launcher-icon switching: enable the chosen <activity-alias> and
         // disable the others (LauncherIconChannel). Separate channel from SAF so
