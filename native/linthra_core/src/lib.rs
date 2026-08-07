@@ -155,7 +155,11 @@ impl LibraryIndex {
                         .title
                         .cmp(&self.tracks[*right_index].title)
                 })
-                .then_with(|| self.tracks[*left_index].id.cmp(&self.tracks[*right_index].id))
+                .then_with(|| {
+                    self.tracks[*left_index]
+                        .id
+                        .cmp(&self.tracks[*right_index].id)
+                })
         });
         ranked.truncate(limit);
 
@@ -179,10 +183,10 @@ fn index_field(
     // outrank another track merely because a token is repeated in its metadata.
     let unique: HashSet<String> = normalized_tokens(value).into_iter().collect();
     for token in unique {
-        postings
-            .entry(token)
-            .or_default()
-            .push(Posting { track_index, weight });
+        postings.entry(token).or_default().push(Posting {
+            track_index,
+            weight,
+        });
     }
 }
 
