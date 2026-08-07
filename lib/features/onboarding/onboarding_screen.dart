@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/dimens.dart';
 import '../../app/routes.dart';
-import '../../core/app_info.dart';
 import '../appearance/selected_logo_mark.dart';
 import '../library/selected_folder_controller.dart';
 import '../settings/jellyfin/jellyfin_settings_controller.dart';
@@ -582,8 +581,8 @@ class _Entrance extends StatelessWidget {
     final Animation<double> animation = CurvedAnimation(
       parent: controller,
       curve: Interval(
-        begin.clamp(0, 1),
-        end.clamp(0, 1),
+        begin,
+        end,
         curve: Curves.easeOutCubic,
       ),
     );
