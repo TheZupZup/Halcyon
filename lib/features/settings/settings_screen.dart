@@ -60,6 +60,13 @@ class SettingsScreen extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.md),
           SettingsCategoryTile(
+            icon: Icons.auto_awesome_outlined,
+            title: 'Welcome tour',
+            subtitle: 'Replay the Linthra introduction and music-source guide',
+            onTap: () => context.push(AppRoutes.onboardingReplay),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          SettingsCategoryTile(
             icon: Icons.help_outline,
             title: 'Diagnostics & support',
             subtitle: 'Report a bug, copy diagnostics',
