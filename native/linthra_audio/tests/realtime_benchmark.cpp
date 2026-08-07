@@ -1,5 +1,6 @@
 #include "linthra_audio/dsp.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -52,7 +53,8 @@ int main() {
     const double realtime_ratio =
         std::chrono::duration<double>(elapsed).count() / static_cast<double>(seconds);
 
-    std::cout << "Processed " << seconds << " seconds of 48 kHz stereo / 5-band EQ + limiter in "
+    std::cout << "Processed " << seconds
+              << " seconds of 48 kHz stereo / 5-band EQ + limiter in "
               << elapsed_ms << " ms (" << realtime_ratio << "x realtime)\n";
 
     // Shared runners vary widely. 0.25x realtime is deliberately a broad guard:
