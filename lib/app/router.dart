@@ -39,7 +39,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     GlobalKey<NavigatorState>(debugLabel: 'downloadsBranch'),
     GlobalKey<NavigatorState>(debugLabel: 'settingsBranch'),
   ];
-  final bool onboardingCompleted = ref.read(initialOnboardingCompletedProvider);
+  final bool onboardingCompleted = ref.read(onboardingControllerProvider);
 
   return GoRouter(
     navigatorKey: rootNavigatorKey,
@@ -47,8 +47,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         onboardingCompleted ? AppRoutes.library : AppRoutes.onboarding,
     routes: [
       // First-run onboarding intentionally sits outside the persistent shell.
-      // The completion flag is seeded before the first frame, so the router
-      // starts on the correct screen without a redirect flash.
+      // Bootstrap resolves before this router is requested, so startup never
+      // paints the wrong destination and then redirects.
       GoRoute(
         path: AppRoutes.onboarding,
         builder: (context, state) => OnboardingScreen(
