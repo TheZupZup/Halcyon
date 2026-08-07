@@ -1,0 +1,32 @@
+name: C++ audio DSP
+
+on:
+  pull_request:
+    paths:
+      - 'native/linthra_audio/**'
+      - '.github/workflows/cpp-audio-dsp.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'native/linthra_audio/**'
+      - '.github/workflows/cpp-audio-dsp.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audio-dsp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: >-
+          cmake -S native/linthra_audio -B build/linthra_audio
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build/linthra_audio --parallel
+
+      - name: Unit and realtime tests
+        run: ctest --test-dir build/linthra_audio --output-on-failure
