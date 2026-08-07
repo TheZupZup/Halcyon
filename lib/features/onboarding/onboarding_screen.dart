@@ -206,7 +206,8 @@ class _WelcomePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final Color muted = theme.colorScheme.onSurface.withValues(alpha: .66);
-    final Animation<double> logoScale = Tween<double>(begin: .88, end: 1).animate(
+    final Animation<double> logoScale =
+        Tween<double>(begin: .88, end: 1).animate(
       CurvedAnimation(
         parent: motion,
         curve: const Interval(0, .62, curve: Curves.easeOutBack),
@@ -334,12 +335,13 @@ class _SourcePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final Color muted = theme.colorScheme.onSurface.withValues(alpha: .66);
-    final List<({
-      _OnboardingSource source,
-      IconData icon,
-      String title,
-      String subtitle,
-    })> sources = <({
+    final List<
+        ({
+          _OnboardingSource source,
+          IconData icon,
+          String title,
+          String subtitle,
+        })> sources = <({
       _OnboardingSource source,
       IconData icon,
       String title,
