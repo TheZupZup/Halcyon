@@ -90,7 +90,8 @@ impl LibraryIndex {
 
     /// Searches using AND semantics across query terms and prefix semantics
     /// within each term. Results are ranked by field importance and exact-token
-    /// matches, then deterministically by title/id for stable UI ordering.
+    /// matches, then deterministically by title/id/provider/index for stable UI
+    /// ordering even when providers expose otherwise-identical copies.
     pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit<'_>> {
         if limit == 0 || self.tracks.is_empty() {
             return Vec::new();
@@ -101,10 +102,31 @@ impl LibraryIndex {
             return Vec::new();
         }
 
+        // Evaluate the rarest query token first. A common token such as
+        // "album" can have a posting for every track in a 200k catalog; making
+        // a 200k-entry HashMap for that before seeing a selective token such as
+        // "199421" wastes both CPU and memory. Counting posting lengths is
+        // cheap, then subsequent common terms only retain scores for candidates
+        // that already survived the selective terms.
+        let mut planned_terms: Vec<(String, usize)> = terms
+            .into_iter()
+            .map(|term| {
+                let estimated_postings = self.estimated_postings(&term);
+                (term, estimated_postings)
+            })
+            .collect();
+        if planned_terms.iter().any(|(_, count)| *count == 0) {
+            return Vec::new();
+        }
+        planned_terms.sort_unstable_by_key(|(_, count)| *count);
+
         let mut candidates: Option<HashMap<usize, u32>> = None;
 
-        for term in terms {
-            let mut best_for_term: HashMap<usize, u16> = HashMap::new();
+        for (term, _) in planned_terms {
+            let mut best_for_term: HashMap<usize, u16> = match &candidates {
+                Some(current) => HashMap::with_capacity(current.len()),
+                None => HashMap::new(),
+            };
 
             for (token, token_postings) in self.postings.range(term.clone()..) {
                 if !token.starts_with(&term) {
@@ -112,6 +134,14 @@ impl LibraryIndex {
                 }
                 let exact_bonus: u16 = if token == &term { 3 } else { 0 };
                 for posting in token_postings {
+                    // After the first (most selective) term, never materialize
+                    // scores for tracks that have already been eliminated.
+                    if let Some(current) = &candidates {
+                        if !current.contains_key(&posting.track_index) {
+                            continue;
+                        }
+                    }
+
                     let score = posting.weight.saturating_add(exact_bonus);
                     best_for_term
                         .entry(posting.track_index)
@@ -160,6 +190,12 @@ impl LibraryIndex {
                         .id
                         .cmp(&self.tracks[*right_index].id)
                 })
+                .then_with(|| {
+                    self.tracks[*left_index]
+                        .provider
+                        .cmp(&self.tracks[*right_index].provider)
+                })
+                .then_with(|| left_index.cmp(right_index))
         });
         ranked.truncate(limit);
 
@@ -170,6 +206,17 @@ impl LibraryIndex {
                 score,
             })
             .collect()
+    }
+
+    fn estimated_postings(&self, term: &str) -> usize {
+        let mut count = 0usize;
+        for (token, token_postings) in self.postings.range(term.to_owned()..) {
+            if !token.starts_with(term) {
+                break;
+            }
+            count = count.saturating_add(token_postings.len());
+        }
+        count
     }
 }
 
@@ -260,5 +307,32 @@ mod tests {
         let hits = index.search("jellyfin battery", 10);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].track.id, "2");
+    }
+
+    #[test]
+    fn identical_title_and_id_records_have_a_total_provider_order() {
+        let index = LibraryIndex::build(vec![
+            TrackRecord::new(
+                "same-id",
+                "Same Song",
+                "Same Artist",
+                "Same Album",
+                None,
+                "plex",
+            ),
+            TrackRecord::new(
+                "same-id",
+                "Same Song",
+                "Same Artist",
+                "Same Album",
+                None,
+                "jellyfin",
+            ),
+        ]);
+
+        let hits = index.search("same song", 10);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].track.provider, "jellyfin");
+        assert_eq!(hits[1].track.provider, "plex");
     }
 }
