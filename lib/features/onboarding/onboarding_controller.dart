@@ -10,7 +10,8 @@ import '../../data/repositories/onboarding_store_provider.dart';
 /// an update from a true fresh install. This keeps onboarding first-install-only
 /// even for an existing user who never configured a music source.
 final onboardingBootstrapProvider = FutureProvider<bool>((ref) async {
-  final bool? stored = await readStoredOnboardingCompleted();
+  final store = ref.watch(onboardingStoreProvider);
+  final bool? stored = await readStoredOnboardingCompleted(store);
   if (stored != null) return stored;
 
   final InstallHistory? history = await readPlatformInstallHistory();
