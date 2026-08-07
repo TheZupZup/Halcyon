@@ -16,7 +16,8 @@ void main() {
       );
       addTearDown(container.dispose);
 
-      final completed = await container.read(onboardingBootstrapProvider.future);
+      final completed =
+          await container.read(onboardingBootstrapProvider.future);
 
       expect(completed, isTrue);
     },
