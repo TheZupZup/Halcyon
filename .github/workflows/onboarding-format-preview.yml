@@ -1,0 +1,27 @@
+name: Onboarding format preview
+
+on:
+  pull_request:
+    paths:
+      - 'lib/features/onboarding/onboarding_screen.dart'
+      - '.github/workflows/onboarding-format-preview.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.27.4
+          cache: true
+      - name: Show exact dart format diff
+        shell: bash
+        run: |
+          cp lib/features/onboarding/onboarding_screen.dart /tmp/onboarding_screen.before.dart
+          dart format lib/features/onboarding/onboarding_screen.dart
+          diff -u /tmp/onboarding_screen.before.dart lib/features/onboarding/onboarding_screen.dart || true
