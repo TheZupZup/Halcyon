@@ -1,0 +1,34 @@
+name: Large-library SQL
+
+on:
+  pull_request:
+    paths:
+      - 'tools/large_library/**'
+      - '.github/workflows/large-library-sql.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/large_library/**'
+      - '.github/workflows/large-library-sql.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  sqlite-200k:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate 200k-track catalog
+        run: >-
+          python3 tools/large_library/generate_sqlite_fixture.py
+          --output /tmp/linthra-200k.sqlite
+          --tracks 200000
+
+      - name: Benchmark indexed queries
+        run: >-
+          python3 tools/large_library/benchmark_sqlite.py
+          --database /tmp/linthra-200k.sqlite
+          --iterations 200
+          --max-average-ms 50

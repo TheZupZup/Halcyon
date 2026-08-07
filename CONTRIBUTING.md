@@ -4,16 +4,36 @@ Hey — thanks for being here. Linthra is a self-hosted Android music player, an
 it's early alpha, which is honestly the best time to get involved: small changes
 land fast and genuinely shape where the project goes.
 
-You don't need to be a Flutter expert to help. Testing the app against your own
-server, capturing a screenshot, or fixing a confusing line in the docs are all
-real, useful contributions. If you're not sure where to start, the
+**You do not need to know Dart or Flutter to contribute to Linthra.** Testing the
+app against your own server, improving docs, or working in one of the native /
+tooling areas are all real contributions. If you're not sure where to start, the
 [contributor roadmap](./docs/contributor-roadmap.md) lays out where help matters
 most right now.
+
+## Pick the language you know
+
+Linthra uses different languages where they have a real technical job. Pick the
+part that matches what you already know:
+
+| Language | Good place to contribute |
+| --- | --- |
+| **Dart / Flutter** | UI, player orchestration, providers, onboarding, app logic |
+| **Kotlin** | Android APIs, SAF/MediaStore, media session, Android Auto, platform channels |
+| **Rust** | large-library indexing/search and future 100k–200k-track primitives |
+| **C++** | realtime audio DSP, EQ/limiting, future audio analysis and SIMD |
+| **Python** | releases, developer tooling, fixtures, benchmarks, validation |
+| **SQL** | SQLite indexes/query plans and very-large-library performance |
+
+The detailed map, constraints, and suggested contribution areas are in
+[Contributing by language](./docs/language-areas.md). A language is never added
+just to make the GitHub language bar more colourful — every area needs a real
+owner, useful tests/benchmarks, and a small boundary to the rest of the app.
 
 ## Setting up the project
 
 Linthra is a standard Flutter app with a committed Android scaffold, so there's
-no `flutter create` step. In most environments you only need two commands:
+no `flutter create` step. For Dart/Flutter/Android work, in most environments you
+only need two commands:
 
 ```bash
 ./scripts/setup_flutter.sh    # installs the pinned Flutter (no sudo, cached locally)
@@ -26,6 +46,10 @@ downloads the pinned version into the git-ignored `.tool/flutter`.
 `flutter test`, and an APK build (only if an Android SDK is present). Full
 details, troubleshooting, and the manual path are in
 [docs/development.md](./docs/development.md).
+
+Native/tooling areas have their own small commands and CI. In particular,
+`native/linthra_core/` uses Cargo, `native/linthra_audio/` uses CMake, and
+`tools/large_library/` uses only Python's standard library plus SQLite.
 
 ## Finding your way around the code
 
@@ -56,6 +80,10 @@ A few that don't go too deep into the codebase:
 - Add or improve **accessibility labels** so screen readers announce controls
   clearly.
 - Polish an **empty state** so a blank screen explains what to do next.
+- **Rust:** improve large-library normalization/search tests or benchmark memory.
+- **C++:** add DSP response tests or improve realtime benchmark coverage.
+- **Python / SQL:** add a representative 200k-track query and prove its index
+  with `EXPLAIN QUERY PLAN`.
 
 ## Pull requests
 
@@ -65,8 +93,9 @@ A few that don't go too deep into the codebase:
 - **Add tests when it makes sense** — bug fixes and new logic especially.
 - **No unrelated changes.** Resist the urge to reformat or refactor nearby code
   in the same PR; open a separate one if it's worth doing.
-- Run `./scripts/verify_android.sh` (or the CI commands) before pushing — CI runs
-  `dart format --set-exit-if-changed`, so unformatted code will fail.
+- Run the relevant verification command before pushing. Flutter CI runs
+  `dart format --set-exit-if-changed`; native/tooling areas have focused CI in
+  `.github/workflows/`.
 
 ## Code style
 
