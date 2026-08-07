@@ -1,0 +1,38 @@
+name: Rust library core
+
+on:
+  pull_request:
+    paths:
+      - 'native/linthra_core/**'
+      - '.github/workflows/rust-core.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'native/linthra_core/**'
+      - '.github/workflows/rust-core.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  rust-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path native/linthra_core/Cargo.toml -- --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path native/linthra_core/Cargo.toml --all-targets -- -D warnings
+
+      - name: Unit tests
+        run: cargo test --manifest-path native/linthra_core/Cargo.toml
+
+      - name: 200k-track regression benchmark
+        run: cargo run --release --manifest-path native/linthra_core/Cargo.toml --bin benchmark_200k
