@@ -1,0 +1,26 @@
+name: Onboarding branch rebase
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/onboarding-rebase.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v0.2.0-onboarding
+          fetch-depth: 0
+      - name: Rebase onboarding branch onto current main
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git rebase origin/main
+          git push --force-with-lease origin HEAD:feature/v0.2.0-onboarding
