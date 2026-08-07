@@ -1,0 +1,46 @@
+name: Onboarding cleanup
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/onboarding-cleanup.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v0.2.0-onboarding
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.27.4
+          cache: true
+      - name: Apply analyzer cleanup
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('lib/features/onboarding/onboarding_screen.dart')
+          text = path.read_text()
+          text = text.replace("import '../../core/app_info.dart';\n", '')
+          text = text.replace(
+              '        begin.clamp(0, 1),\n        end.clamp(0, 1),',
+              '        begin,\n        end,',
+          )
+          path.write_text(text)
+          PY
+          dart format lib/features/onboarding/onboarding_screen.dart
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/features/onboarding/onboarding_screen.dart
+          if git diff --cached --quiet; then
+            echo "No cleanup required."
+            exit 0
+          fi
+          git commit -m "fix(onboarding): clean analyzer issues"
+          git push origin HEAD:feature/v0.2.0-onboarding
