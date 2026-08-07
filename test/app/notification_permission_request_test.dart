@@ -5,6 +5,7 @@ import 'package:linthra/core/services/notification_permission.dart';
 import 'package:linthra/features/player/player_providers.dart';
 
 import '../features/player/fake_playback_controller.dart';
+import '../support/onboarding_test_overrides.dart';
 
 /// Records how many times the app asked for the notification permission, so a
 /// test can assert the first-launch request fires exactly once without a real
@@ -29,6 +30,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          ...completedOnboardingOverrides(),
           notificationPermissionProvider.overrideWithValue(permission),
           playbackControllerProvider
               .overrideWithValue(FakePlaybackController()),
