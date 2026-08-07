@@ -5,12 +5,14 @@ import 'package:linthra/app/linthra_app.dart';
 import 'package:linthra/features/player/player_providers.dart';
 
 import 'features/player/fake_playback_controller.dart';
+import 'support/onboarding_test_overrides.dart';
 
 void main() {
   testWidgets('App boots to the Library screen', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          ...completedOnboardingOverrides(),
           // The persistent shell hosts the mini-player, which reads the
           // playback controller; use the fake so the smoke test never touches
           // the audio plugin.
