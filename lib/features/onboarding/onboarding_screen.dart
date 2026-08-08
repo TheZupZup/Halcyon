@@ -213,101 +213,113 @@ class _WelcomePage extends StatelessWidget {
       ),
     );
 
-    return SingleChildScrollView(
-      key: const PageStorageKey<String>('welcome-scroll'),
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.lg,
-        vertical: AppSpacing.xl,
-      ),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          minHeight: MediaQuery.sizeOf(context).height -
-              MediaQuery.paddingOf(context).vertical -
-              (AppSpacing.xl * 2),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            _Entrance(
-              controller: motion,
-              begin: 0,
-              end: .55,
-              travel: 14,
-              child: Center(
-                child: ScaleTransition(
-                  scale: logoScale,
-                  child: const SelectedLinthraLogoMark(size: 96),
+    // The welcome fills its box so the column can sit optically centred, but
+    // it stays scrollable once the copy outgrows a short viewport. The height
+    // comes from the box we were actually handed — SafeArea has already taken
+    // the system insets off it — rather than from the raw screen size, and it
+    // is clamped at zero: subtracting the padding must never be able to hand
+    // ConstrainedBox a negative (non-normalized) minimum.
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final double minHeight = constraints.hasBoundedHeight
+            ? (constraints.maxHeight - (AppSpacing.xl * 2))
+                .clamp(0.0, double.infinity)
+            : 0.0;
+
+        return SingleChildScrollView(
+          key: const PageStorageKey<String>('welcome-scroll'),
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.lg,
+            vertical: AppSpacing.xl,
+          ),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: minHeight),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                _Entrance(
+                  controller: motion,
+                  begin: 0,
+                  end: .55,
+                  travel: 14,
+                  child: Center(
+                    child: ScaleTransition(
+                      scale: logoScale,
+                      child: const SelectedLinthraLogoMark(size: 96),
+                    ),
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(height: AppSpacing.xl),
-            _Entrance(
-              controller: motion,
-              begin: .18,
-              end: .7,
-              child: Text(
-                replay ? 'Welcome back to Linthra' : 'Welcome to Linthra',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -.7,
+                const SizedBox(height: AppSpacing.xl),
+                _Entrance(
+                  controller: motion,
+                  begin: .18,
+                  end: .7,
+                  child: Text(
+                    replay ? 'Welcome back to Linthra' : 'Welcome to Linthra',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -.7,
+                    ),
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            _Entrance(
-              controller: motion,
-              begin: .3,
-              end: .8,
-              child: Text(
-                'Your music. Your servers. Your choice.',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.titleMedium?.copyWith(color: muted),
-              ),
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            _Entrance(
-              controller: motion,
-              begin: .4,
-              end: .88,
-              child: Text(
-                'Linthra brings local music, Jellyfin, Navidrome / Subsonic and '
-                'Plex into one private, open-source library.',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyLarge?.copyWith(
-                  color: muted,
-                  height: 1.45,
+                const SizedBox(height: AppSpacing.sm),
+                _Entrance(
+                  controller: motion,
+                  begin: .3,
+                  end: .8,
+                  child: Text(
+                    'Your music. Your servers. Your choice.',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.titleMedium?.copyWith(color: muted),
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(height: AppSpacing.xl),
-            _Entrance(
-              controller: motion,
-              begin: .55,
-              end: 1,
-              child: FilledButton.icon(
-                onPressed: onStart,
-                icon: const Icon(Icons.arrow_forward_rounded),
-                label: Text(replay ? 'Explore music sources' : 'Get started'),
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(54),
+                const SizedBox(height: AppSpacing.lg),
+                _Entrance(
+                  controller: motion,
+                  begin: .4,
+                  end: .88,
+                  child: Text(
+                    'Linthra brings local music, Jellyfin, Navidrome / Subsonic and '
+                    'Plex into one private, open-source library.',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyLarge?.copyWith(
+                      color: muted,
+                      height: 1.45,
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(height: AppSpacing.xl),
+                _Entrance(
+                  controller: motion,
+                  begin: .55,
+                  end: 1,
+                  child: FilledButton.icon(
+                    onPressed: onStart,
+                    icon: const Icon(Icons.arrow_forward_rounded),
+                    label:
+                        Text(replay ? 'Explore music sources' : 'Get started'),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(54),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                _Entrance(
+                  controller: motion,
+                  begin: .64,
+                  end: 1,
+                  child: TextButton(
+                    onPressed: onSkip,
+                    child: Text(replay ? 'Done' : 'Skip for now'),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: AppSpacing.sm),
-            _Entrance(
-              controller: motion,
-              begin: .64,
-              end: 1,
-              child: TextButton(
-                onPressed: onSkip,
-                child: Text(replay ? 'Done' : 'Skip for now'),
-              ),
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }
