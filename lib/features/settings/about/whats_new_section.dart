@@ -20,9 +20,9 @@ class WhatsNewSection extends StatelessWidget {
   /// handful of concise bullets and updated when cutting a new build; exposed so
   /// the widget test can assert each line renders without duplicating the copy.
   static const List<String> releaseNotes = <String>[
-    'The Now Playing screen no longer jumps when Navidrome, Jellyfin, or Plex playback changes status.',
-    'Streaming, buffering, cache, casting, and error indicators now share a stable layout.',
-    'Playback status stays readable with larger system text without moving the controls.',
+    'New installs now start with a guided welcome that helps you choose local music or a self-hosted server.',
+    'Existing installs are detected during upgrades so the new welcome does not interrupt normal updates.',
+    'The welcome tour can be replayed later from Settings whenever you want to add or revisit a music source.',
   ];
 
   @override
