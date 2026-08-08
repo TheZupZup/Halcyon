@@ -63,11 +63,11 @@ with no account, the F-Droid build is yours, free, for good.
 
 | Welcome | Choose your source | Now Playing |
 | --- | --- | --- |
-| ![Welcome](docs/images/screenshots/01-welcome-v020.jpg) | ![Choose your source](docs/images/screenshots/02-source-chooser-v020.jpg) | ![Now Playing](docs/images/screenshots/03-now-playing-v020.jpg) |
+| ![Welcome](docs/images/screenshots/01-welcome-v020.webp) | ![Choose your source](docs/images/screenshots/02-source-chooser-v020.webp) | ![Now Playing](docs/images/screenshots/03-now-playing-v020.webp) |
 
 | Branding | Offline downloads | About v0.2.0 |
 | --- | --- | --- |
-| ![Branding](docs/images/screenshots/04-branding-v020.jpg) | ![Offline downloads](docs/images/screenshots/05-offline-downloads-v020.jpg) | ![About v0.2.0](docs/images/screenshots/06-about-v020.jpg) |
+| ![Branding](docs/images/screenshots/04-branding-v020.webp) | ![Offline downloads](docs/images/screenshots/05-offline-downloads-v020.webp) | ![About v0.2.0](docs/images/screenshots/06-about-v020.webp) |
 
 ## Install
 
