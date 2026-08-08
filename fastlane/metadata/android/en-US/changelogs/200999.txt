@@ -1,0 +1,5 @@
+Linthra 0.2.0
+
+- Adds a guided first-run welcome that helps new users choose local music, Jellyfin, Navidrome / Subsonic, or Plex.
+- Keeps existing installs out of the welcome during upgrades and lets the tour be replayed later from Settings.
+- Improves first-run layout resilience on short screens.
