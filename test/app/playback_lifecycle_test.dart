@@ -9,6 +9,7 @@ import 'package:linthra/core/services/stability_diagnostics.dart';
 import 'package:linthra/features/player/player_providers.dart';
 
 import '../features/player/fake_playback_controller.dart';
+import '../support/onboarding_test_overrides.dart';
 
 /// Notification-permission seam that never prompts, so pumping the app can't
 /// trigger a real OS dialog.
@@ -66,6 +67,7 @@ Future<FakePlaybackController> _pumpApp(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+        ...completedOnboardingOverrides(),
         notificationPermissionProvider
             .overrideWithValue(permission ?? _SilentNotificationPermission()),
         playbackControllerProvider.overrideWithValue(controller),

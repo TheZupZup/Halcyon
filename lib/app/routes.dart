@@ -1,6 +1,14 @@
 /// Canonical route paths. Reference these constants instead of raw strings so
 /// navigation targets are discoverable and refactor-safe.
 abstract final class AppRoutes {
+  /// First-run welcome flow. It lives outside the bottom-navigation shell so
+  /// the first launch can focus entirely on setup.
+  static const String onboarding = '/welcome';
+
+  /// Settings entry point for replaying the welcome tour without resetting the
+  /// persisted completion flag.
+  static const String onboardingReplay = '/welcome?replay=1';
+
   static const String library = '/library';
 
   /// One album's tracks, reached from the Library's Albums tab. A child of

@@ -8,8 +8,10 @@ import '../core/services/stability_diagnostics.dart';
 import '../features/appearance/app_icon_controller.dart';
 import '../features/appearance/custom_brand_palette.dart';
 import '../features/appearance/custom_theme_controller.dart';
+import '../features/appearance/selected_logo_mark.dart';
 import '../features/appearance/theme_mode_controller.dart';
 import '../features/library/remote_library_refresher.dart';
+import '../features/onboarding/onboarding_controller.dart';
 import '../features/player/player_providers.dart';
 import '../features/support/support_actions_provider.dart';
 import '../features/support/supporter_entitlement.dart';
@@ -17,7 +19,7 @@ import 'brand_theme.dart';
 import 'router.dart';
 import 'theme.dart';
 
-/// The notification-permission seam the app asks through on first launch.
+/// The notification-permission seam the app asks through after onboarding.
 ///
 /// Defaults to the `permission_handler`-backed request (a no-op off Android and
 /// when already granted); tests override it with a fake so pumping the app
@@ -30,11 +32,6 @@ final notificationPermissionProvider = Provider<NotificationPermission>((ref) {
 /// user can pin Light or Dark in Settings → Appearance, and that choice is read
 /// from storage before the first frame (see `readStoredThemeMode`) so launching
 /// never flashes the wrong theme.
-///
-/// On first build it asks for the notification permission once, after the first
-/// frame, so the Android 13+ `POST_NOTIFICATIONS` prompt has an attached
-/// activity and the media notification can actually appear. The request is
-/// best-effort and never blocks the UI.
 class LinthraApp extends ConsumerStatefulWidget {
   const LinthraApp({super.key});
 
@@ -44,16 +41,23 @@ class LinthraApp extends ConsumerStatefulWidget {
 
 class _LinthraAppState extends ConsumerState<LinthraApp>
     with WidgetsBindingObserver {
+  bool _notificationPermissionRequested = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+  }
+
+  void _requestNotificationPermissionOnce() {
+    if (_notificationPermissionRequested) return;
+    _notificationPermissionRequested = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Best-effort and defensive: a notification-permission seam that fails (a
-      // plugin hiccup, or a denied/unavailable grant) must never crash startup
-      // or playback — background audio works without the notification. The
-      // production seam already swallows its own errors; guarding the call site
-      // too keeps "permission denied does not crash the app" true end to end.
+      if (!mounted) return;
+      // First installs reach this only after the user leaves onboarding, so the
+      // very first thing Linthra does is never an unexplained Android permission
+      // prompt. Existing/update installs keep the previous behaviour and ask on
+      // their first app frame when needed.
       ref
           .read(notificationPermissionProvider)
           .ensureGranted()
@@ -70,44 +74,30 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    // A secret-free breadcrumb (debug only): freezes/ANRs cluster around
-    // background/foreground, so logging the transition makes them correlatable.
     StabilityDiagnostics.lifecycle(state.name);
-    // On a background transition (screen off / app hidden), snapshot the
-    // playback status so a "music stopped when I locked the phone" report can
-    // show what state playback was in at that exact boundary. This only reads
-    // the controller's status — it never pauses, stops, or disposes playback.
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.inactive) {
       final status = ref.read(playbackControllerProvider).state.status;
       StabilityDiagnostics.backgroundPlaybackState(status.name);
     }
-    // Returning from the background while casting: re-sync from the receiver so
-    // the position the UI shows is fresh. This never starts local playback —
-    // backgrounding/foregrounding the app must not recreate or resume the local
-    // engine while a cast session owns playback.
     if (state == AppLifecycleState.resumed) {
       final controller = ref.read(playbackControllerProvider);
       if (controller is ActivePlaybackController) {
         controller.onAppResumed();
       }
-      // Smart refresh: pick up playlist/favourite changes made on a connected
-      // server (Navidrome/Jellyfin) from another client while we were away, and
-      // retry any heart that hadn't reached the server yet. Throttled,
-      // best-effort, and offline-tolerant — never blocks the resume.
       ref.read(remoteLibraryRefresherProvider).refresh();
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final router = ref.watch(appRouterProvider);
     final themeMode = ref.watch(themeModeControllerProvider);
     final variant = ref.watch(appIconControllerProvider);
     final customTheme = ref.watch(customThemeControllerProvider);
     final distribution = ref.watch(supportDistributionProvider);
     final supporterEntitlement = ref.watch(supporterEntitlementProvider);
+    final onboardingBootstrap = ref.watch(onboardingBootstrapProvider);
 
     BrandPalette paletteFor(Brightness brightness) {
       final bool mayApplyCustomPalette = distribution.offersCustomPalette &&
@@ -119,16 +109,60 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
       return BrandPalettes.byId(variant.id, brightness: brightness);
     }
 
+    final ThemeData lightTheme = AppTheme.light(paletteFor(Brightness.light));
+    final ThemeData darkTheme = AppTheme.dark(paletteFor(Brightness.dark));
+
+    // Do not construct the router until first-install/update state is known.
+    // This tiny branded launch surface prevents both a library→welcome flash and
+    // a welcome→library flash while SharedPreferences/native install history are
+    // being resolved.
+    if (onboardingBootstrap.isLoading) {
+      return MaterialApp(
+        title: AppInfo.name,
+        debugShowCheckedModeBanner: false,
+        theme: lightTheme,
+        darkTheme: darkTheme,
+        themeMode: themeMode.materialThemeMode,
+        home: const _BootstrapSurface(),
+      );
+    }
+
+    final router = ref.watch(appRouterProvider);
+    final bool onboardingCompleted = ref.watch(onboardingControllerProvider);
+    if (onboardingCompleted) {
+      _requestNotificationPermissionOnce();
+    }
+
     return MaterialApp.router(
       title: AppInfo.name,
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.light(paletteFor(Brightness.light)),
-      darkTheme: AppTheme.dark(paletteFor(Brightness.dark)),
-      // Watching the controller means a change repaints every screen at once.
-      // ThemeMode.system additionally makes MaterialApp rebuild when the phone
-      // flips light/dark while Linthra is open — no listener of our own needed.
+      theme: lightTheme,
+      darkTheme: darkTheme,
       themeMode: themeMode.materialThemeMode,
       routerConfig: router,
+    );
+  }
+}
+
+class _BootstrapSurface extends StatelessWidget {
+  const _BootstrapSurface();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            SelectedLinthraLogoMark(size: 72),
+            SizedBox(height: 24),
+            SizedBox.square(
+              dimension: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

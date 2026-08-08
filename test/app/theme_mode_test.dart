@@ -9,6 +9,7 @@ import 'package:linthra/features/appearance/theme_mode_controller.dart';
 import 'package:linthra/features/player/player_providers.dart';
 
 import '../features/player/fake_playback_controller.dart';
+import '../support/onboarding_test_overrides.dart';
 
 /// End-to-end theme-mode behaviour, driven through the real [LinthraApp] so the
 /// wiring (controller → `MaterialApp.themeMode`) is covered, not just the
@@ -28,6 +29,7 @@ void main() {
   }) async {
     final ProviderContainer container = ProviderContainer(
       overrides: <Override>[
+        ...completedOnboardingOverrides(),
         playbackControllerProvider.overrideWithValue(FakePlaybackController()),
         if (store != null) themeModeStoreProvider.overrideWithValue(store),
         if (seed != null) initialThemeModeProvider.overrideWithValue(seed),
@@ -138,6 +140,7 @@ void main() {
       setPhoneBrightness(tester, Brightness.dark);
       final ProviderContainer container = ProviderContainer(
         overrides: <Override>[
+          ...completedOnboardingOverrides(),
           playbackControllerProvider
               .overrideWithValue(FakePlaybackController()),
           initialThemeModeProvider.overrideWithValue(ThemeModePreference.light),

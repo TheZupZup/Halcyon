@@ -8,6 +8,8 @@ import '../features/favorites/favorites_screen.dart';
 import '../features/library/album_detail_screen.dart';
 import '../features/library/artist_detail_screen.dart';
 import '../features/library/library_screen.dart';
+import '../features/onboarding/onboarding_controller.dart';
+import '../features/onboarding/onboarding_screen.dart';
 import '../features/player/player_screen.dart';
 import '../features/playlists/playlist_detail_screen.dart';
 import '../features/playlists/playlists_screen.dart';
@@ -26,7 +28,7 @@ import '../features/support/support_screen.dart';
 import 'routes.dart';
 
 /// Single source of truth for navigation. Exposed through Riverpod so future
-/// guards (e.g. "onboarding complete?", multi-user) can depend on app state.
+/// guards (e.g. multi-user) can depend on app state.
 final appRouterProvider = Provider<GoRouter>((ref) {
   final GlobalKey<NavigatorState> rootNavigatorKey =
       GlobalKey<NavigatorState>(debugLabel: 'root');
@@ -37,11 +39,22 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     GlobalKey<NavigatorState>(debugLabel: 'downloadsBranch'),
     GlobalKey<NavigatorState>(debugLabel: 'settingsBranch'),
   ];
+  final bool onboardingCompleted = ref.read(onboardingControllerProvider);
 
   return GoRouter(
     navigatorKey: rootNavigatorKey,
-    initialLocation: AppRoutes.library,
+    initialLocation:
+        onboardingCompleted ? AppRoutes.library : AppRoutes.onboarding,
     routes: [
+      // First-run onboarding intentionally sits outside the persistent shell.
+      // Bootstrap resolves before this router is requested, so startup never
+      // paints the wrong destination and then redirects.
+      GoRoute(
+        path: AppRoutes.onboarding,
+        builder: (context, state) => OnboardingScreen(
+          replay: state.uri.queryParameters['replay'] == '1',
+        ),
+      ),
       // Persistent bottom-nav shell with an independent navigation stack per
       // tab, so switching tabs preserves scroll position and history.
       StatefulShellRoute.indexedStack(
