@@ -61,11 +61,13 @@ with no account, the F-Droid build is yours, free, for good.
 
 ## Screenshots
 
-| Now Playing | Library | Smart mixes |
+| Welcome | Choose your source | Now Playing |
 | --- | --- | --- |
-| ![Now Playing](fastlane/metadata/android/en-US/images/phoneScreenshots/01-now-playing-carefree.png) | ![Library albums](fastlane/metadata/android/en-US/images/phoneScreenshots/02-library-albums.png) | ![Smart mixes](fastlane/metadata/android/en-US/images/phoneScreenshots/04-smart-mixes.png) |
+| ![Welcome](docs/images/screenshots/01-welcome-v020.jpg) | ![Choose your source](docs/images/screenshots/02-source-chooser-v020.jpg) | ![Now Playing](docs/images/screenshots/03-now-playing-v020.jpg) |
 
-More in [`phoneScreenshots/`](fastlane/metadata/android/en-US/images/phoneScreenshots/).
+| Branding | Offline downloads | About v0.2.0 |
+| --- | --- | --- |
+| ![Branding](docs/images/screenshots/04-branding-v020.jpg) | ![Offline downloads](docs/images/screenshots/05-offline-downloads-v020.jpg) | ![About v0.2.0](docs/images/screenshots/06-about-v020.jpg) |
 
 ## Install
 
