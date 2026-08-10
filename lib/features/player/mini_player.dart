@@ -8,6 +8,7 @@ import '../../core/models/playback_source.dart';
 import '../../core/models/playback_state.dart';
 import '../../core/models/track.dart';
 import '../../core/services/playback_source_label.dart';
+import '../../shared/widgets/wavy_progress_indicator.dart';
 import 'cast/cast_providers.dart';
 import 'player_providers.dart';
 import 'widgets/album_artwork.dart';
@@ -181,14 +182,26 @@ class _MiniSubtitle extends StatelessWidget {
   }
 }
 
-/// A 2.5dp accent line tracking playback progress across the mini-player's top
-/// edge. Sits at 0 (an empty track) when the duration is still unknown, so it
-/// never animates indeterminately or jumps.
+/// A slim accent line tracking playback progress across the mini-player's top
+/// edge, drawn as the same gentle wave the now-playing screen uses so the two
+/// surfaces read as one design. Sits at 0 (an empty track) when the duration is
+/// still unknown, so it never animates indeterminately or jumps.
+///
+/// Deliberately marker-less, and pinned at the full wave rather than following
+/// the play/pause swell the full player uses: at this size the wave is texture
+/// rather than a control, and this bar is on screen on every main tab — so it
+/// stays a plain repaint per position tick and adds no animation frames
+/// anywhere in the app. Tapping the mini-player opens the full player; it is
+/// not a seek surface, so it carries no slider semantics of its own.
 ///
 /// It watches the position/duration itself, so a position tick rebuilds only
 /// this thin line — not the artwork and text above it.
 class _MiniProgressBar extends ConsumerWidget {
   const _MiniProgressBar();
+
+  /// Enough room for the wave's peaks and stroke without meaningfully eating
+  /// into the 64dp bar's content row.
+  static const double _height = 6.0;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -200,11 +213,16 @@ class _MiniProgressBar extends ConsumerWidget {
     final double value = total > 0
         ? (state.position.inMilliseconds / total).clamp(0.0, 1.0)
         : 0.0;
-    return LinearProgressIndicator(
-      value: value,
-      minHeight: 2.5,
-      backgroundColor: theme.colorScheme.onSurface.withValues(alpha: 0.08),
-      color: theme.colorScheme.secondary,
+    return SizedBox(
+      height: _height,
+      child: WavyProgressIndicator(
+        value: value,
+        activeColor: theme.colorScheme.secondary,
+        inactiveColor: theme.colorScheme.onSurface.withValues(alpha: 0.08),
+        amplitude: 1.4,
+        wavelength: 26,
+        strokeWidth: 2,
+      ),
     );
   }
 }
