@@ -9,10 +9,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  # The Flutter CI fixer uses an explicit dispatch after it publishes a repair.
-  # GitHub suppresses push-triggered workflows created with GITHUB_TOKEN, while
-  # workflow_dispatch is allowed and gives the repair commit fresh required checks.
-  workflow_dispatch:
 
 # Read-only: every job here only inspects the checkout. No secrets are used, so
 # these checks run identically on fork PRs.
@@ -74,8 +70,8 @@ jobs:
     runs-on: ubuntu-latest
     # Only meaningful for the version-bump PRs the "Prepare release bump"
     # workflow opens (it pushes a release/v<version> branch). github.head_ref is
-    # set only for pull_request events, so this naturally skips pushes to main,
-    # manual dispatches, and every non-release PR.
+    # set only for pull_request events, so this naturally skips pushes to main
+    # and every non-release PR.
     if: ${{ startsWith(github.head_ref, 'release/') }}
     steps:
       - name: Checkout
