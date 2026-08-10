@@ -1,0 +1,428 @@
+name: Flutter CI fixer
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Failed CI workflow run ID to repair
+        required: true
+        type: string
+
+concurrency:
+  group: flutter-ci-fixer-${{ github.event.workflow_run.id || inputs.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    name: Diagnose and repair Flutter checks
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      ready: ${{ steps.package.outputs.ready }}
+      run_id: ${{ steps.context.outputs.run_id }}
+      run_url: ${{ steps.context.outputs.run_url }}
+      repair_sha: ${{ steps.context.outputs.repair_sha }}
+      target_sha: ${{ steps.context.outputs.target_sha }}
+      target_branch: ${{ steps.context.outputs.target_branch }}
+      base_branch: ${{ steps.context.outputs.base_branch }}
+      source_pr: ${{ steps.context.outputs.source_pr }}
+    steps:
+      - name: Resolve failed Flutter run
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANUAL_RUN_ID: ${{ inputs.run_id }}
+          EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          run_id="$EVENT_RUN_ID"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            run_id="$MANUAL_RUN_ID"
+          fi
+          if [[ ! "$run_id" =~ ^[0-9]+$ ]]; then
+            echo "Invalid workflow run id: $run_id" >&2
+            exit 1
+          fi
+
+          run_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id")"
+          conclusion="$(jq -r '.conclusion // ""' <<<"$run_json")"
+          run_url="$(jq -r '.html_url // ""' <<<"$run_json")"
+          head_repo="$(jq -r '.head_repository.full_name // ""' <<<"$run_json")"
+          event_name="$(jq -r '.event // ""' <<<"$run_json")"
+          head_sha="$(jq -r '.head_sha // ""' <<<"$run_json")"
+          head_branch="$(jq -r '.head_branch // ""' <<<"$run_json")"
+          run_pr_head_sha="$(jq -r '.pull_requests[0].head.sha // empty' <<<"$run_json")"
+          run_pr_base_sha="$(jq -r '.pull_requests[0].base.sha // empty' <<<"$run_json")"
+
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "run_url=$run_url" >> "$GITHUB_OUTPUT"
+          echo "active=false" >> "$GITHUB_OUTPUT"
+          echo "source_pr=" >> "$GITHUB_OUTPUT"
+          echo "repair_sha=" >> "$GITHUB_OUTPUT"
+          echo "target_sha=" >> "$GITHUB_OUTPUT"
+          echo "target_branch=" >> "$GITHUB_OUTPUT"
+          echo "base_branch=" >> "$GITHUB_OUTPUT"
+
+          if [[ "$conclusion" != "failure" ]]; then
+            echo "Run $run_id did not fail; nothing to repair."
+            exit 0
+          fi
+
+          if [[ "$head_repo" != "$GITHUB_REPOSITORY" ]]; then
+            echo "Skipping untrusted/fork run from $head_repo."
+            exit 0
+          fi
+
+          # Only normal CI runs are repair candidates. A repair published with
+          # the dedicated token triggers normal push/pull_request CI again; if
+          # that new CI fails on a codex/ci-fix-* branch it is rejected below.
+          if [[ "$event_name" != "pull_request" && "$event_name" != "push" ]]; then
+            echo "Skipping CI run triggered by $event_name."
+            exit 0
+          fi
+
+          jobs_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100")"
+          if ! jq -e '.jobs[] | select(.name == "Flutter checks" and .conclusion == "failure")' <<<"$jobs_json" >/dev/null; then
+            echo "CI failed, but the Flutter checks job did not."
+            exit 0
+          fi
+
+          source_pr="$(jq -r '.pull_requests[0].number // empty' <<<"$run_json")"
+          if [[ "$event_name" == "pull_request" ]]; then
+            if [[ -z "$source_pr" ]]; then
+              source_pr="$(gh api -H 'Accept: application/vnd.github+json' \
+                "repos/$GITHUB_REPOSITORY/commits/$head_sha/pulls" \
+                --jq 'map(select(.state == "open"))[0].number // empty' 2>/dev/null || true)"
+            fi
+            if [[ -z "$source_pr" ]]; then
+              echo "Could not safely resolve the source PR; refusing to guess."
+              exit 0
+            fi
+            if [[ -z "$run_pr_head_sha" || -z "$run_pr_base_sha" ]]; then
+              echo "The failed workflow run does not record both PR head and base SHAs; refusing a stale-prone repair."
+              exit 0
+            fi
+
+            pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$source_pr")"
+            pr_state="$(jq -r '.state // ""' <<<"$pr_json")"
+            pr_head_repo="$(jq -r '.head.repo.full_name // ""' <<<"$pr_json")"
+            current_pr_head_sha="$(jq -r '.head.sha // ""' <<<"$pr_json")"
+            current_pr_base_sha="$(jq -r '.base.sha // ""' <<<"$pr_json")"
+
+            if [[ "$pr_state" != "open" ]]; then
+              echo "PR #$source_pr is no longer open."
+              exit 0
+            fi
+            if [[ "$pr_head_repo" != "$GITHUB_REPOSITORY" ]]; then
+              echo "Skipping fork PR #$source_pr."
+              exit 0
+            fi
+            if [[ "$current_pr_head_sha" != "$run_pr_head_sha" ]]; then
+              echo "PR #$source_pr advanced from $run_pr_head_sha to $current_pr_head_sha after failed run $run_id; refusing stale logs."
+              exit 0
+            fi
+            if [[ "$current_pr_base_sha" != "$run_pr_base_sha" ]]; then
+              echo "PR #$source_pr base advanced from $run_pr_base_sha to $current_pr_base_sha after failed run $run_id; refusing stale merge context."
+              exit 0
+            fi
+
+            # GitHub's pull_request CI checks out the synthetic merge revision.
+            # Diagnose and verify that exact failed tree, but keep the raw PR
+            # head separately because publication must update the PR branch.
+            repair_sha="$head_sha"
+            target_sha="$current_pr_head_sha"
+            target_branch="$(jq -r '.head.ref' <<<"$pr_json")"
+            base_branch="$(jq -r '.base.ref' <<<"$pr_json")"
+          else
+            repair_sha="$head_sha"
+            target_sha="$head_sha"
+            target_branch="$head_branch"
+            base_branch="main"
+          fi
+
+          if [[ -z "$repair_sha" || -z "$target_sha" || -z "$target_branch" ]]; then
+            echo "Missing repair/target ref; refusing to run."
+            exit 0
+          fi
+          if [[ "$target_branch" == codex/ci-fix-* ]]; then
+            echo "Skipping an agent-created CI fix branch to prevent loops."
+            exit 0
+          fi
+
+          echo "active=true" >> "$GITHUB_OUTPUT"
+          echo "source_pr=$source_pr" >> "$GITHUB_OUTPUT"
+          echo "repair_sha=$repair_sha" >> "$GITHUB_OUTPUT"
+          echo "target_sha=$target_sha" >> "$GITHUB_OUTPUT"
+          echo "target_branch=$target_branch" >> "$GITHUB_OUTPUT"
+          echo "base_branch=$base_branch" >> "$GITHUB_OUTPUT"
+
+      - name: Check Codex credential
+        id: credential
+        if: ${{ steps.context.outputs.active == 'true' }}
+        env:
+          CODEX_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: bash
+        run: |
+          if [[ -z "$CODEX_KEY" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Flutter CI fixer is installed but disabled until the OPENAI_API_KEY repository secret is configured."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout exact failed revision
+        if: ${{ steps.context.outputs.active == 'true' && steps.credential.outputs.enabled == 'true' }}
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.context.outputs.repair_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Load trusted prompt and failure logs
+        if: ${{ steps.context.outputs.active == 'true' && steps.credential.outputs.enabled == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ steps.context.outputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-agent
+          git fetch --no-tags origin main
+          git show origin/main:.github/codex/prompts/fix-flutter-ci.md > .ci-agent/prompt.md
+          if ! gh run view "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > .ci-agent/failure.log; then
+            echo "GitHub CLI could not download the failed job log. Inspect the run metadata and reproduce the Flutter checks locally." > .ci-agent/failure.log
+          fi
+
+      - name: Set up Flutter
+        if: ${{ steps.context.outputs.active == 'true' && steps.credential.outputs.enabled == 'true' }}
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.27.4
+          cache: true
+
+      - name: Codex repair attempt 1
+        id: codex1
+        if: ${{ steps.context.outputs.active == 'true' && steps.credential.outputs.enabled == 'true' }}
+        continue-on-error: true
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .ci-agent/prompt.md
+          output-file: .ci-agent/codex-attempt-1.md
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          codex-args: '["--ephemeral"]'
+
+      - name: Verify attempt 1
+        id: verify1
+        if: ${{ steps.context.outputs.active == 'true' && steps.credential.outputs.enabled == 'true' }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # check_secrets.sh intentionally scans git ls-files. Mark new files as
+          # intent-to-add first so files generated by Codex are covered too.
+          git add -N .
+          git reset -q -- .ci-agent || true
+
+          {
+            flutter pub get --enforce-lockfile
+            dart format --set-exit-if-changed .
+            flutter analyze
+            flutter test
+            ./scripts/check_secrets.sh
+          } 2>&1 | tee .ci-agent/verify-attempt-1.log
+
+      - name: Prepare retry prompt
+        if: ${{ steps.verify1.outcome == 'failure' }}
+        shell: bash
+        run: |
+          cp .ci-agent/prompt.md .ci-agent/retry-prompt.md
+          cat >> .ci-agent/retry-prompt.md <<'EOF'
+
+          This is the second and final repair attempt. The first attempt did not pass the verification commands. Read `.ci-agent/verify-attempt-1.log`, diagnose the remaining failure, and correct only that issue. Keep every safety rule above. If a safe fix is not clear, make no further change and explain why.
+          EOF
+
+      - name: Codex repair attempt 2
+        id: codex2
+        if: ${{ steps.verify1.outcome == 'failure' }}
+        continue-on-error: true
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .ci-agent/retry-prompt.md
+          output-file: .ci-agent/codex-attempt-2.md
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          codex-args: '["--ephemeral"]'
+
+      - name: Verify attempt 2
+        id: verify2
+        if: ${{ steps.verify1.outcome == 'failure' }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Repeat intent-to-add because attempt 2 may have created more files.
+          git add -N .
+          git reset -q -- .ci-agent || true
+
+          {
+            flutter pub get --enforce-lockfile
+            dart format --set-exit-if-changed .
+            flutter analyze
+            flutter test
+            ./scripts/check_secrets.sh
+          } 2>&1 | tee .ci-agent/verify-attempt-2.log
+
+      - name: Package safe fix
+        id: package
+        if: ${{ steps.context.outputs.active == 'true' && steps.credential.outputs.enabled == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+
+          final_ok=false
+          if [[ "${{ steps.verify1.outcome }}" == "success" ]]; then
+            final_ok=true
+          elif [[ "${{ steps.verify2.outcome }}" == "success" ]]; then
+            final_ok=true
+          fi
+
+          if [[ "$final_ok" != "true" ]]; then
+            echo "The agent exhausted its two attempts without a fully green local verification." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Include newly-created tests/files in the patch while keeping the
+          # agent's own logs out of the index and artifact.
+          git add -N .
+          git reset -q -- .ci-agent || true
+
+          mapfile -t changed < <(git diff --name-only)
+          if [[ ${#changed[@]} -eq 0 ]]; then
+            echo "The failed run now verifies cleanly without a code change; no patch will be published." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Protect repository policy/configuration, release/store metadata,
+          # licensing notices at any depth, toolchain/version files, and signing
+          # material. The agent may repair application/test code only.
+          forbidden='(^|/)(LICENSE($|\.)|COPYING($|\.)|NOTICE($|\.))|^(\.github/|metadata/|pubspec\.yaml$|\.flutter-version$|fastlane/|docs/release-notes/|scripts/check_secrets\.sh$|analysis_options\.yaml$)|(^|/)(key\.properties|[^/]*\.(jks|keystore))$'
+          for path in "${changed[@]}"; do
+            if [[ "$path" =~ $forbidden ]]; then
+              echo "::error::Agent touched protected path: $path"
+              echo "Protected-path guard rejected the patch: \`$path\`." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          done
+
+          git diff --check
+          git diff --binary -- . ':(exclude).ci-agent/**' > .ci-agent/ci-fix.patch
+          if [[ ! -s .ci-agent/ci-fix.patch ]]; then
+            echo "No publishable patch was produced." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          printf 'Validated Flutter CI repair for source run %s.\n' "${{ steps.context.outputs.run_id }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload validated patch
+        if: ${{ steps.package.outputs.ready == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-ci-fix-${{ steps.context.outputs.run_id }}
+          path: .ci-agent/ci-fix.patch
+          retention-days: 3
+          if-no-files-found: error
+
+  publish:
+    name: Publish validated Flutter fix
+    needs: fix
+    if: ${{ needs.fix.outputs.ready == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Require workflow-triggering publication token
+        env:
+          PUBLISH_TOKEN: ${{ secrets.CI_FIXER_GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -z "$PUBLISH_TOKEN" ]]; then
+            echo "::error::CI_FIXER_GITHUB_TOKEN is required to publish repairs and trigger normal CI."
+            exit 1
+          fi
+
+      - name: Checkout target branch revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.fix.outputs.target_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download validated patch
+        uses: actions/download-artifact@v4
+        with:
+          name: flutter-ci-fix-${{ needs.fix.outputs.run_id }}
+          path: .ci-agent
+
+      - name: Apply and publish fix
+        id: publish
+        env:
+          GH_TOKEN: ${{ secrets.CI_FIXER_GITHUB_TOKEN }}
+          SOURCE_RUN_ID: ${{ needs.fix.outputs.run_id }}
+          SOURCE_RUN_URL: ${{ needs.fix.outputs.run_url }}
+          TARGET_SHA: ${{ needs.fix.outputs.target_sha }}
+          TARGET_BRANCH: ${{ needs.fix.outputs.target_branch }}
+          BASE_BRANCH: ${{ needs.fix.outputs.base_branch }}
+          SOURCE_PR: ${{ needs.fix.outputs.source_pr }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh auth setup-git
+          remote_sha="$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)"
+          if [[ "$remote_sha" != "$TARGET_SHA" ]]; then
+            echo "::error::Target branch moved from $TARGET_SHA to $remote_sha while the agent was working. Refusing to publish a stale fix."
+            exit 1
+          fi
+
+          # The patch was validated against the exact failed PR merge revision.
+          # Apply it to the raw PR head for publication; if the contexts no
+          # longer apply cleanly, fail instead of forcing a potentially stale fix.
+          git apply --index --whitespace=nowarn .ci-agent/ci-fix.patch
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(ci): repair Flutter checks"
+
+          if [[ -n "$SOURCE_PR" ]]; then
+            git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+            gh pr comment "$SOURCE_PR" --repo "$GITHUB_REPOSITORY" --body "Flutter CI fixer pushed a validated repair commit for failed run [$SOURCE_RUN_ID]($SOURCE_RUN_URL). The repair was verified against the exact failed PR merge revision before publication. The dedicated publication token allows GitHub to trigger the PR's normal CI checks for the new commit. No auto-merge was performed."
+            echo "updated_pr=$SOURCE_PR" >> "$GITHUB_OUTPUT"
+          else
+            branch="codex/ci-fix-$SOURCE_RUN_ID"
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" >/dev/null 2>&1; then
+              branch="$branch-$GITHUB_RUN_ID"
+            fi
+            git checkout -b "$branch"
+            git push origin "$branch"
+            pr_url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base "$BASE_BRANCH" --head "$branch" \
+              --title "fix(ci): repair Flutter checks" \
+              --body "Automated, validated repair for failed Flutter CI run [$SOURCE_RUN_ID]($SOURCE_RUN_URL).\n\nThe fixer made at most two focused attempts and only published after all of these passed locally:\n- flutter pub get --enforce-lockfile\n- dart format --set-exit-if-changed .\n- flutter analyze\n- flutter test\n- ./scripts/check_secrets.sh\n\nThe repair PR is created with the dedicated publication token so the normal pull_request CI runs naturally. This workflow never auto-merges.")"
+            echo "created_pr=$pr_url" >> "$GITHUB_OUTPUT"
+          fi
