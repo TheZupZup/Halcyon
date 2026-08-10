@@ -29,10 +29,10 @@ jobs:
         run: cargo fmt --manifest-path native/linthra_core/Cargo.toml -- --check
 
       - name: Clippy
-        run: cargo clippy --manifest-path native/linthra_core/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --locked --manifest-path native/linthra_core/Cargo.toml --all-targets -- -D warnings
 
       - name: Unit tests
-        run: cargo test --manifest-path native/linthra_core/Cargo.toml
+        run: cargo test --locked --manifest-path native/linthra_core/Cargo.toml
 
       - name: 200k-track regression benchmark
-        run: cargo run --release --manifest-path native/linthra_core/Cargo.toml --bin benchmark_200k
+        run: cargo run --locked --release --manifest-path native/linthra_core/Cargo.toml --bin benchmark_200k
