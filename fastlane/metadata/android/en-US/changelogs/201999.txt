@@ -1,0 +1,5 @@
+Linthra 0.2.1
+
+- Fixes source-build compatibility for F-Droid after the v0.2.0 release.
+- Adds the committed Rust dependency lockfile required for reproducible source builds.
+- Keeps playback, library, and server behavior unchanged from v0.2.0.

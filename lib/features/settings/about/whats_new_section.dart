@@ -20,9 +20,9 @@ class WhatsNewSection extends StatelessWidget {
   /// handful of concise bullets and updated when cutting a new build; exposed so
   /// the widget test can assert each line renders without duplicating the copy.
   static const List<String> releaseNotes = <String>[
-    'New installs now start with a guided welcome that helps you choose local music or a self-hosted server.',
-    'Existing installs are detected during upgrades so the new welcome does not interrupt normal updates.',
-    'The welcome tour can be replayed later from Settings whenever you want to add or revisit a music source.',
+    'Fixes source-build compatibility for F-Droid after the v0.2.0 release.',
+    'The Rust core now ships with a committed dependency lockfile for reproducible builds.',
+    'No playback, library, or server behavior changed in this maintenance update.',
   ];
 
   @override
