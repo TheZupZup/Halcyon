@@ -27,6 +27,7 @@ jobs:
       ready: ${{ steps.package.outputs.ready }}
       run_id: ${{ steps.context.outputs.run_id }}
       run_url: ${{ steps.context.outputs.run_url }}
+      repair_sha: ${{ steps.context.outputs.repair_sha }}
       target_sha: ${{ steps.context.outputs.target_sha }}
       target_branch: ${{ steps.context.outputs.target_branch }}
       base_branch: ${{ steps.context.outputs.base_branch }}
@@ -59,11 +60,13 @@ jobs:
           head_sha="$(jq -r '.head_sha // ""' <<<"$run_json")"
           head_branch="$(jq -r '.head_branch // ""' <<<"$run_json")"
           run_pr_head_sha="$(jq -r '.pull_requests[0].head.sha // empty' <<<"$run_json")"
+          run_pr_base_sha="$(jq -r '.pull_requests[0].base.sha // empty' <<<"$run_json")"
 
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           echo "run_url=$run_url" >> "$GITHUB_OUTPUT"
           echo "active=false" >> "$GITHUB_OUTPUT"
           echo "source_pr=" >> "$GITHUB_OUTPUT"
+          echo "repair_sha=" >> "$GITHUB_OUTPUT"
           echo "target_sha=" >> "$GITHUB_OUTPUT"
           echo "target_branch=" >> "$GITHUB_OUTPUT"
           echo "base_branch=" >> "$GITHUB_OUTPUT"
@@ -78,11 +81,11 @@ jobs:
             exit 0
           fi
 
-          # The fixer only consumes normal CI runs. It explicitly dispatches a
-          # fresh CI run after publishing a repair; ignoring workflow_dispatch
-          # here prevents that validation run from recursively spawning a fixer.
+          # Only normal CI runs are repair candidates. A repair published with
+          # the dedicated token triggers normal push/pull_request CI again; if
+          # that new CI fails on a codex/ci-fix-* branch it is rejected below.
           if [[ "$event_name" != "pull_request" && "$event_name" != "push" ]]; then
-            echo "Skipping CI run triggered by $event_name to prevent repair recursion."
+            echo "Skipping CI run triggered by $event_name."
             exit 0
           fi
 
@@ -103,14 +106,21 @@ jobs:
               echo "Could not safely resolve the source PR; refusing to guess."
               exit 0
             fi
-            if [[ -z "$run_pr_head_sha" ]]; then
-              echo "The workflow run does not record the PR head SHA; refusing a stale-prone repair."
+            if [[ -z "$run_pr_head_sha" || -z "$run_pr_base_sha" ]]; then
+              echo "The failed workflow run does not record both PR head and base SHAs; refusing a stale-prone repair."
               exit 0
             fi
 
             pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$source_pr")"
+            pr_state="$(jq -r '.state // ""' <<<"$pr_json")"
             pr_head_repo="$(jq -r '.head.repo.full_name // ""' <<<"$pr_json")"
             current_pr_head_sha="$(jq -r '.head.sha // ""' <<<"$pr_json")"
+            current_pr_base_sha="$(jq -r '.base.sha // ""' <<<"$pr_json")"
+
+            if [[ "$pr_state" != "open" ]]; then
+              echo "PR #$source_pr is no longer open."
+              exit 0
+            fi
             if [[ "$pr_head_repo" != "$GITHUB_REPOSITORY" ]]; then
               echo "Skipping fork PR #$source_pr."
               exit 0
@@ -119,18 +129,27 @@ jobs:
               echo "PR #$source_pr advanced from $run_pr_head_sha to $current_pr_head_sha after failed run $run_id; refusing stale logs."
               exit 0
             fi
+            if [[ "$current_pr_base_sha" != "$run_pr_base_sha" ]]; then
+              echo "PR #$source_pr base advanced from $run_pr_base_sha to $current_pr_base_sha after failed run $run_id; refusing stale merge context."
+              exit 0
+            fi
 
+            # GitHub's pull_request CI checks out the synthetic merge revision.
+            # Diagnose and verify that exact failed tree, but keep the raw PR
+            # head separately because publication must update the PR branch.
+            repair_sha="$head_sha"
             target_sha="$current_pr_head_sha"
             target_branch="$(jq -r '.head.ref' <<<"$pr_json")"
             base_branch="$(jq -r '.base.ref' <<<"$pr_json")"
           else
+            repair_sha="$head_sha"
             target_sha="$head_sha"
             target_branch="$head_branch"
             base_branch="main"
           fi
 
-          if [[ -z "$target_sha" || -z "$target_branch" ]]; then
-            echo "Missing target ref; refusing to run."
+          if [[ -z "$repair_sha" || -z "$target_sha" || -z "$target_branch" ]]; then
+            echo "Missing repair/target ref; refusing to run."
             exit 0
           fi
           if [[ "$target_branch" == codex/ci-fix-* ]]; then
@@ -140,6 +159,7 @@ jobs:
 
           echo "active=true" >> "$GITHUB_OUTPUT"
           echo "source_pr=$source_pr" >> "$GITHUB_OUTPUT"
+          echo "repair_sha=$repair_sha" >> "$GITHUB_OUTPUT"
           echo "target_sha=$target_sha" >> "$GITHUB_OUTPUT"
           echo "target_branch=$target_branch" >> "$GITHUB_OUTPUT"
           echo "base_branch=$base_branch" >> "$GITHUB_OUTPUT"
@@ -158,11 +178,11 @@ jobs:
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout failing revision
+      - name: Checkout exact failed revision
         if: ${{ steps.context.outputs.active == 'true' && steps.credential.outputs.enabled == 'true' }}
         uses: actions/checkout@v5
         with:
-          ref: ${{ steps.context.outputs.target_sha }}
+          ref: ${{ steps.context.outputs.repair_sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -334,12 +354,20 @@ jobs:
     if: ${{ needs.fix.outputs.ready == 'true' }}
     runs-on: ubuntu-latest
     permissions:
-      actions: write
-      contents: write
-      pull-requests: write
-      issues: write
+      actions: read
+      contents: read
     steps:
-      - name: Checkout failing revision
+      - name: Require workflow-triggering publication token
+        env:
+          PUBLISH_TOKEN: ${{ secrets.CI_FIXER_GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -z "$PUBLISH_TOKEN" ]]; then
+            echo "::error::CI_FIXER_GITHUB_TOKEN is required to publish repairs and trigger normal CI."
+            exit 1
+          fi
+
+      - name: Checkout target branch revision
         uses: actions/checkout@v5
         with:
           ref: ${{ needs.fix.outputs.target_sha }}
@@ -355,7 +383,7 @@ jobs:
       - name: Apply and publish fix
         id: publish
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.CI_FIXER_GITHUB_TOKEN }}
           SOURCE_RUN_ID: ${{ needs.fix.outputs.run_id }}
           SOURCE_RUN_URL: ${{ needs.fix.outputs.run_url }}
           TARGET_SHA: ${{ needs.fix.outputs.target_sha }}
@@ -366,28 +394,25 @@ jobs:
         run: |
           set -euo pipefail
 
+          gh auth setup-git
           remote_sha="$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)"
           if [[ "$remote_sha" != "$TARGET_SHA" ]]; then
             echo "::error::Target branch moved from $TARGET_SHA to $remote_sha while the agent was working. Refusing to publish a stale fix."
             exit 1
           fi
 
+          # The patch was validated against the exact failed PR merge revision.
+          # Apply it to the raw PR head for publication; if the contexts no
+          # longer apply cleanly, fail instead of forcing a potentially stale fix.
           git apply --index --whitespace=nowarn .ci-agent/ci-fix.patch
           git diff --cached --check
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "fix(ci): repair Flutter checks"
-          gh auth setup-git
 
           if [[ -n "$SOURCE_PR" ]]; then
             git push origin "HEAD:refs/heads/$TARGET_BRANCH"
-
-            # Pushes authenticated with GITHUB_TOKEN do not trigger push/PR
-            # workflows. workflow_dispatch is the documented exception, so
-            # explicitly give the repair commit fresh CI checks.
-            gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$TARGET_BRANCH"
-
-            gh pr comment "$SOURCE_PR" --repo "$GITHUB_REPOSITORY" --body "Flutter CI fixer pushed a validated repair commit for failed run [$SOURCE_RUN_ID]($SOURCE_RUN_URL) and explicitly dispatched fresh CI checks for the repair commit. It passed lockfile-enforced pub get, formatting, analysis, the full Flutter test suite, and the secret scan before publication. No auto-merge was performed."
+            gh pr comment "$SOURCE_PR" --repo "$GITHUB_REPOSITORY" --body "Flutter CI fixer pushed a validated repair commit for failed run [$SOURCE_RUN_ID]($SOURCE_RUN_URL). The repair was verified against the exact failed PR merge revision before publication. The dedicated publication token allows GitHub to trigger the PR's normal CI checks for the new commit. No auto-merge was performed."
             echo "updated_pr=$SOURCE_PR" >> "$GITHUB_OUTPUT"
           else
             branch="codex/ci-fix-$SOURCE_RUN_ID"
@@ -398,8 +423,6 @@ jobs:
             git push origin "$branch"
             pr_url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base "$BASE_BRANCH" --head "$branch" \
               --title "fix(ci): repair Flutter checks" \
-              --body "Automated, validated repair for failed Flutter CI run [$SOURCE_RUN_ID]($SOURCE_RUN_URL).\n\nThe fixer made at most two focused attempts and only published after all of these passed locally:\n- flutter pub get --enforce-lockfile\n- dart format --set-exit-if-changed .\n- flutter analyze\n- flutter test\n- ./scripts/check_secrets.sh\n\nFresh CI is explicitly dispatched after the repair branch is published. This workflow never auto-merges.")"
-
-            gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
+              --body "Automated, validated repair for failed Flutter CI run [$SOURCE_RUN_ID]($SOURCE_RUN_URL).\n\nThe fixer made at most two focused attempts and only published after all of these passed locally:\n- flutter pub get --enforce-lockfile\n- dart format --set-exit-if-changed .\n- flutter analyze\n- flutter test\n- ./scripts/check_secrets.sh\n\nThe repair PR is created with the dedicated publication token so the normal pull_request CI runs naturally. This workflow never auto-merges.")"
             echo "created_pr=$pr_url" >> "$GITHUB_OUTPUT"
           fi
