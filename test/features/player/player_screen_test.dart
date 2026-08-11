@@ -10,6 +10,7 @@ import 'package:linthra/features/player/player_providers.dart';
 import 'package:linthra/features/player/player_screen.dart';
 import 'package:linthra/features/player/widgets/album_artwork.dart';
 import 'package:linthra/features/player/widgets/now_playing_background.dart';
+import 'package:linthra/features/player/widgets/wavy_seek_bar.dart';
 
 import 'fake_playback_controller.dart';
 
@@ -176,12 +177,12 @@ void main() {
       expect(next.onPressed, isNull);
     });
 
-    testWidgets('the slider seeks via the controller', (tester) async {
+    testWidgets('the progress bar seeks via the controller', (tester) async {
       final controller = _playing(duration: const Duration(minutes: 3));
       await _pumpScreen(tester, controller);
 
-      // Tapping the slider commits a seek to roughly its center.
-      await tester.tap(find.byType(Slider));
+      // Tapping the wavy progress bar commits a seek to roughly its center.
+      await tester.tap(find.byType(WavySeekBar));
       await tester.pumpAndSettle();
 
       expect(controller.seeks, isNotEmpty);

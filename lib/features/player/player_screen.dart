@@ -201,6 +201,9 @@ class _LiveControls extends ConsumerWidget {
         PlaybackProgressBar(
           position: state.position,
           duration: state.duration,
+          // Drives the wave's slow drift: it flows while playing and holds
+          // still when paused, so a paused screen schedules no frames.
+          playing: state.isPlaying,
           onSeek: (position) =>
               ref.read(playbackControllerProvider).seek(position),
         ),

@@ -64,6 +64,14 @@ tick:
   **honours the OS reduced-motion setting** (`MediaQuery.disableAnimations`) — a
   paused, off-screen, or reduce-motion indicator schedules no frames. See
   `lib/shared/widgets/now_playing_indicator.dart`.
+- **The wavy progress bar** (Now Playing and the mini-player's top edge) has
+  **no perpetual animation**: a wave that drifted forever would repaint the full
+  width of the bar every frame on the app's most-used screen. Its only motion is
+  a one-shot ~420 ms swell when playback starts or pauses — skipped entirely
+  under reduced motion — after which it schedules no frames and costs a single
+  polyline repaint per position tick, on its own `RepaintBoundary`. The
+  mini-player's copy never even swells. See
+  `lib/shared/widgets/wavy_progress_indicator.dart`.
 - **Track rows** watch a position-*independent* now-playing snapshot
   (`current track + isPlaying`), so they rebuild only on a track change or a
   play/pause flip — never on a position tick. See `lib/features/player/now_playing.dart`.
