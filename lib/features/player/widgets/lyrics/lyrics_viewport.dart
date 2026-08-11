@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../app/dimens.dart';
@@ -98,6 +99,14 @@ class _SyncedLyricsViewportState extends ConsumerState<SyncedLyricsViewport> {
   /// and last lines can reach the active position like any other.
   static const double _edgePaddingFraction = 0.4;
 
+  /// How many estimate-and-settle passes a jump to an unbuilt row gets before
+  /// it gives up. Each pass builds a new band of rows and so measures better
+  /// than the last; this only stops a pathological list from walking forever.
+  static const int _maxEstimatePasses = 5;
+
+  /// How close an estimate has to land to count as "nowhere left to go".
+  static const double _estimateEpsilon = 0.5;
+
   final ScrollController _scroll = ScrollController();
 
   /// The active line index the rows subscribe to.
@@ -107,6 +116,10 @@ class _SyncedLyricsViewportState extends ConsumerState<SyncedLyricsViewport> {
   List<GlobalKey> _keys = const <GlobalKey>[];
 
   DateTime? _lastManualScroll;
+
+  /// The blank space the list reserves at each end, cached from layout so an
+  /// offset estimate can subtract it. It is padding, not rows.
+  double _edgePadding = 0;
 
   @override
   void initState() {
@@ -181,10 +194,12 @@ class _SyncedLyricsViewportState extends ConsumerState<SyncedLyricsViewport> {
   /// A row that is currently laid out can be measured directly. A row that
   /// isn't — after a long seek, or a jump from a tapped line, the target can sit
   /// far outside the built window — has no render object for `ensureVisible` to
-  /// measure, and that call would silently do nothing. So the scroll is first
-  /// estimated from the list's own extent to bring the row into the build
-  /// window, then refined once on the next frame when the real row exists.
-  void _centre(int index, {bool allowEstimate = true}) {
+  /// measure, and that call would silently do nothing. So the scroll is walked
+  /// toward it by estimate: each jump builds a new band of rows, which gives a
+  /// better estimate for the next pass, until the target itself is laid out and
+  /// can be revealed exactly. [pass] bounds that walk so it can always
+  /// terminate.
+  void _centre(int index, {int pass = 0}) {
     if (!mounted || index < 0 || index >= _keys.length) return;
     if (!_scroll.hasClients) return;
 
@@ -203,23 +218,91 @@ class _SyncedLyricsViewportState extends ConsumerState<SyncedLyricsViewport> {
       return;
     }
 
-    if (!allowEstimate || _keys.isEmpty) return;
+    if (pass >= _maxEstimatePasses) return;
+    final double? estimate = _estimateOffsetFor(index);
+    if (estimate == null) return;
     final ScrollPosition position = _scroll.position;
-    final double totalExtent =
-        position.maxScrollExtent + position.viewportDimension;
-    if (totalExtent <= 0) return;
-    final double rowExtent = totalExtent / _keys.length;
-    final double target = rowExtent * index +
-        rowExtent / 2 -
-        position.viewportDimension * _activeLineAlignment;
-    _scroll.jumpTo(
-      target.clamp(position.minScrollExtent, position.maxScrollExtent),
+    final double target = estimate.clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
     );
-    // One refinement pass only, so a line that stubbornly refuses to lay out
-    // can never spin this into a loop.
+    // Already as close as this list can get and the row still isn't built:
+    // another identical jump would only spin the walk.
+    if ((target - position.pixels).abs() < _estimateEpsilon) return;
+    _scroll.jumpTo(target);
     WidgetsBinding.instance.addPostFrameCallback(
-      (_) => _centre(index, allowEstimate: false),
+      (_) => _centre(index, pass: pass + 1),
     );
+  }
+
+  /// The scroll offset that would put row [index] at [_activeLineAlignment],
+  /// or null when the list has no geometry to reason about yet.
+  ///
+  /// Prefers *measured* anchors. Whatever rows are laid out right now report
+  /// their real reveal offsets, and the slope between the outermost two is a
+  /// per-row extent that already accounts for however those lines wrapped —
+  /// far better than assuming every row in the song is the same height.
+  ///
+  /// Only with nothing measurable does it fall back to dividing the content
+  /// evenly, and even then it subtracts the two edge paddings first: they are
+  /// blank space, not rows, and counting them would inflate every row and push
+  /// the jump further off with each index.
+  double? _estimateOffsetFor(int index) {
+    if (_keys.isEmpty || !_scroll.hasClients) return null;
+
+    int? firstIndex;
+    double? firstOffset;
+    int? lastIndex;
+    double? lastOffset;
+    for (int i = 0; i < _keys.length; i++) {
+      final BuildContext? lineContext = _keys[i].currentContext;
+      if (lineContext == null) continue;
+      final double? offset = _revealOffsetOf(lineContext);
+      if (offset == null) continue;
+      firstIndex ??= i;
+      firstOffset ??= offset;
+      lastIndex = i;
+      lastOffset = offset;
+    }
+
+    if (firstIndex != null && lastIndex != null && lastIndex != firstIndex) {
+      final double perRow =
+          (lastOffset! - firstOffset!) / (lastIndex - firstIndex);
+      return firstOffset + (index - firstIndex) * perRow;
+    }
+    if (firstIndex != null) {
+      // A single anchor still fixes the *origin*; only the slope is assumed.
+      return firstOffset! + (index - firstIndex) * _uniformRowExtent();
+    }
+
+    final double rowExtent = _uniformRowExtent();
+    if (rowExtent <= 0) return null;
+    return _edgePadding +
+        rowExtent * index +
+        rowExtent / 2 -
+        _scroll.position.viewportDimension * _activeLineAlignment;
+  }
+
+  /// The average height of a row, with the list's blank edge padding removed.
+  double _uniformRowExtent() {
+    final ScrollPosition position = _scroll.position;
+    final double content =
+        position.maxScrollExtent + position.viewportDimension;
+    final double rows = content - _edgePadding * 2;
+    if (rows <= 0 || _keys.isEmpty) return 0;
+    return rows / _keys.length;
+  }
+
+  /// The scroll offset that would reveal [lineContext]'s row at the active
+  /// position — the same measurement `ensureVisible` makes, read directly so it
+  /// can serve as an anchor.
+  double? _revealOffsetOf(BuildContext lineContext) {
+    final RenderObject? box = lineContext.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return null;
+    final RenderAbstractViewport? viewport =
+        RenderAbstractViewport.maybeOf(box);
+    if (viewport == null) return null;
+    return viewport.getOffsetToReveal(box, _activeLineAlignment).offset;
   }
 
   @override
@@ -249,6 +332,9 @@ class _SyncedLyricsViewportState extends ConsumerState<SyncedLyricsViewport> {
           final double edgePadding = constraints.maxHeight.isFinite
               ? constraints.maxHeight * _edgePaddingFraction
               : AppSpacing.xl;
+          // Cached, not state: a layout constant the offset estimate needs, and
+          // writing it changes nothing that would need a rebuild.
+          _edgePadding = edgePadding;
           return NotificationListener<ScrollStartNotification>(
             // dragDetails is set only when a finger started the scroll, so the
             // view's own animated centring never counts as the user taking over.

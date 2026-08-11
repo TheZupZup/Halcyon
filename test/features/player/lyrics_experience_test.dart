@@ -55,6 +55,20 @@ const _syncedWithGap = Lyrics(lines: <LyricLine>[
   LyricLine(text: 'after the gap', start: Duration(seconds: 20)),
 ]);
 
+/// A long song whose lines wrap to very different heights, so no single
+/// per-row extent describes the list. Line `i` starts at `i` seconds.
+Lyrics _unevenLyrics({int count = 60}) {
+  return Lyrics(
+    lines: List<LyricLine>.generate(count, (int i) {
+      // Every third line is a long one that wraps over several rows.
+      final String text = i % 3 == 0
+          ? 'line $i ${'and it carries on well past the end of the line ' * 4}'
+          : 'line $i';
+      return LyricLine(text: text, start: Duration(seconds: i));
+    }),
+  );
+}
+
 const _plain = Lyrics(lines: <LyricLine>[
   LyricLine(text: 'plain one'),
   LyricLine(text: 'plain two'),
@@ -288,6 +302,57 @@ void main() {
           reason: '${step.text} drifted off the bottom of the viewport',
         );
       }
+    });
+  });
+
+  group('following across a long seek', () {
+    testWidgets('a jump far down an uneven song still lands the active line',
+        (tester) async {
+      // Uneven wrapped heights mean a single averaged row extent describes the
+      // list badly; the target row also starts far outside the built window, so
+      // ensureVisible alone has nothing to measure.
+      final Lyrics lyrics = _unevenLyrics();
+      final controller =
+          FakePlaybackController(initial: _playingAt(Duration.zero));
+      await _pumpPlayer(tester, controller: controller, lyrics: lyrics);
+      await _openLyrics(tester);
+
+      const String target = 'line 52';
+      expect(find.textContaining(target), findsNothing);
+
+      controller.emit(_playingAt(const Duration(seconds: 52)));
+      await tester.pumpAndSettle();
+
+      // Built, on screen, and actually near the active position — not merely
+      // scrolled somewhere in its general direction.
+      final Finder line = find.textContaining(target);
+      expect(line, findsOneWidget);
+      final Rect viewport =
+          tester.getRect(find.byKey(const Key('synced-lyrics')));
+      final Rect rect = tester.getRect(line);
+      expect(rect.center.dy, greaterThan(viewport.top));
+      expect(rect.center.dy, lessThan(viewport.bottom));
+    });
+
+    testWidgets('jumping back up to the opening line lands too',
+        (tester) async {
+      final Lyrics lyrics = _unevenLyrics();
+      final controller = FakePlaybackController(
+        initial: _playingAt(const Duration(seconds: 52)),
+      );
+      await _pumpPlayer(tester, controller: controller, lyrics: lyrics);
+      await _openLyrics(tester);
+
+      controller.emit(_playingAt(Duration.zero));
+      await tester.pumpAndSettle();
+
+      final Finder line = find.textContaining('line 0 ');
+      expect(line, findsOneWidget);
+      final Rect viewport =
+          tester.getRect(find.byKey(const Key('synced-lyrics')));
+      final Rect rect = tester.getRect(line);
+      expect(rect.center.dy, greaterThan(viewport.top));
+      expect(rect.center.dy, lessThan(viewport.bottom));
     });
   });
 
