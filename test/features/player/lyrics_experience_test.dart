@@ -46,6 +46,15 @@ const _synced = Lyrics(lines: <LyricLine>[
   LyricLine(text: 'line seven', start: Duration(seconds: 60)),
 ]);
 
+/// A timed set with an interior *timestamped blank* line — what
+/// `LyricsTextParser` produces for a bare `[00:10.00]` tag in an `.lrc`, kept
+/// for stanza rhythm.
+const _syncedWithGap = Lyrics(lines: <LyricLine>[
+  LyricLine(text: 'before the gap', start: Duration.zero),
+  LyricLine(text: '', start: Duration(seconds: 10)),
+  LyricLine(text: 'after the gap', start: Duration(seconds: 20)),
+]);
+
 const _plain = Lyrics(lines: <LyricLine>[
   LyricLine(text: 'plain one'),
   LyricLine(text: 'plain two'),
@@ -314,6 +323,56 @@ void main() {
         ),
       );
       expect(target.height, greaterThanOrEqualTo(48.0));
+    });
+
+    testWidgets('a timestamped blank line stays pure spacing', (tester) async {
+      await _pumpPlayer(
+        tester,
+        controller: FakePlaybackController(
+          // 12s: the blank line at 10s is the active one.
+          initial: _playingAt(const Duration(seconds: 12)),
+        ),
+        lyrics: _syncedWithGap,
+      );
+      await _openLyrics(tester);
+
+      final Finder blank = find.byWidgetPredicate(
+        (Widget w) => w is LyricLineTile && w.text.trim().isEmpty,
+      );
+      expect(blank, findsOneWidget);
+
+      // No tap target: seeking to a stanza gap would offer an unlabelled button.
+      expect(
+        find.descendant(of: blank, matching: find.byType(InkWell)),
+        findsNothing,
+      );
+      // And nothing for a screen reader to land on.
+      expect(
+        find.descendant(of: blank, matching: find.byType(ExcludeSemantics)),
+        findsOneWidget,
+      );
+      // Even though it is the active line, no accent pill floats beside the
+      // empty row.
+      final Iterable<AnimatedOpacity> markers =
+          tester.widgetList<AnimatedOpacity>(
+        find.descendant(of: blank, matching: find.byType(AnimatedOpacity)),
+      );
+      expect(markers, isNotEmpty);
+      for (final AnimatedOpacity marker in markers) {
+        expect(marker.opacity, 0.0);
+      }
+
+      // The real lines around it are still perfectly seekable.
+      expect(
+        find.descendant(
+          of: find.ancestor(
+            of: find.text('after the gap'),
+            matching: find.byType(LyricLineTile),
+          ),
+          matching: find.byType(InkWell),
+        ),
+        findsOneWidget,
+      );
     });
 
     testWidgets('plain lyrics are not seekable', (tester) async {

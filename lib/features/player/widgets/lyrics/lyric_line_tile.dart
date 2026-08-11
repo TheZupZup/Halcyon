@@ -31,6 +31,8 @@ class LyricLineTile extends StatelessWidget {
   /// Seeks playback to this line, for a timed line the user can jump to. Null
   /// leaves the line inert (plain lyrics, or a timed set's untimed leftovers),
   /// and the tile then claims no tap target and no button semantics.
+  ///
+  /// Ignored for a blank line even when one is supplied — see [build].
   final VoidCallback? onTap;
 
   /// The smallest comfortable height for a seekable line. Lyric rows are short
@@ -54,7 +56,14 @@ class LyricLineTile extends StatelessWidget {
     final ThemeData theme = Theme.of(context);
     final bool reduceMotion = MediaQuery.disableAnimationsOf(context);
     final Duration duration = reduceMotion ? Duration.zero : transition;
+    // A blank line is stanza rhythm, not content — and an `.lrc` can legally
+    // give one a timestamp (`[00:10.00]` with nothing after it), which
+    // LyricsTextParser preserves. Such a row must stay pure spacing: seeking to
+    // it would offer an unlabelled button with a "Play from this line" hint, and
+    // marking it would float an accent pill beside nothing. So blankness, not
+    // just the absence of a timestamp, decides whether a line is interactive.
     final bool isBlank = text.trim().isEmpty;
+    final VoidCallback? onTapLine = isBlank ? null : onTap;
 
     Widget line = Row(
       children: <Widget>[
@@ -62,7 +71,7 @@ class LyricLineTile extends StatelessWidget {
         // sit flush — the layout itself says "nothing here is highlighted".
         if (emphasis != LyricEmphasis.untimed)
           _ActiveMarker(
-            active: emphasis == LyricEmphasis.active,
+            active: !isBlank && emphasis == LyricEmphasis.active,
             duration: duration,
           ),
         Expanded(
@@ -84,7 +93,7 @@ class LyricLineTile extends StatelessWidget {
       child: line,
     );
 
-    if (onTap == null) {
+    if (onTapLine == null) {
       // A blank stanza gap is spacing, not content: it would otherwise be read
       // out as an empty item between two lines.
       return isBlank ? ExcludeSemantics(child: line) : line;
@@ -102,7 +111,7 @@ class LyricLineTile extends StatelessWidget {
           // tap still lands an ink ripple wherever the tile is hosted.
           type: MaterialType.transparency,
           child: InkWell(
-            onTap: onTap,
+            onTap: onTapLine,
             borderRadius: BorderRadius.circular(AppRadii.sm),
             child: ConstrainedBox(
               constraints: const BoxConstraints(minHeight: minTapTargetHeight),
