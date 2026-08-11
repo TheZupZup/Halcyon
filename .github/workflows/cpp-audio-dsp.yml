@@ -17,16 +17,31 @@ permissions:
 jobs:
   audio-dsp:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Release is what ships, so it runs the realtime budget too.
+          - build_type: Release
+            ctest_args: ''
+          # Debug is a second opinion on the DSP expectations. The realtime
+          # budget is skipped here because an unoptimized build says nothing
+          # useful about the performance of the build users actually get.
+          - build_type: Debug
+            ctest_args: '--exclude-regex linthra_audio_realtime_budget'
+    name: audio-dsp (${{ matrix.build_type }})
     steps:
       - uses: actions/checkout@v4
 
       - name: Configure
         run: >-
           cmake -S native/linthra_audio -B build/linthra_audio
-          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
 
       - name: Build
         run: cmake --build build/linthra_audio --parallel
 
-      - name: Unit and realtime tests
-        run: ctest --test-dir build/linthra_audio --output-on-failure
+      - name: Run tests
+        run: >-
+          ctest --test-dir build/linthra_audio --output-on-failure
+          ${{ matrix.ctest_args }}
