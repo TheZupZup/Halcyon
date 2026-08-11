@@ -71,13 +71,19 @@ class _LyricsPlaceholder extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
+        // Room left once the scroll view's own padding is taken out. Floored at
+        // zero: a stage squeezed below that padding — a short landscape window,
+        // or Now Playing's fixed controls eating the height at a large text
+        // scale — would otherwise ask for a negative minimum, which is not a
+        // valid BoxConstraints and throws during layout.
+        final double available = constraints.maxHeight.isFinite
+            ? constraints.maxHeight - AppSpacing.md
+            : 0;
         return SingleChildScrollView(
           padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
           child: ConstrainedBox(
             constraints: BoxConstraints(
-              minHeight: constraints.maxHeight.isFinite
-                  ? constraints.maxHeight - AppSpacing.md
-                  : 0,
+              minHeight: available > 0 ? available : 0,
             ),
             child: EmptyState(
               icon: Icons.lyrics_outlined,
