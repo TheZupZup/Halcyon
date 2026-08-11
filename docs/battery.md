@@ -78,11 +78,24 @@ tick:
 - **Mini-player & now-playing screen** select just the fields they show; only the
   thin progress line and the controls follow the position, not the artwork and
   text around them. See `lib/features/player/mini_player.dart`.
-- **Synced lyrics** select the *active line index* (not the raw position), so the
-  highlighted-line list rebuilds only when the line actually changes — a handful
-  of times per song rather than four times a second for the whole track. The
-  sync still moves exactly on each line boundary. See
-  `lib/features/player/widgets/lyrics_view.dart`.
+- **Synced lyrics** select the *active line index* (not the raw position), so a
+  position tick that stays inside the current line costs one cheap scan and no
+  rebuild at all — a handful of real changes per song rather than four times a
+  second for the whole track. The sync still moves exactly on each line
+  boundary. The viewport then **listens** to that index rather than watching it,
+  publishing it on a `ValueNotifier` that each row subscribes to, so a genuine
+  line change repaints only the rows whose emphasis actually moved — the old and
+  new active lines and their neighbours — and never rebuilds the list itself.
+  The only motion is a one-shot scroll to the new line plus the per-row style
+  transition, both skipped under reduced motion; nothing animates continuously.
+  See `lib/features/player/widgets/lyrics/lyrics_viewport.dart` and
+  `lib/features/player/widgets/lyrics/synced_lyric_line.dart`.
+- **The lyrics panel paints no artwork of its own.** It veils the Now Playing
+  backdrop that is already on screen instead of decoding and blurring a second
+  copy of the cover, and its edge fades are plain gradient rectangles rather
+  than a `ShaderMask` (which would force a `saveLayer` over the whole scrolling
+  list every frame). See
+  `lib/features/player/widgets/lyrics/lyrics_backdrop.dart`.
 - **Queue sheet** selects only the queue identity (current + up-next + history),
   so the open sheet doesn't rebuild on position ticks while you browse it. See
   `lib/features/player/widgets/queue_sheet.dart`.
@@ -205,6 +218,7 @@ Battery work is only safe if it's measurable. Useful levers:
   rebuild stats to confirm the now-playing surfaces aren't rebuilding on every
   position tick. The throttling above is covered by tests
   (`test/features/player/lyrics_highlight_throttle_test.dart`,
+  `test/features/player/lyrics_experience_test.dart`,
   `test/features/player/queue_sheet_throttle_test.dart`,
   `test/shared/widgets/now_playing_indicator_test.dart`) so a regression that
   reintroduces per-tick rebuilds fails CI.
