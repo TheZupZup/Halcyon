@@ -13,6 +13,7 @@ import 'package:linthra/features/player/player_providers.dart';
 import 'package:linthra/features/player/player_screen.dart';
 import 'package:linthra/features/player/widgets/album_artwork.dart';
 import 'package:linthra/features/player/widgets/lyrics/lyric_line_tile.dart';
+import 'package:linthra/features/player/widgets/lyrics_view.dart';
 
 import 'fake_playback_controller.dart';
 
@@ -630,6 +631,31 @@ void main() {
         find.text('line two'),
       );
       expect(line.size.height, greaterThan(30));
+    });
+
+    testWidgets('the empty state survives a stage squeezed to almost nothing',
+        (tester) async {
+      // Now Playing's fixed controls can leave the stage shorter than the
+      // placeholder's own padding — a short landscape window, or a large text
+      // scale. Asking for a negative minimum height is not valid
+      // BoxConstraints and throws during layout, so the floor has to hold.
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: <Override>[
+            lyricsServiceProvider.overrideWithValue(_FakeLyricsService(null)),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(height: 8, width: 300, child: LyricsView()),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('the empty state scrolls rather than clipping at a huge scale',
