@@ -54,6 +54,8 @@ class is bound to its interface, and where tests swap in fakes.
 | Background playback / lock screen / Android Auto | `lib/core/services/linthra_audio_handler.dart`, `media_browser_tree.dart` |
 | Turning a track into a playable URL | `lib/core/services/playable_uri_resolver.dart` + the resolvers beside it |
 | Cast / Chromecast | `lib/core/services/cast/` and `lib/features/player/cast/` |
+| Lyrics (fetching & parsing) | `lib/core/services/lyrics_resolver.dart`, `lyrics_text_parser.dart` |
+| Lyrics (how they look) | `lib/features/player/widgets/lyrics/` + `lib/core/models/lyric_focus.dart` |
 | Local-files provider | `lib/core/sources/local/` |
 | Jellyfin provider | `lib/core/sources/jellyfin/` |
 | Navidrome / Subsonic provider | `lib/core/sources/subsonic/` |

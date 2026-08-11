@@ -144,6 +144,16 @@ the widgets hold no playback logic of their own.
   Missing lyrics are `null` (the calm "no lyrics" state), never an error;
   lookups run on demand off the playback path; failures are logged by type
   only through the secret-free `LyricsDiagnostics`.
+
+  Presentation is a separate layer under `features/player/widgets/lyrics/`, and
+  the split is deliberate: the timing→emphasis rule is a pure function
+  (`core/models/lyric_focus.dart`), the viewport owns scrolling and follow
+  behaviour, `LyricLineTile` owns how one line looks, `SyncedLyricLine` owns
+  how a timed line reacts to the active index, and `LyricsBackdrop` owns the
+  background treatment. No widget derives timing for itself, and the model and
+  the wire format are untouched by any of it. Lyrics are shown in place on Now
+  Playing — the artwork hero swaps for the lyrics panel — so the transport
+  controls stay exactly where they are.
 - **Cast** drives real Chromecast through `CastService`; see [cast.md](cast.md).
 
 ## Android folder selection (SAF)

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../app/dimens.dart';
 import '../../../core/models/playback_state.dart';
 import '../../../core/models/track.dart';
 import '../../../data/repositories/favorites_repository_provider.dart';
@@ -10,7 +9,6 @@ import '../favorites_providers.dart';
 import '../now_playing_favorite_target.dart';
 import '../player_providers.dart';
 import '../sleep_timer_controller.dart';
-import 'lyrics_view.dart';
 import 'queue_sheet.dart';
 import 'sleep_timer_sheet.dart';
 
@@ -19,14 +17,27 @@ import 'sleep_timer_sheet.dart';
 ///
 /// They're live: favorite toggles a heart synced through the
 /// [FavoritesRepository] (to Jellyfin for remote tracks, on-device for local
-/// ones), queue opens the up-next list, lyrics fetches the track's lyrics from
-/// the source — falling back to an honest "no lyrics" state when there are none
-/// (or for a local track / when signed out) — and the sleep timer (a moon that
-/// lights up while a countdown is running) opens the delay picker.
+/// ones), queue opens the up-next list, lyrics switches the screen into its
+/// lyrics-focused mode, and the sleep timer (a moon that lights up while a
+/// countdown is running) opens the delay picker.
 class NowPlayingActions extends ConsumerWidget {
-  const NowPlayingActions({super.key, required this.track});
+  const NowPlayingActions({
+    super.key,
+    required this.track,
+    this.lyricsVisible = false,
+    this.onToggleLyrics,
+  });
 
   final Track track;
+
+  /// Whether the screen is currently showing lyrics instead of the artwork, so
+  /// the lyrics button can read as the toggle it is.
+  final bool lyricsVisible;
+
+  /// Switches the lyrics-focused mode on and off. Null on surfaces that host
+  /// the action row without a lyrics area, which leaves the button inert rather
+  /// than opening something the caller didn't ask for.
+  final VoidCallback? onToggleLyrics;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -84,10 +95,13 @@ class NowPlayingActions extends ConsumerWidget {
         ),
         IconButton(
           iconSize: 22,
-          onPressed: () => _openLyrics(context),
-          icon: const Icon(Icons.lyrics_outlined),
-          color: muted,
-          tooltip: 'Lyrics',
+          onPressed: onToggleLyrics,
+          icon: Icon(
+            lyricsVisible ? Icons.lyrics : Icons.lyrics_outlined,
+          ),
+          color: lyricsVisible ? theme.colorScheme.primary : muted,
+          isSelected: lyricsVisible,
+          tooltip: lyricsVisible ? 'Hide lyrics' : 'Lyrics',
         ),
         IconButton(
           iconSize: 22,
@@ -105,56 +119,5 @@ class NowPlayingActions extends ConsumerWidget {
 
   void _openQueue(BuildContext context) {
     showQueueSheet(context);
-  }
-
-  void _openLyrics(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (_) => const _LyricsSheet(),
-    );
-  }
-}
-
-/// The lyrics sheet: a tall, premium synced-lyrics panel. It follows the
-/// *currently playing* track rather than a captured one, so skipping updates the
-/// lines in place; the heavy lifting (loading / empty / plain / synced
-/// highlighting + auto-scroll) lives in [LyricsView]. Opening it only reads
-/// playback state — it never starts or restarts playback.
-class _LyricsSheet extends StatelessWidget {
-  const _LyricsSheet();
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-
-    return SafeArea(
-      child: SizedBox(
-        height: MediaQuery.sizeOf(context).height * 0.85,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.lg,
-            0,
-            AppSpacing.lg,
-            AppSpacing.lg,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.lyrics_outlined, color: theme.colorScheme.primary),
-                  const SizedBox(width: AppSpacing.sm),
-                  Text('Lyrics', style: theme.textTheme.titleMedium),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              const Expanded(child: LyricsView()),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }

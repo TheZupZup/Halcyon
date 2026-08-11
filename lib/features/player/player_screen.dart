@@ -9,6 +9,8 @@ import 'cast/cast_button.dart';
 import 'cast/cast_providers.dart';
 import 'player_providers.dart';
 import 'widgets/album_artwork.dart';
+import 'widgets/lyrics/lyrics_backdrop.dart';
+import 'widgets/lyrics_view.dart';
 import 'widgets/now_playing_actions.dart';
 import 'widgets/now_playing_background.dart';
 import 'widgets/playback_controls.dart';
@@ -115,16 +117,30 @@ class _EmptyNowPlaying extends StatelessWidget {
   }
 }
 
-class _NowPlaying extends StatelessWidget {
+class _NowPlaying extends StatefulWidget {
   const _NowPlaying({required this.track});
 
   final Track track;
 
   @override
+  State<_NowPlaying> createState() => _NowPlayingState();
+}
+
+class _NowPlayingState extends State<_NowPlaying> {
+  /// Whether the stage is showing lyrics instead of the cover.
+  ///
+  /// Deliberately kept across track changes: someone reading along wants the
+  /// next song's lyrics too, not the artwork back. It is a plain toggle rather
+  /// than a gesture, so it can't collide with the existing swipe-to-dismiss or
+  /// with dragging the seek bar.
+  bool _showLyrics = false;
+
+  @override
   Widget build(BuildContext context) {
+    final Track track = widget.track;
     // A tighter side margin lets the artwork breathe wider and gives the
     // transport controls more room to spread, while the generous gaps below
-    // group the screen into three calm bands: artwork · metadata · controls.
+    // group the screen into three calm bands: stage · metadata · controls.
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpacing.md,
@@ -134,50 +150,158 @@ class _NowPlaying extends StatelessWidget {
       ),
       child: Column(
         children: [
-          Expanded(
-            child: Center(
-              child: ConstrainedBox(
-                // Cap the hero on tablets/foldables so it stays a square cover,
-                // not an oversized panel; phones use the full width.
-                constraints: const BoxConstraints(maxWidth: 480),
-                child: AspectRatio(
-                  aspectRatio: 1,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(AppRadii.lg),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.4),
-                          blurRadius: 40,
-                          spreadRadius: -12,
-                          offset: const Offset(0, 20),
-                        ),
-                      ],
-                    ),
-                    child: AlbumArtwork(
-                      artworkUri: track.artworkUri,
-                      borderRadius: BorderRadius.circular(AppRadii.lg),
-                    ),
-                  ),
-                ),
-              ),
+          Expanded(child: _Stage(track: track, showLyrics: _showLyrics)),
+          // Lyrics need the height more than the gap does; the artwork keeps
+          // its generous breathing room.
+          SizedBox(height: _showLyrics ? AppSpacing.md : AppSpacing.xl),
+          // In lyrics mode the three-line metadata block collapses to a single
+          // quiet line, handing the difference to the lyrics above without
+          // losing track of what is playing.
+          if (_showLyrics)
+            _CompactTrackLine(
+              title: track.title,
+              artistName: track.artistName,
+            )
+          else
+            TrackMetadata(
+              title: track.title,
+              artistName: track.artistName,
+              albumName: track.albumName,
             ),
-          ),
-          const SizedBox(height: AppSpacing.xl),
-          TrackMetadata(
-            title: track.title,
-            artistName: track.artistName,
-            albumName: track.albumName,
-          ),
-          const SizedBox(height: AppSpacing.lg),
+          SizedBox(height: _showLyrics ? AppSpacing.md : AppSpacing.lg),
           // The only part of the screen that follows the live, high-frequency
-          // playback state — kept separate so the artwork, metadata, and the
-          // blurred background above never rebuild on a position tick.
+          // playback state — kept separate so the stage, metadata, and the
+          // blurred background above never rebuild on a position tick. It stays
+          // exactly where it is in both modes, so play/pause, skip, and seek are
+          // never further away for reading lyrics.
           const _LiveControls(),
           const SizedBox(height: AppSpacing.md),
-          NowPlayingActions(track: track),
+          NowPlayingActions(
+            track: track,
+            lyricsVisible: _showLyrics,
+            onToggleLyrics: () => setState(() => _showLyrics = !_showLyrics),
+          ),
         ],
       ),
+    );
+  }
+}
+
+/// The hero area of Now Playing: the album cover, or the lyrics in its place.
+///
+/// Both fill the same box, so switching modes moves nothing below it. The
+/// crossfade is a single one-shot transition — the only motion here — and is
+/// skipped outright under reduced motion.
+class _Stage extends StatelessWidget {
+  const _Stage({required this.track, required this.showLyrics});
+
+  final Track track;
+  final bool showLyrics;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: MediaQuery.disableAnimationsOf(context)
+          ? Duration.zero
+          : const Duration(milliseconds: 260),
+      child: showLyrics
+          // SizedBox.expand so the lyrics panel takes the whole stage rather
+          // than sizing itself to its (unbounded) scrolling content.
+          ? const SizedBox.expand(
+              key: ValueKey<String>('lyrics-stage'),
+              child: LyricsBackdrop(child: LyricsView()),
+            )
+          : SizedBox.expand(
+              key: const ValueKey<String>('artwork-stage'),
+              child: _ArtworkHero(artworkUri: track.artworkUri),
+            ),
+    );
+  }
+}
+
+/// The album cover, capped and lifted off the backdrop by a soft shadow.
+class _ArtworkHero extends StatelessWidget {
+  const _ArtworkHero({required this.artworkUri});
+
+  final Uri? artworkUri;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: ConstrainedBox(
+        // Cap the hero on tablets/foldables so it stays a square cover, not an
+        // oversized panel; phones use the full width.
+        constraints: const BoxConstraints(maxWidth: 480),
+        child: AspectRatio(
+          aspectRatio: 1,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(AppRadii.lg),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.4),
+                  blurRadius: 40,
+                  spreadRadius: -12,
+                  offset: const Offset(0, 20),
+                ),
+              ],
+            ),
+            child: AlbumArtwork(
+              artworkUri: artworkUri,
+              borderRadius: BorderRadius.circular(AppRadii.lg),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Title and artist on one quiet line, shown in place of the full metadata
+/// block while the lyrics have the stage.
+class _CompactTrackLine extends StatelessWidget {
+  const _CompactTrackLine({required this.title, this.artistName});
+
+  final String title;
+  final String? artistName;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final String? artist = artistName;
+    final bool hasArtist = artist != null && artist.isNotEmpty;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Flexible(
+          child: Text(
+            title,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        if (hasArtist) ...[
+          Text(
+            ' · ',
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+            ),
+          ),
+          Flexible(
+            child: Text(
+              artist,
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

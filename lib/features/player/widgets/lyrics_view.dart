@@ -5,17 +5,20 @@ import '../../../app/dimens.dart';
 import '../../../core/models/lyrics.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../lyrics_providers.dart';
-import '../player_providers.dart';
+import 'lyrics/lyrics_viewport.dart';
 
 /// The lyrics experience shown from Now Playing.
 ///
-/// It follows the *currently playing* track (via [currentTrackLyricsProvider]),
-/// so skipping reloads the lines in place and the previous song's text never
-/// lingers. Three shapes:
+/// A thin orchestrator: it picks which of four shapes to show and hands the work
+/// to a dedicated widget. It follows the *currently playing* track (via
+/// [currentTrackLyricsProvider]), so skipping reloads the lines in place and the
+/// previous song's text never lingers.
+///
 ///  - no lyrics → a calm "No lyrics available yet." placeholder;
-///  - plain lyrics (no timestamps) → a static, readable list, no highlighting;
-///  - timed lyrics → a smooth synced view that highlights the current line and
-///    auto-scrolls as playback moves.
+///  - plain lyrics (no timestamps) → [PlainLyricsViewport], a static readable
+///    column with no highlighting and no invented timings;
+///  - timed lyrics → [SyncedLyricsViewport], which holds the active line near
+///    the middle of the view and fades the lines around it.
 ///
 /// Critically, it only *reads* playback state — opening it never starts or
 /// restarts playback. Because it follows the unified [playbackStateProvider]
@@ -29,196 +32,61 @@ class LyricsView extends ConsumerWidget {
     final AsyncValue<Lyrics?> lyrics = ref.watch(currentTrackLyricsProvider);
 
     return lyrics.when(
-      loading: () => const Padding(
-        padding: EdgeInsets.symmetric(vertical: AppSpacing.xl),
-        child: Center(child: CircularProgressIndicator()),
-      ),
+      loading: () => const Center(child: CircularProgressIndicator()),
       // Never surface raw error text (it can carry transport detail); show one
       // calm, friendly line instead.
-      error: (_, __) => const Padding(
-        padding: EdgeInsets.symmetric(vertical: AppSpacing.lg),
-        child: EmptyState(
-          icon: Icons.lyrics_outlined,
-          title: "Couldn't load lyrics",
-          message: 'Check your connection and try again.',
-        ),
+      error: (_, __) => const _LyricsPlaceholder(
+        title: "Couldn't load lyrics",
+        message: 'Check your connection and try again.',
       ),
-      data: (value) {
+      data: (Lyrics? value) {
         if (value == null || value.isEmpty) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: AppSpacing.lg),
-            child: EmptyState(
-              icon: Icons.lyrics_outlined,
-              title: 'No lyrics available yet.',
-              message: "They'll appear here when your server has them.",
-            ),
+          return const _LyricsPlaceholder(
+            title: 'No lyrics available yet.',
+            message: "They'll appear here when your server has them.",
           );
         }
         return value.isSynced
-            ? _SyncedLyrics(lyrics: value)
-            : _PlainLyrics(lyrics: value);
+            ? SyncedLyricsViewport(lyrics: value)
+            : PlainLyricsViewport(lyrics: value);
       },
     );
   }
 }
 
-/// Static lyrics with no timing: a plain, readable, scrollable list.
-class _PlainLyrics extends StatelessWidget {
-  const _PlainLyrics({required this.lyrics});
+/// The "nothing to show" states, centred in the lyrics panel.
+///
+/// Scrollable rather than fixed: the panel is a fraction of Now Playing rather
+/// than a full sheet, and at a large text scale — or on a short screen — the
+/// placeholder can be taller than the space it is given. Letting it scroll keeps
+/// it fully readable instead of clipping the message off the bottom, while the
+/// minimum height keeps it optically centred whenever it does fit.
+class _LyricsPlaceholder extends StatelessWidget {
+  const _LyricsPlaceholder({required this.title, required this.message});
 
-  final Lyrics lyrics;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    return ListView.builder(
-      key: const Key('plain-lyrics'),
-      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-      itemCount: lyrics.lines.length,
-      itemBuilder: (context, index) {
-        final String text = lyrics.lines[index].text;
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
-          // A blank line keeps its vertical rhythm rather than collapsing.
-          child: Text(
-            text.isEmpty ? ' ' : text,
-            style: theme.textTheme.bodyLarge,
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// Timed lyrics: highlights the line active at the current playback position and
-/// auto-scrolls to keep it centred, with neighbouring lines softly dimmed.
-class _SyncedLyrics extends ConsumerStatefulWidget {
-  const _SyncedLyrics({required this.lyrics});
-
-  final Lyrics lyrics;
-
-  @override
-  ConsumerState<_SyncedLyrics> createState() => _SyncedLyricsState();
-}
-
-class _SyncedLyricsState extends ConsumerState<_SyncedLyrics> {
-  final ScrollController _scroll = ScrollController();
-  List<GlobalKey> _keys = const <GlobalKey>[];
-  int _activeIndex = -1;
-
-  @override
-  void initState() {
-    super.initState();
-    _rebuildKeys();
-  }
-
-  @override
-  void didUpdateWidget(_SyncedLyrics oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // A new track's lyrics: reset keys and the highlight so nothing stale shows.
-    if (widget.lyrics != oldWidget.lyrics) {
-      _rebuildKeys();
-      _activeIndex = -1;
-    }
-  }
-
-  void _rebuildKeys() {
-    _keys = List<GlobalKey>.generate(
-      widget.lyrics.lines.length,
-      (_) => GlobalKey(),
-    );
-  }
-
-  @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  /// The lyric line active at the current playback position.
-  ///
-  /// Battery: the active-line index is computed *inside* the provider
-  /// [select], so this widget rebuilds only when the highlighted line actually
-  /// changes (a handful of times per song) — not on every ~4 Hz position tick.
-  /// The whole synced list (with its per-line [AnimatedDefaultTextStyle]s) would
-  /// otherwise rebuild four times a second for the entire length of a track. The
-  /// per-tick cost is now just one cheap [Lyrics.activeLineIndex] scan with no
-  /// rebuild while the line is unchanged. Falls back to the controller's latest
-  /// position until the first stream event arrives, mirroring the rest of the
-  /// player UI. Reads only — never triggers playback.
-  int _activeLine() {
-    final Lyrics lyrics = widget.lyrics;
-    final Duration fallback =
-        ref.read(playbackControllerProvider).state.position;
-    return ref.watch(
-      playbackStateProvider.select(
-        (s) => lyrics.activeLineIndex(s.valueOrNull?.position ?? fallback),
-      ),
-    );
-  }
+  final String title;
+  final String message;
 
   @override
   Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final int active = _activeLine();
-
-    if (active != _activeIndex) {
-      _activeIndex = active;
-      _scheduleScrollTo(active);
-    }
-
-    return ListView.builder(
-      key: const Key('synced-lyrics'),
-      controller: _scroll,
-      // Generous vertical padding so the first and last lines can sit centred.
-      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xl),
-      itemCount: widget.lyrics.lines.length,
-      itemBuilder: (context, index) {
-        final LyricLine line = widget.lyrics.lines[index];
-        final bool isActive = index == active;
-        final Color color = isActive
-            ? theme.colorScheme.secondary
-            : theme.colorScheme.onSurface.withValues(alpha: 0.4);
-        return Padding(
-          key: _keys[index],
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        return SingleChildScrollView(
           padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            // Tap a timed line to jump there — routed through the controller, so
-            // it seeks whichever output is active (local or cast).
-            onTap: line.start == null
-                ? null
-                : () => ref.read(playbackControllerProvider).seek(line.start!),
-            child: AnimatedDefaultTextStyle(
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeOut,
-              style:
-                  (theme.textTheme.titleMedium ?? const TextStyle()).copyWith(
-                color: color,
-                fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                height: 1.35,
-              ),
-              child: Text(line.text.isEmpty ? ' ' : line.text),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minHeight: constraints.maxHeight.isFinite
+                  ? constraints.maxHeight - AppSpacing.md
+                  : 0,
+            ),
+            child: EmptyState(
+              icon: Icons.lyrics_outlined,
+              title: title,
+              message: message,
             ),
           ),
         );
       },
     );
-  }
-
-  /// Smoothly centres the active line. Guarded so it only runs once per change
-  /// and only while the line is laid out.
-  void _scheduleScrollTo(int index) {
-    if (index < 0 || index >= _keys.length) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final BuildContext? ctx = _keys[index].currentContext;
-      if (ctx == null) return;
-      Scrollable.ensureVisible(
-        ctx,
-        alignment: 0.5,
-        duration: const Duration(milliseconds: 360),
-        curve: Curves.easeInOut,
-      );
-    });
   }
 }
