@@ -1,19 +1,22 @@
 # Contributing to Linthra
 
 Hey — thanks for being here. Linthra is a self-hosted Android music player, and
-it's early alpha, which is honestly the best time to get involved: small changes
-land fast and genuinely shape where the project goes.
+this is a great time to get involved. Small changes can still shape the project
+in a real way.
 
 **You do not need to know Dart or Flutter to contribute to Linthra.** Testing the
-app against your own server, improving docs, or working in one of the native /
-tooling areas are all real contributions. If you're not sure where to start, the
-[contributor roadmap](./docs/contributor-roadmap.md) lays out where help matters
-most right now.
+app, improving docs, reporting bugs, or working in one of the native/tooling
+areas are all real contributions.
+
+If you're not sure where to start, check the
+[issue tracker](https://github.com/TheZupZup/Linthra/issues). Issues tagged
+**`good first issue`** are intentionally kept approachable, and **`help wanted`**
+shows where an extra pair of hands would help most.
 
 ## Pick the language you know
 
 Linthra uses different languages where they have a real technical job. Pick the
-part that matches what you already know:
+area that matches what you already know:
 
 | Language | Good place to contribute |
 | --- | --- |
@@ -24,133 +27,108 @@ part that matches what you already know:
 | **Python** | releases, developer tooling, fixtures, benchmarks, validation |
 | **SQL** | SQLite indexes/query plans and very-large-library performance |
 
-The detailed map, constraints, and suggested contribution areas are in
-[Contributing by language](./docs/language-areas.md). A language is never added
-just to make the GitHub language bar more colourful — every area needs a real
-owner, useful tests/benchmarks, and a small boundary to the rest of the app.
+The detailed map and boundaries are in
+[Contributing by language](./docs/language-areas.md). A language should only be
+used when it has a real technical role in the project.
 
 ## Setting up the project
 
-Linthra is a standard Flutter app with a committed Android scaffold, so there's
-no `flutter create` step. For Dart/Flutter/Android work, in most environments you
-only need two commands:
+For Dart/Flutter/Android work, the normal setup is:
 
 ```bash
-./scripts/setup_flutter.sh    # installs the pinned Flutter (no sudo, cached locally)
-./scripts/verify_android.sh   # runs the same checks CI runs
+./scripts/setup_flutter.sh
+./scripts/verify_android.sh
 ```
 
-`setup_flutter.sh` reuses a matching Flutter if you already have one, or
-downloads the pinned version into the git-ignored `.tool/flutter`.
-`verify_android.sh` runs `flutter pub get`, `dart format`, `flutter analyze`,
-`flutter test`, and an APK build (only if an Android SDK is present). Full
-details, troubleshooting, and the manual path are in
-[docs/development.md](./docs/development.md).
+`setup_flutter.sh` installs or reuses the pinned Flutter version without sudo.
+`verify_android.sh` runs the main Flutter checks and can build a debug APK when
+an Android SDK is available.
 
-Native/tooling areas have their own small commands and CI. In particular,
-`native/linthra_core/` uses Cargo, `native/linthra_audio/` uses CMake, and
-`tools/large_library/` uses only Python's standard library plus SQLite.
+Full setup details and troubleshooting are in
+[docs/development.md](./docs/development.md). The
+[codebase tour](./docs/codebase-tour.md) is useful if you want a map of where
+features live before changing anything.
 
-## Finding your way around the code
+Native/tooling areas have their own focused commands and CI:
 
-When you're ready to dig in, the [codebase tour](./docs/codebase-tour.md) is a
-map of where each feature lives — playback, Cast, the Jellyfin/Subsonic
-providers, downloads, diagnostics, settings — and how they're wired together.
-[docs/architecture.md](./docs/architecture.md) covers the layering and the
-extension points behind it.
+- `native/linthra_core/` uses Cargo.
+- `native/linthra_audio/` uses CMake.
+- `tools/large_library/` contains Python/SQLite tooling for large-library work.
 
 ## Picking something to work on
 
-- Browse the [issue tracker](https://github.com/thezupzup/linthra/issues).
-  Issues tagged **`good first issue`** are scoped to be approachable, and
-  **`help wanted`** flags where an extra pair of hands would help most.
-- Comment on an issue before you start so we don't double up.
-- Opening a small PR for something not yet tracked is fine too — just explain
-  what and why in the description.
-
-### Good first contributions
-
-A few that don't go too deep into the codebase:
-
-- Test Linthra against your **Jellyfin** or **Navidrome / Subsonic** server and
-  file a compatibility report.
-- Try **Cast** or **Android Auto** on real hardware and tell us what happened.
-- Capture **screenshots** of a running build for the README and store listing.
-- Improve a doc — fix a step that tripped you up, add a setup gotcha.
-- Add or improve **accessibility labels** so screen readers announce controls
-  clearly.
-- Polish an **empty state** so a blank screen explains what to do next.
-- **Rust:** improve large-library normalization/search tests or benchmark memory.
-- **C++:** add DSP response tests or improve realtime benchmark coverage.
-- **Python / SQL:** add a representative 200k-track query and prove its index
-  with `EXPLAIN QUERY PLAN`.
+- Comment on an issue before starting so two people don't unknowingly do the
+  same work.
+- Keep independent problems in separate issues when they can be fixed
+  separately. It makes them easier to understand, review, assign, and close.
+- If several problems are really one bug or one flow, one issue with a short
+  checklist is fine.
+- Opening a small PR for something not yet tracked is okay too — just explain
+  what changed and why.
 
 ## Pull requests
 
 - **Keep PRs small and focused.** One change per PR is much easier to review and
   merge than a big bundle.
-- **Write a clear description** — what changed and why. Link the issue it closes.
-- **Add tests when it makes sense** — bug fixes and new logic especially.
-- **No unrelated changes.** Resist the urge to reformat or refactor nearby code
-  in the same PR; open a separate one if it's worth doing.
-- Run the relevant verification command before pushing. Flutter CI runs
-  `dart format --set-exit-if-changed`; native/tooling areas have focused CI in
-  `.github/workflows/`.
+- **Write a clear description** with what changed and why. Link the issue it
+  closes when there is one.
+- **Add tests when it makes sense**, especially for bug fixes and new logic.
+- **No unrelated changes.** Don't reformat or refactor nearby code unless it is
+  part of the same job.
+- Run the relevant verification command before pushing.
 
 ## Code style
 
-Nothing exotic here — just code that's easy to read and easy to maintain:
+Nothing exotic — just code that's easy to read and maintain:
 
-- **Readable over clever.** Clear names and straightforward control flow beat a
-  one-liner that needs a comment to decode.
-- **Modular.** Keep files and functions focused; split things up before they
-  grow into a single huge file.
-- **No premature abstraction.** Don't add a layer or a generic helper until
-  there's a real second use for it. Three similar lines are fine.
-- **Comment the why, not the what.** Most code shouldn't need a comment; when it
-  does, explain the non-obvious reason.
+- **Readable over clever.** Clear names and straightforward control flow win.
+- **Modular.** Keep files and functions focused.
+- **No premature abstraction.** Add a shared layer when there is a real reason
+  for it, not just because two lines look similar.
+- **Comment the why, not the what.** Explain non-obvious decisions rather than
+  narrating obvious code.
 
 ## Privacy & security
 
-Respecting the people who run Linthra is a core part of the project, so a few
-rules are non-negotiable in any contribution:
+A few rules are non-negotiable:
 
-- **Never log tokens, passwords, or secrets.** Linthra's own log lines are
-  secret-free by design — keep them that way.
-- **Don't persist authenticated URLs.** Stream URLs are minted on demand and
-  must not be written to disk, logs, or diagnostics.
-- **Keep credentials encrypted at rest.** A server password is used once to get
-  a token, then discarded; the token is encrypted and never displayed.
-- **No telemetry, no phoning home.** Nothing should leave the device unless the
+- **Never log tokens, passwords, or secrets.**
+- **Don't persist authenticated URLs.** Stream URLs must not end up in logs,
+  diagnostics, or long-term storage.
+- **Keep credentials encrypted at rest.**
+- **No telemetry or phoning home.** Nothing should leave the device unless the
   user explicitly chooses it.
 
-If a change touches auth, streaming, or diagnostics, call out the security
-implications in your PR description so they're easy to review.
+If a change touches authentication, streaming, diagnostics, or stored
+credentials, mention the security impact in the PR description so it is easy to
+review.
 
-## Testing on Android
+## Testing
 
-Some behaviour only shows up on real hardware. If your change touches any of
-these, please test on a device and note what you checked:
+Some behaviour only shows up properly on a real phone, server, Cast receiver, or
+Android Auto setup. If your PR touches one of those areas and you can test it on
+real hardware, please say what you tested in the PR.
 
-- **Jellyfin / Navidrome** — connect, sync, stream; confirm no secrets appear
-  on screen or in logs.
-- **Offline cache** — downloads stay user-initiated and Wi-Fi-only by default;
-  pinned ("Keep offline") tracks aren't evicted.
-- **Cast** — discovery, connect/disconnect, playback, volume; watch for
-  duplicate local + Cast playback.
-- **Android Auto** — sideloaded builds only appear after enabling Android Auto's
-  developer **"Unknown sources"** toggle (see
-  [docs/android-auto.md](./docs/android-auto.md)); check browsing and playback.
+The [manual QA checklist](./docs/manual-test-checklist.md) covers the important
+paths. For bug reports, **Settings → Report a bug** can build a secret-free
+report you can review before opening an issue.
 
-The [manual QA checklist](./docs/manual-test-checklist.md) walks through the
-paths that matter most on a real phone.
+## Supporting contributors
 
-## Reporting bugs
+Linthra is open source and contributions are currently voluntary, but I don't
+want the project to grow while pretending the people helping build it don't
+matter.
 
-The friendliest way is right in the app: **Settings → Report a bug** builds a
-secret-free report locally (versions, connection state, host, counts — no
-tokens or passwords), which you can review and then open as a prefilled GitHub
-issue. Details in [docs/reporting-bugs.md](./docs/reporting-bugs.md).
+If Linthra eventually receives enough recurring donations or sponsorships to
+make it sustainable, I plan to create a public contributor sponsorship program
+and share part of that funding with people who meaningfully help the project.
+
+The exact system would be designed transparently when we actually reach that
+point, because I want it to stay fair and sustainable for everyone.
+
+For now I can't promise payment for a contribution, but if Linthra becomes
+financially successful, my goal is not to keep all of that support for myself
+while other people are helping build it.
 
 ## License
 
