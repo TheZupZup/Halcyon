@@ -23,14 +23,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Pinned to a 3.27.x (Dart 3.6.x) stable release for reproducible runs.
-      # Keep this in sync with the SDK constraint in pubspec.yaml; bumping it
-      # may require reformatting with the newer `dart format`.
+      # Pinned to the current Flutter 3.44.x stable line (Dart 3.12.x) for
+      # reproducible runs. Keep this in sync with .flutter-version and the SDK
+      # constraint in pubspec.yaml; bumping it may require reformatting with the
+      # newer `dart format`.
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.27.4
+          flutter-version: 3.44.7
           cache: true
 
       # --enforce-lockfile makes `pub get` FAIL instead of silently rewriting
