@@ -99,9 +99,9 @@ void main() {
     }
 
     FilledButton? syncButton(WidgetTester tester) {
-      // FilledButton.tonalIcon builds a private FilledButton subclass, so match
-      // on the supertype rather than an exact runtimeType.
-      final Finder finder = find.byWidgetPredicate((w) => w is FilledButton);
+      // FilledButton.tonalIcon builds a plain FilledButton (the icon lives in
+      // its child), so an exact-type match finds it.
+      final Finder finder = find.byType(FilledButton);
       if (finder.evaluate().isEmpty) return null;
       return tester.widget<FilledButton>(finder);
     }
@@ -116,7 +116,7 @@ void main() {
       );
 
       expect(find.text('Never synced'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'Sync library'), findsNothing);
+      expect(find.widgetWithText(FilledButton, 'Sync library'), findsOneWidget);
       expect(find.text('Sync library'), findsOneWidget);
       expect(syncButton(tester)?.onPressed, isNotNull);
     });

@@ -580,12 +580,15 @@ void main() {
       await _openLyrics(tester);
 
       // Emphasis must not be colour-only: the active line is announced as
-      // selected, and every timed line as something you can act on.
+      // selected, and every timed line as something you can act on. Every timed
+      // line carries selected *state* — the set behaves like a tab bar, so a
+      // screen reader can tell "not the current line" from "not selectable".
       expect(
         tester.getSemantics(find.text('line two')),
         matchesSemantics(
           label: 'line two',
           hint: 'Play from this line',
+          hasSelectedState: true,
           isSelected: true,
           isButton: true,
           isFocusable: true,
@@ -598,6 +601,7 @@ void main() {
         matchesSemantics(
           label: 'line three',
           hint: 'Play from this line',
+          hasSelectedState: true,
           isButton: true,
           isFocusable: true,
           hasTapAction: true,

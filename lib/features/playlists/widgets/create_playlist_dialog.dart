@@ -189,23 +189,28 @@ class _PlaylistEditDialogState extends State<_PlaylistEditDialog> {
           style: Theme.of(context).textTheme.labelLarge,
         ),
       ),
-      RadioListTile<PlaylistSource>(
-        contentPadding: EdgeInsets.zero,
-        value: PlaylistSource.local,
+      RadioGroup<PlaylistSource>(
         groupValue: _target,
-        onChanged: (PlaylistSource? value) =>
-            setState(() => _target = value ?? PlaylistSource.local),
-        title: const Text('On this device only'),
-      ),
-      for (final PlaylistSyncTarget target in targets)
-        RadioListTile<PlaylistSource>(
-          contentPadding: EdgeInsets.zero,
-          value: target.source,
-          groupValue: _target,
-          onChanged: (PlaylistSource? value) =>
-              setState(() => _target = value ?? PlaylistSource.local),
-          title: Text(target.label),
+        onChanged: (PlaylistSource? value) => setState(
+          () => _target = value ?? PlaylistSource.local,
         ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const RadioListTile<PlaylistSource>(
+              contentPadding: EdgeInsets.zero,
+              value: PlaylistSource.local,
+              title: Text('On this device only'),
+            ),
+            for (final PlaylistSyncTarget target in targets)
+              RadioListTile<PlaylistSource>(
+                contentPadding: EdgeInsets.zero,
+                value: target.source,
+                title: Text(target.label),
+              ),
+          ],
+        ),
+      ),
     ];
   }
 }
