@@ -76,7 +76,7 @@ Linthra is a Flutter (Dart) application targeting Android.
 | Flutter version (pinned in CI) | **3.44.7**, `stable` channel — pinned identically in `ci.yml`, `android-release-build.yml`, and `generate-drift.yml`. The F-Droid recipe's `srclibs`/`sudo`-installed Flutter (or `flutter` build plugin) should target the same version. |
 | Dart SDK constraint | `>=3.6.0 <4.0.0` (`pubspec.yaml`), satisfied by Flutter 3.44.7 (Dart 3.12.2). |
 | Java / JDK | **JDK 21** (Temurin in CI) — matches F-Droid's build servers; the Gradle wrapper and AGP below support it (JDK 17 also works). |
-| Gradle | **8.7**, declared in `android/gradle/wrapper/gradle-wrapper.properties` (`gradle-8.7-all.zip`). |
+| Gradle | **8.14.5**, declared in `android/gradle/wrapper/gradle-wrapper.properties` (`gradle-8.14.5-all.zip`). |
 | Android Gradle Plugin | **8.10.1**, declared in `android/settings.gradle`. |
 | Kotlin Gradle plugin | **2.2.21**, declared in `android/settings.gradle`. |
 | Android SDK | `compileSdk`, `minSdk`, `targetSdk`, `versionCode`, and `versionName` all come from Flutter (`flutter.*` in `android/app/build.gradle`); they follow the pinned Flutter version rather than being hard-coded. |
