@@ -124,7 +124,8 @@ void main() {
       handle.dispose();
     });
 
-    testWidgets('Next/Previous buttons expose correct semantics', (tester) async {
+    testWidgets('Next/Previous buttons expose correct semantics',
+        (tester) async {
       final SemanticsHandle handle = tester.ensureSemantics();
 
       // Case 1: Enabled
