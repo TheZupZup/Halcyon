@@ -164,6 +164,8 @@ class _PrecacheCountDialog extends StatefulWidget {
   State<_PrecacheCountDialog> createState() => _PrecacheCountDialogState();
 }
 
+enum _PrecacheChoice { custom }
+
 class _PrecacheCountDialogState extends State<_PrecacheCountDialog> {
   late bool _custom;
   late int _selectedPreset;
@@ -195,49 +197,59 @@ class _PrecacheCountDialogState extends State<_PrecacheCountDialog> {
     return sanitizePrecacheCount(typed);
   }
 
+  Object get _selectedChoice => _custom ? _PrecacheChoice.custom : _selectedPreset;
+
+  void _choose(Object? value) {
+    setState(() {
+      if (value == _PrecacheChoice.custom) {
+        _custom = true;
+      } else if (value is int) {
+        _custom = false;
+        _selectedPreset = value;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Songs to pre-cache'),
       content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (final int preset in kPrecacheCountOptions)
-              RadioListTile<int>(
+        child: RadioGroup<Object>(
+          groupValue: _selectedChoice,
+          onChanged: _choose,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final int preset in kPrecacheCountOptions)
+                RadioListTile<Object>(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text('$preset'),
+                  value: preset,
+                ),
+              const RadioListTile<Object>(
                 contentPadding: EdgeInsets.zero,
-                title: Text('$preset'),
-                value: preset,
-                groupValue: _custom ? null : _selectedPreset,
-                onChanged: (value) => setState(() {
-                  _custom = false;
-                  if (value != null) _selectedPreset = value;
-                }),
+                title: Text('Custom'),
+                value: _PrecacheChoice.custom,
               ),
-            RadioListTile<bool>(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Custom'),
-              value: true,
-              groupValue: _custom,
-              onChanged: (_) => setState(() => _custom = true),
-            ),
-            if (_custom)
-              Padding(
-                padding: const EdgeInsets.only(left: AppSpacing.md),
-                child: TextField(
-                  controller: _customController,
-                  autofocus: true,
-                  keyboardType: TextInputType.number,
-                  onChanged: (_) => setState(() {}),
-                  decoration: const InputDecoration(
-                    labelText: 'Songs',
-                    helperText:
-                        'Between $kMinPrecacheCount and $kMaxPrecacheCount',
+              if (_custom)
+                Padding(
+                  padding: const EdgeInsets.only(left: AppSpacing.md),
+                  child: TextField(
+                    controller: _customController,
+                    autofocus: true,
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'Songs',
+                      helperText:
+                          'Between $kMinPrecacheCount and $kMaxPrecacheCount',
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
       actions: [
