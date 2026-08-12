@@ -89,16 +89,23 @@ class DefaultProviderSettingsSection extends ConsumerWidget {
               style: theme.textTheme.bodySmall?.copyWith(color: muted),
             ),
             const SizedBox(height: AppSpacing.xs),
-            for (final _SourceOption option in options)
-              RadioListTile<String?>(
-                contentPadding: EdgeInsets.zero,
-                value: option.id,
-                groupValue: selected,
-                onChanged: (value) => choose(value),
-                title: Text(option.title),
-                subtitle:
-                    option.subtitle == null ? null : Text(option.subtitle!),
+            RadioGroup<String?>(
+              groupValue: selected,
+              onChanged: choose,
+              child: Column(
+                children: [
+                  for (final _SourceOption option in options)
+                    RadioListTile<String?>(
+                      contentPadding: EdgeInsets.zero,
+                      value: option.id,
+                      title: Text(option.title),
+                      subtitle: option.subtitle == null
+                          ? null
+                          : Text(option.subtitle!),
+                    ),
+                ],
               ),
+            ),
           ],
         ),
       ),
