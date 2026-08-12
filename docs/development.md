@@ -10,7 +10,7 @@ focused on the cross-platform Dart code.
 
 ## Required Flutter version
 
-This project is pinned to **Flutter 3.27.4 (stable)**. The version lives in one
+This project is pinned to **Flutter 3.44.7 (stable)**. The version lives in one
 obvious place — the [`.flutter-version`](../.flutter-version) file at the repo
 root — and the CI workflows pin the same value. Keep them in sync to avoid
 spurious `dart format` diffs from formatter changes in newer Dart releases.
@@ -92,7 +92,7 @@ toolchain is installed per-environment:
 - **Dart/Flutter caches and build output** — `.dart_tool/`, `build/`, etc.
 
 CI installs Flutter via the `subosito/flutter-action` GitHub Action rather than
-these scripts, but pins the **same** `3.27.4`. The scripts exist for local and
+these scripts, but pins the **same** `3.44.7`. The scripts exist for local and
 remote-agent environments where that Action isn't running; both paths produce
 the same checks. APK builds (CI's separate workflows, or the local
 `flutter build apk`) require an Android SDK; `flutter analyze` and `flutter test`
@@ -122,7 +122,7 @@ do not.
 
 You need a working Android SDK (`ANDROID_HOME` / `ANDROID_SDK_ROOT` set) and a
 JDK that matches the bundled Gradle wrapper — **JDK 21** is the safe choice for
-the Gradle 8.7 / Android Gradle Plugin 8.2.1 the scaffold ships with (JDK 17
+the Gradle 8.14.5 / Android Gradle Plugin 8.10.1 the project pins (JDK 17
 also works). Run
 `flutter doctor` to confirm your toolchain.
 
@@ -224,7 +224,7 @@ flutter analyze                      # static analysis + lints
 flutter test                         # widget/unit tests
 ```
 
-CI pins **Flutter 3.27.x (stable)** for reproducible results; using a matching
+CI pins **Flutter 3.44.x (stable)** for reproducible results; using a matching
 SDK locally avoids spurious `dart format` diffs from formatter changes in newer
 Dart releases. The automatic `ci.yml` workflow is **code-quality only**; native
 builds and optional release signing live in separate workflows.
