@@ -125,11 +125,7 @@ class QueueSheet extends ConsumerWidget {
                         else
                           SliverReorderableList(
                             itemCount: upNext.length,
-                            onReorder: (int oldIndex, int newIndex) {
-                              // SliverReorderableList reports newIndex as an
-                              // insertion point in the pre-removal list; convert
-                              // to the destination index the queue model expects.
-                              if (oldIndex < newIndex) newIndex -= 1;
+                            onReorderItem: (int oldIndex, int newIndex) {
                               ref
                                   .read(playbackControllerProvider)
                                   .reorderQueue(oldIndex, newIndex);
