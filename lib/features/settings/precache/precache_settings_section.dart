@@ -197,7 +197,8 @@ class _PrecacheCountDialogState extends State<_PrecacheCountDialog> {
     return sanitizePrecacheCount(typed);
   }
 
-  Object get _selectedChoice => _custom ? _PrecacheChoice.custom : _selectedPreset;
+  Object get _selectedChoice =>
+      _custom ? _PrecacheChoice.custom : _selectedPreset;
 
   void _choose(Object? value) {
     setState(() {
