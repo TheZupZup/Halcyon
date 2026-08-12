@@ -151,6 +151,8 @@ class _CacheLimitDialog extends StatefulWidget {
   State<_CacheLimitDialog> createState() => _CacheLimitDialogState();
 }
 
+enum _CacheLimitChoice { custom }
+
 class _CacheLimitDialogState extends State<_CacheLimitDialog> {
   late bool _custom;
   late final TextEditingController _customController;
@@ -183,49 +185,60 @@ class _CacheLimitDialogState extends State<_CacheLimitDialog> {
     return CacheSize.clamp(CacheSize.gigabytes(gb));
   }
 
+  Object get _selectedChoice =>
+      _custom ? _CacheLimitChoice.custom : _selectedPreset;
+
+  void _choose(Object? value) {
+    setState(() {
+      if (value == _CacheLimitChoice.custom) {
+        _custom = true;
+      } else if (value is int) {
+        _custom = false;
+        _selectedPreset = value;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Maximum cache size'),
       content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (final int preset in CacheSize.presets)
-              RadioListTile<int>(
+        child: RadioGroup<Object>(
+          groupValue: _selectedChoice,
+          onChanged: _choose,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final int preset in CacheSize.presets)
+                RadioListTile<Object>(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(CacheSize.formatBytes(preset)),
+                  value: preset,
+                ),
+              const RadioListTile<Object>(
                 contentPadding: EdgeInsets.zero,
-                title: Text(CacheSize.formatBytes(preset)),
-                value: preset,
-                groupValue: _custom ? null : _selectedPreset,
-                onChanged: (value) => setState(() {
-                  _custom = false;
-                  if (value != null) _selectedPreset = value;
-                }),
+                title: Text('Custom'),
+                value: _CacheLimitChoice.custom,
               ),
-            RadioListTile<bool>(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Custom'),
-              value: true,
-              groupValue: _custom,
-              onChanged: (_) => setState(() => _custom = true),
-            ),
-            if (_custom)
-              Padding(
-                padding: const EdgeInsets.only(left: AppSpacing.md),
-                child: TextField(
-                  controller: _customController,
-                  autofocus: true,
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                  onChanged: (_) => setState(() {}),
-                  decoration: const InputDecoration(
-                    labelText: 'Size',
-                    suffixText: 'GB',
+              if (_custom)
+                Padding(
+                  padding: const EdgeInsets.only(left: AppSpacing.md),
+                  child: TextField(
+                    controller: _customController,
+                    autofocus: true,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (_) => setState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'Size',
+                      suffixText: 'GB',
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
       actions: [
