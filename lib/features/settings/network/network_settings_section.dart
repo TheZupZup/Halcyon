@@ -135,22 +135,24 @@ class _MobileDataProfileDialog extends StatelessWidget {
     return AlertDialog(
       title: const Text('Mobile data usage'),
       content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final MobileDataProfile profile in MobileDataProfile.values)
-              RadioListTile<MobileDataProfile>(
-                contentPadding: EdgeInsets.zero,
-                value: profile,
-                groupValue: selected,
-                secondary: Icon(profile.icon),
-                title: Text(profile.label),
-                subtitle: Text(profile.description),
-                onChanged: (MobileDataProfile? value) {
-                  if (value != null) Navigator.of(context).pop(value);
-                },
-              ),
-          ],
+        child: RadioGroup<MobileDataProfile>(
+          groupValue: selected,
+          onChanged: (MobileDataProfile? value) {
+            if (value != null) Navigator.of(context).pop(value);
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final MobileDataProfile profile in MobileDataProfile.values)
+                RadioListTile<MobileDataProfile>(
+                  contentPadding: EdgeInsets.zero,
+                  value: profile,
+                  secondary: Icon(profile.icon),
+                  title: Text(profile.label),
+                  subtitle: Text(profile.description),
+                ),
+            ],
+          ),
         ),
       ),
       actions: [
