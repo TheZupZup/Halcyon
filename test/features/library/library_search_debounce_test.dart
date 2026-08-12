@@ -232,5 +232,101 @@ void main() {
       // No assertion needed: reaching this line without a Flutter error proves
       // that dispose() successfully cancelled the timer.
     });
+
+    // -----------------------------------------------------------------------
+    // 7. Clear cancels a pending debounce (regression for reviewer edge case)
+    // -----------------------------------------------------------------------
+    testWidgets(
+        'tapping Clear while a debounce is pending prevents the old query '
+        'from being restored', (tester) async {
+      await _pumpScreen(tester);
+
+      final Finder field = find.byKey(const Key('library_search_field'));
+      final Finder clearButton = find.byKey(const Key('library_search_clear'));
+
+      // First, let a query settle so the clear button (X) is visible — the X
+      // only renders after LibrarySearchField rebuilds with controller.text
+      // non-empty, which happens when the parent setState fires (debounce).
+      await tester.enterText(field, 'Levitating');
+      await tester.pump(_afterDebounce); // debounce fires → X button appears
+      expect(clearButton, findsOneWidget);
+
+      // Now type again immediately — this restarts the 300ms timer.
+      // The field text is still non-empty so the X remains visible.
+      await tester.enterText(field, 'Blinding');
+      await tester.pump(_beforeDebounce); // 100ms — timer still pending
+
+      // The new debounce has not fired yet, so the active query is still 'Levitating'.
+      // Therefore, Levitating (Dua) is visible, and Blinding Lights is hidden.
+      expect(find.text('Dua'), findsOneWidget);
+      expect(find.text('Blinding Lights'), findsNothing,
+          reason: 'filter has not updated to Blinding yet at 100ms');
+
+      // User taps Clear before the 300ms window closes.
+      await tester.tap(clearButton);
+      await tester.pump(); // settle the clear's immediate setState
+
+      // Clear must have taken effect immediately.
+      expect(find.text('Dua'), findsOneWidget);
+      expect(find.text('Blinding Lights'), findsOneWidget,
+          reason: 'clear is immediate — both tracks visible right away');
+
+      // Advance well past 300ms. The cancelled timer must NOT fire and must NOT
+      // write 'Blinding' back into _query, which would re-filter the list.
+      await tester.pump(_debounce + const Duration(milliseconds: 100));
+
+      expect(find.text('Dua'), findsOneWidget,
+          reason: 'Levitating tile still present — query was not restored');
+      expect(
+        find.text('Blinding Lights'),
+        findsOneWidget,
+        reason:
+            'Blinding Lights still visible — pending debounce did not restore '
+            'the stale query after Clear',
+      );
+    });
+
+    // -----------------------------------------------------------------------
+    // 8. Tab change cancels a pending debounce (regression for reviewer edge case)
+    // -----------------------------------------------------------------------
+    testWidgets(
+        'switching tabs while a debounce is pending prevents the old query '
+        'from being applied after the tab change', (tester) async {
+      await _pumpScreen(tester);
+
+      // Type a query that would filter out Blinding Lights — starts the timer.
+      await tester.enterText(
+        find.byKey(const Key('library_search_field')),
+        'Levitating',
+      );
+
+      // Advance 100ms: timer pending, filter has NOT yet run.
+      await tester.pump(_beforeDebounce);
+      expect(find.text('Blinding Lights'), findsOneWidget,
+          reason: 'filter has not run yet at 100ms');
+
+      // Switch to the Albums tab (index 1). This must cancel the pending timer
+      // AND clear the query so the stale 'Levitating' filter cannot re-apply.
+      await tester.tap(find.text('Albums'));
+      await tester.pumpAndSettle();
+
+      // Advance the clock well past 300ms. The cancelled timer must NOT fire.
+      await tester.pump(_debounce + const Duration(milliseconds: 100));
+
+      // Switch back to Songs to confirm the query was cleared, not just hidden.
+      await tester.tap(find.text('Songs'));
+      await tester.pumpAndSettle();
+
+      // Both tracks must be visible — the cancelled timer must not have written
+      // 'Levitating' into _query at any point during or after the tab change.
+      expect(find.text('Dua'), findsOneWidget,
+          reason: 'Levitating tile present — no stale filter applied');
+      expect(
+        find.text('Blinding Lights'),
+        findsOneWidget,
+        reason:
+            'Blinding Lights visible — tab change cancelled the pending debounce',
+      );
+    });
   });
 }

@@ -81,6 +81,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// when entering/leaving Folders, where the catalog search field is hidden.
   void _onTabChanged() {
     if (_tabController.index == _lastTabIndex) return;
+    _debounce?.cancel();
     setState(() {
       _lastTabIndex = _tabController.index;
       if (_query.isNotEmpty) {
@@ -99,6 +100,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   }
 
   void _clearSearch() {
+    _debounce?.cancel();
     setState(() {
       _query = '';
       _searchController.clear();
