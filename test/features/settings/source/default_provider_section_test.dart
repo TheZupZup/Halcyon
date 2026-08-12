@@ -83,12 +83,10 @@ void main() {
       final container = await pump(tester, initial: 'subsonic');
 
       expect(container.read(defaultProviderControllerProvider), 'subsonic');
-      final RadioListTile<String?> tile = tester.widget(
-        find.byWidgetPredicate(
-          (Widget w) => w is RadioListTile<String?> && w.value == 'subsonic',
-        ),
+      final RadioGroup<String?> group = tester.widget(
+        find.byWidgetPredicate((Widget w) => w is RadioGroup<String?>),
       );
-      expect(tile.groupValue, 'subsonic');
+      expect(group.groupValue, 'subsonic');
     });
   });
 }
