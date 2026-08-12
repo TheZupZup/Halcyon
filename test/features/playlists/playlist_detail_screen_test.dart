@@ -17,6 +17,7 @@ import '../player/fake_playback_controller.dart';
 const List<Track> _tracks = <Track>[
   Track(id: 'a', title: 'Song A', uri: 'file:///a.mp3'),
   Track(id: 'b', title: 'Song B', uri: 'file:///b.mp3'),
+  Track(id: 'c', title: 'Song C', uri: 'file:///c.mp3'),
 ];
 
 GoRouter _router() {
@@ -54,15 +55,37 @@ Future<void> _pump(
   await tester.pumpAndSettle();
 }
 
-Future<InMemoryPlaylistStore> _seededStore() async {
+Future<InMemoryPlaylistStore> _seededStore({
+  List<String> trackIds = const <String>['file:///a.mp3', 'file:///b.mp3'],
+}) async {
   final InMemoryPlaylistStore store = InMemoryPlaylistStore();
   await store.save(<Playlist>[
-    const Playlist(
-        id: 'p1',
-        name: 'Road Trip',
-        trackIds: <String>['file:///a.mp3', 'file:///b.mp3']),
+    Playlist(id: 'p1', name: 'Road Trip', trackIds: trackIds),
   ]);
   return store;
+}
+
+/// Drags the track row at [from] by its handle past the end of the list.
+///
+/// Overshoots deliberately — the drop index clamps to the last slot — so the
+/// gesture reads as "drag it to the bottom" and does not depend on row metrics.
+Future<void> _dragToEnd(WidgetTester tester, {required int from}) async {
+  final Finder handles = find.byIcon(Icons.drag_handle);
+  final int rows = handles.evaluate().length;
+  final double rowHeight =
+      tester.getCenter(handles.at(1)).dy - tester.getCenter(handles.at(0)).dy;
+  final double travel = rowHeight * (rows + 1);
+  final TestGesture gesture =
+      await tester.startGesture(tester.getCenter(handles.at(from)));
+  // Start moving promptly. Holding still past the long-press timeout hands the
+  // gesture to the row's selection-mode recognizer, and the drag never happens.
+  await tester.pump(const Duration(milliseconds: 16));
+  await gesture.moveBy(Offset(0, travel / 2));
+  await tester.pump(const Duration(milliseconds: 16));
+  await gesture.moveBy(Offset(0, travel / 2));
+  await tester.pumpAndSettle();
+  await gesture.up();
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -75,6 +98,26 @@ void main() {
     expect(find.text('Road Trip'), findsOneWidget);
     expect(find.text('Song A'), findsOneWidget);
     expect(find.text('Song B'), findsOneWidget);
+  });
+
+  testWidgets('dragging a track to the end persists the new order',
+      (tester) async {
+    final InMemoryPlaylistStore store = await _seededStore(
+      trackIds: <String>['file:///a.mp3', 'file:///b.mp3', 'file:///c.mp3'],
+    );
+    await _pump(tester, store: store, controller: FakePlaybackController());
+
+    // The screen converts between the reorder callback's destination index and
+    // the pre-removal index the repository normalises from. The two conversions
+    // cancel out, so only an end-to-end drag proves the pair is still in step:
+    // dropping either one silently files the track one slot off.
+    await _dragToEnd(tester, from: 0);
+
+    final List<Playlist> saved = await store.load();
+    expect(
+      saved.single.trackIds,
+      <String>['file:///b.mp3', 'file:///c.mp3', 'file:///a.mp3'],
+    );
   });
 
   testWidgets('Play queues the playlist and opens the player', (tester) async {

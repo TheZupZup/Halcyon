@@ -54,16 +54,22 @@ class PlaybackSourceStrategySettingsSection extends ConsumerWidget {
               style: theme.textTheme.bodySmall?.copyWith(color: muted),
             ),
             const SizedBox(height: AppSpacing.xs),
-            for (final PlaybackSourceStrategy strategy
-                in PlaybackSourceStrategy.values)
-              RadioListTile<PlaybackSourceStrategy>(
-                contentPadding: EdgeInsets.zero,
-                value: strategy,
-                groupValue: selected,
-                onChanged: choose,
-                title: Text(strategy.label),
-                subtitle: Text(strategy.description),
+            RadioGroup<PlaybackSourceStrategy>(
+              groupValue: selected,
+              onChanged: choose,
+              child: Column(
+                children: [
+                  for (final PlaybackSourceStrategy strategy
+                      in PlaybackSourceStrategy.values)
+                    RadioListTile<PlaybackSourceStrategy>(
+                      contentPadding: EdgeInsets.zero,
+                      value: strategy,
+                      title: Text(strategy.label),
+                      subtitle: Text(strategy.description),
+                    ),
+                ],
               ),
+            ),
           ],
         ),
       ),

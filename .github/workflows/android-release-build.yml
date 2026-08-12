@@ -267,16 +267,16 @@ jobs:
           java -version
           echo "JAVA_HOME=$JAVA_HOME"
 
-      # Keep this Flutter version in sync with .github/workflows/ci.yml.
+      # Keep this Flutter version in sync with .flutter-version and CI.
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.27.4
+          flutter-version: 3.44.7
           cache: true
 
       - name: Install dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       # pubspec.yaml is the source of truth for the release version; each release
       # bumps `version: <name>+<code>` to match the tag (docs/release-process.md
@@ -365,22 +365,14 @@ jobs:
       # Build the per-ABI APKs the SAME way F-Droid builds each one: a single
       # `flutter build apk --release --split-per-abi --target-platform=android-<arch>`
       # in a clean tree, ONE ABI at a time. F-Droid's metadata builds each
-      # versionCode (1059991/1059992/1059993) in its own fresh checkout with
-      # exactly that command (see metadata/io.github.thezupzup.linthra.yml).
+      # versionCode in its own fresh checkout with exactly that command.
       #
       # This workflow used to build all three ABIs together in a single
       # `flutter build apk --release --split-per-abi` pass. That produced 64-bit
       # (arm64-v8a / x86_64) split APKs whose compiled AndroidManifest.xml
       # carried one extra source line before <application> compared to F-Droid's
-      # single-ABI build (last manifest line 266 vs 265). The difference is
-      # purely cosmetic line-number metadata — string pools, resources.arsc,
-      # classes.dex and every lib/*.so are byte-identical — but it shifts the
-      # manifest bytes, so F-Droid's reproducible-build verification could not
-      # transplant the upstream signature onto its rebuild and failed with
-      # "signature copying failed: APK Signing Block offset < central directory
-      # offset" for arm64-v8a/x86_64 (armeabi-v7a happened to match, so it
-      # verified). Building each ABI in isolation, exactly like F-Droid, makes
-      # the uploaded reference APK byte-identical to F-Droid's rebuild.
+      # single-ABI build. Building each ABI in isolation, exactly like F-Droid,
+      # keeps the uploaded reference APK aligned with F-Droid's rebuild.
       # See docs/fdroid-reproducibility-arm64.md.
       - name: Build per-ABI release APKs (isolated, matching F-Droid)
         run: |
@@ -388,13 +380,11 @@ jobs:
           base="${{ steps.mode.outputs.asset_base }}"
           tmp="$RUNNER_TEMP/perabi"
           mkdir -p "$tmp"
-          # ABI -> Flutter --target-platform, matching F-Droid's per-versionCode
-          # build commands in metadata/io.github.thezupzup.linthra.yml.
           for entry in "armeabi-v7a:android-arm" "arm64-v8a:android-arm64" "x86_64:android-x64"; do
             abi="${entry%%:*}"
             plat="${entry##*:}"
             flutter clean
-            flutter pub get
+            flutter pub get --enforce-lockfile
             flutter build apk --release --split-per-abi --target-platform="$plat"
             src="build/app/outputs/flutter-apk/app-${abi}-release.apk"
             if [ ! -f "$src" ]; then
@@ -404,17 +394,10 @@ jobs:
             cp "$src" "$tmp/app-${abi}-release.apk"
             echo "Built $abi ($plat) in its own clean invocation."
           done
-          # `flutter clean` above wiped build/app/outputs, so restore the
-          # universal APK (already stashed) and all three per-ABI APKs to where
-          # the existing Stash / Verify steps below expect them.
           mkdir -p build/app/outputs/flutter-apk
           cp "$tmp"/app-*-release.apk build/app/outputs/flutter-apk/
           cp "dist/${base}.apk" build/app/outputs/flutter-apk/app-release.apk
 
-      # Stash the per-ABI APKs under their public/canonical names. The naming
-      # MUST stay aligned with the per-Build `binary:` URLs in
-      # metadata/io.github.thezupzup.linthra.yml — F-Droid downloads exactly
-      # these file names from the GitHub Release as reference binaries.
       - name: Stash per-ABI APKs
         env:
           TARGET_TAG: ${{ steps.mode.outputs.target_tag }}
@@ -447,16 +430,6 @@ jobs:
           cp build/app/outputs/bundle/release/app-release.aab "dist/${base}.aab"
           ls -l dist
 
-      # Confirm the built APKs actually carry the tag-derived version, so a
-      # release can never ship stale metadata. Uses aapt from the Android SDK
-      # the build just used; if it cannot be located the check warns rather
-      # than blocks (a missing tool is not a version mismatch).
-      #
-      # The universal APK must match versionName/versionCode exactly. Each
-      # per-ABI APK must match versionName, and its versionCode must equal
-      # `base * 10 + abi_rank` (armeabi-v7a=1, arm64-v8a=2, x86_64=3) — the
-      # same rule encoded in android/app/build.gradle's versionCodeOverride
-      # and in metadata/io.github.thezupzup.linthra.yml's VercodeOperation.
       - name: Verify APK versions match the tag
         if: ${{ steps.mode.outputs.trigger == 'tag' }}
         run: |
@@ -515,9 +488,6 @@ jobs:
           path: dist/${{ steps.mode.outputs.asset_base }}.aab
           if-no-files-found: error
 
-      # One zipped artifact for all three per-ABI APKs, downloaded together by
-      # the attach-release job. The names inside the zip stay canonical so
-      # they upload to the GitHub Release verbatim.
       - name: Upload per-ABI APKs
         uses: actions/upload-artifact@v4
         with:
@@ -574,14 +544,6 @@ jobs:
   # Attaches the built artifacts to a GitHub Release for the pushed tag. This is
   # the only job that needs write access, so it is the only one granted
   # `contents: write`.
-  #
-  #   * Pre-release tags (alpha/beta/rc): CREATE a pre-release if none exists,
-  #     then upload/replace the APK/AAB. Debug-signed artifacts are attached with
-  #     a clear "testing only" label and the Release is marked as a pre-release.
-  #
-  #   * Stable tags: only attach (upload/replace) to a Release that already
-  #     exists. The workflow never auto-creates a stable Release or writes its
-  #     production notes.
   attach-release:
     name: Attach artifacts to GitHub Release
     needs: build-release
@@ -604,10 +566,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Collect every APK and the AAB. The universal APK, the three
-          # per-ABI APKs, and the AAB all need to land on the Release — the
-          # per-ABI APKs are what F-Droid's `binary:` URLs point at (see
-          # metadata/io.github.thezupzup.linthra.yml).
           mapfile -t assets < <(find artifacts -type f \( -name '*.apk' -o -name '*.aab' \) | sort)
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "::error::Could not locate any APK/AAB among downloaded artifacts."
@@ -643,14 +601,10 @@ jobs:
           fi
 
           if [ "$PRERELEASE" != "true" ]; then
-            # Stable tag with no Release yet: do not auto-create. Notes are manual.
             echo "::notice::No GitHub Release exists for stable tag '$TAG' yet, so nothing was attached. The release-signed APK/AAB are available as workflow artifacts. Create the Release (with your own notes) and re-run this workflow, or attach the artifacts manually."
             exit 0
           fi
 
-          # Pre-release tag with no Release yet: create one (marked pre-release)
-          # with a clear, honest body and attach the artifacts. Notes are
-          # written to a file (no heredocs, to keep this YAML block valid).
           notes_file="$RUNNER_TEMP/release-notes.md"
           if [ "$SIGNING" = "debug-signed" ]; then
             {

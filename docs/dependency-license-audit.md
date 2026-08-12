@@ -27,8 +27,11 @@ alongside MPL-2.0 code.
   [`pubspec.yaml`](../pubspec.yaml). Licenses below are the ones each package
   publishes on [pub.dev](https://pub.dev) / in its bundled `LICENSE` file.
 - **Transitive walk — now run.** The full transitive dependency set has since
-  been resolved and audited with the pinned toolchain (Flutter 3.27.4 /
-  Dart 3.6.2). `flutter pub get` + `flutter pub deps` resolve **152** packages;
+  been resolved and audited with the then-pinned toolchain (Flutter 3.27.4 /
+  Dart 3.6.2). The Flutter 3.44.7 upgrade refreshed `pubspec.lock` (15 packages
+  moved version, 151 now resolved), so the counts below predate that refresh and
+  the scan should be re-run before the audit is quoted for a submission.
+  `flutter pub get` + `flutter pub deps` resolve **152** packages;
   a license scan of every resolved package (reading each package's bundled
   `LICENSE`) classifies them as **101 BSD-3-Clause, 34 MIT, 6 Apache-2.0,
   6 BSD-2-Clause, 2 MPL-2.0** — every one a permissive free-software license,

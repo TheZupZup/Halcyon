@@ -216,7 +216,11 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
     return ReorderableListView.builder(
       buildDefaultDragHandles: false,
       itemCount: tracks.length,
-      onReorder: (int oldIndex, int newIndex) {
+      onReorderItem: (int oldIndex, int newIndex) {
+        // The repository still accepts the legacy pre-removal insertion index.
+        // Flutter 3.44's onReorderItem gives the final destination index, so
+        // convert only at this boundary and keep persistence behaviour stable.
+        if (oldIndex < newIndex) newIndex += 1;
         ref.read(playlistRepositoryProvider).reorderTracks(
               playlist.id,
               oldIndex,
