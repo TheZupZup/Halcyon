@@ -1,6 +1,6 @@
 # Contributing to Linthra
 
-Hey — thanks for being here. Linthra is a self-hosted Android music player, and
+Hey thanks for being here. Linthra is a self-hosted Android music player, and
 this is a great time to get involved. Small changes can still shape the project
 in a real way.
 
