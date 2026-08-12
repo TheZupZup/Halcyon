@@ -139,7 +139,7 @@ void main() {
       expect(node.label, 'Playback position');
       expect(node.value, '1:15 of 4:00');
       expect(
-        node.hasFlag(SemanticsFlag.isSlider),
+        node.flagsCollection.isSlider,
         isTrue,
         reason: 'replacing Slider must not drop the slider role',
       );
@@ -172,7 +172,7 @@ void main() {
 
       final SemanticsNode node = tester.getSemantics(find.byType(WavySeekBar));
       expect(node.value, 'Unknown');
-      expect(node.hasFlag(SemanticsFlag.isSlider), isFalse);
+      expect(node.flagsCollection.isSlider, isFalse);
 
       handle.dispose();
     });
