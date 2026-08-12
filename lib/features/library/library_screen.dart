@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
@@ -56,6 +57,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   String _query = '';
   int _lastTabIndex = 0;
 
+  /// Pending debounce timer. Cancelled and restarted on every keystroke so the
+  /// filter re-runs only once the user pauses typing, not on every character.
+  Timer? _debounce;
+
   @override
   void initState() {
     super.initState();
@@ -65,6 +70,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _tabController.removeListener(_onTabChanged);
     _tabController.dispose();
     _searchController.dispose();
@@ -75,6 +81,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// when entering/leaving Folders, where the catalog search field is hidden.
   void _onTabChanged() {
     if (_tabController.index == _lastTabIndex) return;
+    _debounce?.cancel();
     setState(() {
       _lastTabIndex = _tabController.index;
       if (_query.isNotEmpty) {
@@ -84,9 +91,16 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     });
   }
 
-  void _onQueryChanged(String value) => setState(() => _query = value);
+  void _onQueryChanged(String value) {
+    _debounce?.cancel();
+    _debounce = Timer(
+      const Duration(milliseconds: 300),
+      () => setState(() => _query = value),
+    );
+  }
 
   void _clearSearch() {
+    _debounce?.cancel();
     setState(() {
       _query = '';
       _searchController.clear();
