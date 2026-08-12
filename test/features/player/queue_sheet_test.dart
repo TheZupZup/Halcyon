@@ -43,6 +43,36 @@ Future<void> _open(
   await tester.pumpAndSettle();
 }
 
+/// Drags the up-next row at [from] by its handle to one end of the list:
+/// [toEnd] true drags it past the last row, false past the first.
+///
+/// Goes through a real pointer sequence rather than calling the reorder
+/// callback directly, so the framework's own index bookkeeping is part of what
+/// is under test. The travel deliberately overshoots the list — the drop index
+/// clamps to the end — which keeps the gesture readable and independent of row
+/// metrics, rather than tuned to land on a particular pixel.
+Future<void> _dragToEdge(
+  WidgetTester tester, {
+  required int from,
+  required bool toEnd,
+}) async {
+  final Finder handles = find.byIcon(Icons.drag_handle);
+  final int rows = handles.evaluate().length;
+  final double rowHeight =
+      tester.getCenter(handles.at(1)).dy - tester.getCenter(handles.at(0)).dy;
+  final double travel = rowHeight * (rows + 1) * (toEnd ? 1 : -1);
+  final TestGesture gesture =
+      await tester.startGesture(tester.getCenter(handles.at(from)));
+  await tester.pumpAndSettle();
+  // Two steps rather than one jump, so the list's gap bookkeeping keeps up.
+  await gesture.moveBy(Offset(0, travel / 2));
+  await tester.pumpAndSettle();
+  await gesture.moveBy(Offset(0, travel / 2));
+  await tester.pumpAndSettle();
+  await gesture.up();
+  await tester.pumpAndSettle();
+}
+
 void main() {
   group('QueueSheet', () {
     testWidgets('renders the current track and the up-next tracks',
@@ -110,6 +140,43 @@ void main() {
       // One handle per up-next track (B and C), not the current one.
       expect(find.byIcon(Icons.drag_handle), findsNWidgets(2));
       expect(find.byType(ReorderableDragStartListener), findsNWidgets(2));
+    });
+
+    testWidgets('dragging an upcoming track to the end lands it last',
+        (tester) async {
+      final controller = FakePlaybackController();
+      await controller
+          .playTracks([_track('A'), _track('B'), _track('C'), _track('D')]);
+
+      await _open(tester, controller);
+      expect(controller.state.upNext.map((Track t) => t.id).toList(),
+          <String>['B', 'C', 'D']);
+
+      // Drag B (the first up-next row) past C and D. A downward move is where
+      // the reorder index convention bites: the framework reports the
+      // destination *after* the removal, which is what
+      // PlaybackQueue.reorderUpNext documents, so the sheet passes it straight
+      // through. Re-adding the old adjustment here would leave B second.
+      await _dragToEdge(tester, from: 0, toEnd: true);
+
+      expect(controller.state.upNext.map((Track t) => t.id).toList(),
+          <String>['C', 'D', 'B']);
+    });
+
+    testWidgets('dragging an upcoming track to the top lands it first',
+        (tester) async {
+      final controller = FakePlaybackController();
+      await controller
+          .playTracks([_track('A'), _track('B'), _track('C'), _track('D')]);
+
+      await _open(tester, controller);
+
+      // An upward move needs no adjustment in any Flutter version, so it pins
+      // the half of the convention the downward case cannot.
+      await _dragToEdge(tester, from: 2, toEnd: false);
+
+      expect(controller.state.upNext.map((Track t) => t.id).toList(),
+          <String>['D', 'B', 'C']);
     });
 
     testWidgets('history is shown and tapping it steps back', (tester) async {
