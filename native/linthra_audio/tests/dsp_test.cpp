@@ -2,14 +2,38 @@
 #include "linthra_audio/linthra_audio.h"
 
 #include <array>
-#include <cassert>
 #include <cmath>
+#include <cstddef>
+#include <iostream>
 
 namespace {
+
+int failures = 0;
+
 bool near(float left, float right, float tolerance = 1.0e-4F) {
     return std::abs(left - right) <= tolerance;
 }
+
+// These tests used to use assert(), but CI builds this target in Release and
+// Release defines NDEBUG, which expands assert() to nothing. Every expectation
+// below was being compiled out, so the binary exited 0 without checking any DSP
+// behaviour at all.
+//
+// check() is ordinary code, so it runs in every build type. It records the
+// failure instead of aborting, which lets one run report every broken
+// expectation rather than only the first, and main() reports the count to CTest
+// through its exit status.
+void check(bool condition, const char* expression, const char* file, int line) {
+    if (condition) {
+        return;
+    }
+    std::cerr << file << ':' << line << ": CHECK failed: " << expression << '\n';
+    ++failures;
+}
+
 }  // namespace
+
+#define CHECK(condition) check((condition), #condition, __FILE__, __LINE__)
 
 int main() {
     using linthra::audio::DspChain;
@@ -24,7 +48,7 @@ int main() {
     const auto original = clean;
     bypass.process(clean.data(), 3, 2);
     for (std::size_t index = 0; index < clean.size(); ++index) {
-        assert(near(clean[index], original[index]));
+        CHECK(near(clean[index], original[index]));
     }
 
     // Preamp is deterministic and clip-free when the limiter is off.
@@ -35,8 +59,8 @@ int main() {
     preamp.configure(preamp_config);
     std::array<float, 2> preamp_frame{1.0F, -1.0F};
     preamp.process(preamp_frame.data(), 1, 2);
-    assert(near(preamp_frame[0], 0.501187F, 1.0e-3F));
-    assert(near(preamp_frame[1], -0.501187F, 1.0e-3F));
+    CHECK(near(preamp_frame[0], 0.501187F, 1.0e-3F));
+    CHECK(near(preamp_frame[1], -0.501187F, 1.0e-3F));
 
     // The stereo-linked limiter applies one gain to both channels. This avoids
     // pulling a loud channel down independently and shifting the stereo image.
@@ -48,8 +72,8 @@ int main() {
     std::array<float, 2> hot_frame{2.0F, 1.0F};
     limiter.process(hot_frame.data(), 1, 2);
     const float threshold = std::pow(10.0F, -0.3F / 20.0F);
-    assert(std::abs(hot_frame[0]) <= threshold + 1.0e-4F);
-    assert(near(hot_frame[0] / hot_frame[1], 2.0F, 1.0e-3F));
+    CHECK(std::abs(hot_frame[0]) <= threshold + 1.0e-4F);
+    CHECK(near(hot_frame[0] / hot_frame[1], 2.0F, 1.0e-3F));
 
     // A peaking band should alter an impulse response without producing NaN or
     // infinity. Exact coefficients are implementation detail; stability is the
@@ -65,27 +89,35 @@ int main() {
     equalizer.process(impulse.data(), impulse.size(), 1);
     bool changed = false;
     for (std::size_t index = 0; index < impulse.size(); ++index) {
-        assert(std::isfinite(impulse[index]));
+        CHECK(std::isfinite(impulse[index]));
         if (!near(impulse[index], index == 0 ? 0.5F : 0.0F)) {
             changed = true;
         }
     }
-    assert(changed);
+    CHECK(changed);
 
     // Smoke-test the C ABI that a future JNI/FFI layer will call.
     LinthraAudioDsp* c_dsp = linthra_audio_create(48'000.0F);
-    assert(c_dsp != nullptr);
-    LinthraAudioConfig c_config{};
-    c_config.limiter_enabled = 0;
-    c_config.preamp_db = 0.0F;
-    c_config.limiter_threshold_db = -0.3F;
-    c_config.limiter_release_ms = 80.0F;
-    linthra_audio_configure(c_dsp, &c_config);
-    std::array<float, 2> c_samples{0.2F, -0.2F};
-    linthra_audio_process(c_dsp, c_samples.data(), 1, 2);
-    assert(near(c_samples[0], 0.2F));
-    assert(near(c_samples[1], -0.2F));
-    linthra_audio_destroy(c_dsp);
+    CHECK(c_dsp != nullptr);
+    // The C entry points ignore a null handle, which would leave the samples
+    // untouched and make the checks below pass for the wrong reason.
+    if (c_dsp != nullptr) {
+        LinthraAudioConfig c_config{};
+        c_config.limiter_enabled = 0;
+        c_config.preamp_db = 0.0F;
+        c_config.limiter_threshold_db = -0.3F;
+        c_config.limiter_release_ms = 80.0F;
+        linthra_audio_configure(c_dsp, &c_config);
+        std::array<float, 2> c_samples{0.2F, -0.2F};
+        linthra_audio_process(c_dsp, c_samples.data(), 1, 2);
+        CHECK(near(c_samples[0], 0.2F));
+        CHECK(near(c_samples[1], -0.2F));
+        linthra_audio_destroy(c_dsp);
+    }
 
+    if (failures != 0) {
+        std::cerr << failures << " DSP check(s) failed\n";
+        return 1;
+    }
     return 0;
 }
