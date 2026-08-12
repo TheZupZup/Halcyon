@@ -10,6 +10,8 @@ on:
     branches: [main]
   pull_request:
 
+# Read-only: every job here only inspects the checkout. No secrets are used, so
+# these checks run identically on fork PRs.
 permissions:
   contents: read
 
@@ -17,15 +19,9 @@ jobs:
   flutter:
     name: Flutter checks
     runs-on: ubuntu-latest
-    # Temporary write access only for the toolchain migration run below. This is
-    # removed again once the regenerated lockfile is committed to the PR branch.
-    permissions:
-      contents: write
     steps:
-      - name: Checkout migration branch
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: chore/flutter-3.44.7
 
       # Pinned to the current Flutter 3.44.x stable line (Dart 3.12.x) for
       # reproducible runs. Keep this in sync with .flutter-version and the SDK
@@ -38,23 +34,14 @@ jobs:
           flutter-version: 3.44.7
           cache: true
 
-      # One-time migration: Flutter-owned SDK packages change with the Flutter
-      # version, so regenerate the committed lockfile using exactly 3.44.7.
-      - name: Refresh dependencies for toolchain migration
-        run: flutter pub get
-
-      - name: Commit refreshed lockfile
-        run: |
-          set -euo pipefail
-          if git diff --quiet -- pubspec.lock; then
-            echo "pubspec.lock is already current."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pubspec.lock
-          git commit -m "chore: refresh lockfile for Flutter 3.44.7"
-          git push origin HEAD:chore/flutter-3.44.7
+      # --enforce-lockfile makes `pub get` FAIL instead of silently rewriting
+      # pubspec.lock when it has drifted from pubspec.yaml. This is the same
+      # resolution the reproducible F-Droid build depends on — the lockfile is
+      # committed for exactly this reason (docs/release-process.md §7) — so a PR
+      # that changes a dependency without refreshing the lockfile is caught here
+      # instead of at release time.
+      - name: Install dependencies (lockfile-enforced)
+        run: flutter pub get --enforce-lockfile
 
       - name: Verify formatting
         run: dart format --set-exit-if-changed .
