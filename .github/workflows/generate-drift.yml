@@ -19,16 +19,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      # Match the Flutter version pinned by CI and .flutter-version so generated
-      # output matches what CI validates.
+      # Installs the version pinned in .flutter-version, so generated output
+      # matches what CI validates.
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.44.7
-          cache: true
+        uses: ./.github/actions/setup-flutter
 
       - name: Install dependencies
         run: flutter pub get

@@ -10,13 +10,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 VERSION_FILE="$REPO_ROOT/.flutter-version"
+JDK_VERSION_FILE="$REPO_ROOT/.java-version"
 LOCAL_FLUTTER_BIN="$REPO_ROOT/.tool/flutter/bin/flutter"
 
 line() { printf '%-22s %s\n' "$1" "$2"; }
 
 required="(none)"
 [ -f "$VERSION_FILE" ] && required="$(tr -d '[:space:]' < "$VERSION_FILE")"
-line "Pinned version:" "$required"
+line "Pinned Flutter:" "$required"
+
+required_jdk="(none)"
+[ -f "$JDK_VERSION_FILE" ] && required_jdk="$(tr -d '[:space:]' < "$JDK_VERSION_FILE")"
+line "Pinned JDK:" "$required_jdk"
 
 if [ -x "$LOCAL_FLUTTER_BIN" ]; then
   line "Project-local Flutter:" "$LOCAL_FLUTTER_BIN"
@@ -30,6 +35,14 @@ if command -v flutter >/dev/null 2>&1; then
   line "  version:" "$(flutter --version 2>/dev/null | sed -n 's/^Flutter \([0-9][0-9.]*\).*/\1/p' | head -1)"
 else
   line "Flutter on PATH:" "none"
+fi
+
+# The JDK only matters for Android builds; analyze/format/test never need it.
+if command -v java >/dev/null 2>&1; then
+  line "Java on PATH:" "$(command -v java)"
+  line "  version:" "$(java -version 2>&1 | sed -n 's/^[A-Za-z ]*version "\([0-9][0-9._]*\).*/\1/p' | head -1)"
+else
+  line "Java on PATH:" "none (only needed for Android builds)"
 fi
 
 if [ -n "${ANDROID_HOME:-}" ] && [ -d "${ANDROID_HOME}" ]; then

@@ -1,0 +1,39 @@
+name: Set up pinned Flutter
+description: >-
+  Installs the Flutter SDK version pinned in .flutter-version — the repo's
+  single source of truth for the Flutter toolchain.
+
+# Every workflow that needs Flutter uses this action instead of repeating the
+# version, so a Flutter bump is a one-line edit to .flutter-version. The
+# matching local path is scripts/setup_flutter.sh, which reads the same file.
+# test/tooling/toolchain_pins_test.dart fails if a workflow starts hardcoding a
+# version again.
+runs:
+  using: composite
+  steps:
+    - name: Read pinned Flutter version
+      id: pin
+      shell: bash
+      run: |
+        set -euo pipefail
+        version_file="$GITHUB_WORKSPACE/.flutter-version"
+        [ -f "$version_file" ] || {
+          echo "::error::$version_file is missing (the pinned Flutter version)."
+          exit 1
+        }
+        version="$(tr -d '[:space:]' < "$version_file")"
+        [ -n "$version" ] || {
+          echo "::error::.flutter-version is empty."
+          exit 1
+        }
+        echo "Pinned Flutter version: $version"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    # cache: true reuses the SDK across runs; the cache key includes the
+    # version, so a bump just misses the cache instead of serving a stale SDK.
+    - name: Install Flutter ${{ steps.pin.outputs.version }}
+      uses: subosito/flutter-action@v2
+      with:
+        channel: stable
+        flutter-version: ${{ steps.pin.outputs.version }}
+        cache: true

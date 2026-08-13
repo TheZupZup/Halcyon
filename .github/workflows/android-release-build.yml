@@ -149,7 +149,7 @@ jobs:
       version_code: ${{ steps.version.outputs.LINTHRA_VERSION_CODE }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # Decide, in one place, how this run should sign, whether the tag is a
       # pre-release, and how to label/name the artifacts.
@@ -247,18 +247,18 @@ jobs:
           echo "LINTHRA_KEYSTORE_PATH=$keystore_path" >> "$GITHUB_ENV"
           echo "Release keystore decoded to a temporary path."
 
-      # Pin to Temurin JDK 17 — the version this Android toolchain
-      # (AGP 8.2.1 / Gradle 8.7 / Kotlin 1.9.24) is built and tested against.
-      # Newer JDKs on the GitHub runner have caused the lint/Jetifier step to
-      # die on byte-buddy's multi-release classes ("Unsupported class file
-      # major version 68"); JDK 17 keeps Gradle's bundled ASM compatible with
-      # every class file it has to scan. setup-java exports JAVA_HOME, which
-      # Flutter and the Gradle daemon pick up as the JDK for the build.
+      # The JDK version comes from .java-version — the single source of truth
+      # for the JDK, deliberately behind the newest LTS: newer JDKs on the
+      # GitHub runner have caused the lint/Jetifier step to die on byte-buddy's
+      # multi-release classes ("Unsupported class file major version 68"), and
+      # the pinned JDK keeps Gradle's bundled ASM compatible with every class
+      # file it has to scan. setup-java exports JAVA_HOME, which Flutter and the
+      # Gradle daemon pick up as the JDK for the build.
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version-file: .java-version
 
       # Quick sanity check so a future JDK drift shows up directly in the log
       # instead of as a confusing lint/Jetifier crash.
@@ -267,13 +267,10 @@ jobs:
           java -version
           echo "JAVA_HOME=$JAVA_HOME"
 
-      # Keep this Flutter version in sync with .flutter-version and CI.
+      # Installs the version pinned in .flutter-version — the same SDK the
+      # reproducible F-Droid build resolves pubspec.lock with.
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.44.7
-          cache: true
+        uses: ./.github/actions/setup-flutter
 
       - name: Install dependencies
         run: flutter pub get --enforce-lockfile
