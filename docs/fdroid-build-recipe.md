@@ -73,9 +73,9 @@ Linthra is a Flutter (Dart) application targeting Android.
 
 | Item | Current state |
 | ---- | ------------- |
-| Flutter version (pinned in CI) | **3.44.7**, `stable` channel — pinned identically in `ci.yml`, `android-release-build.yml`, and `generate-drift.yml`. The F-Droid recipe's `srclibs`/`sudo`-installed Flutter (or `flutter` build plugin) should target the same version. |
+| Flutter version (pinned in CI) | **Flutter 3.44.7**, `stable` channel — pinned once in [`.flutter-version`](../.flutter-version); every workflow installs that version through `.github/actions/setup-flutter`. The F-Droid recipe's `srclibs`/`sudo`-installed Flutter (or `flutter` build plugin) should target the same version. |
 | Dart SDK constraint | `>=3.6.0 <4.0.0` (`pubspec.yaml`), satisfied by Flutter 3.44.7 (Dart 3.12.2). |
-| Java / JDK | **JDK 21** (Temurin in CI) — matches F-Droid's build servers; the Gradle wrapper and AGP below support it (JDK 17 also works). |
+| Java / JDK | **JDK 17** (Temurin in CI) — pinned once in [`.java-version`](../.java-version); the Gradle wrapper and AGP below are built and tested against it. |
 | Gradle | **8.14.5**, declared in `android/gradle/wrapper/gradle-wrapper.properties` (`gradle-8.14.5-all.zip`). |
 | Android Gradle Plugin | **8.10.1**, declared in `android/settings.gradle`. |
 | Kotlin Gradle plugin | **2.2.21**, declared in `android/settings.gradle`. |
@@ -142,10 +142,11 @@ the schema at the tagged commit (§4).
    are permissive (MIT/BSD-3-Clause). A mechanical **transitive** audit is still
    an open blocker (§6).
 5. **Toolchain pinning.** Reproducibility depends on the F-Droid build using the
-   same Flutter (3.44.7), Dart (3.12.x), JDK (21), and Gradle (8.14.5) versions the
-   project builds with. Keep the CI pin and any recipe-side pin in sync; a
-   Flutter bump may also require reformatting (`dart format`) and regenerating
-   Drift output.
+   same Flutter (3.44.7), Dart (3.12.x), JDK (17), and Gradle (8.14.5) versions the
+   project builds with. The CI side of each pin lives in one file
+   (`.flutter-version`, `.java-version`, `gradle-wrapper.properties`); keep any
+   recipe-side pin in sync with those. A Flutter bump may also require
+   reformatting (`dart format`) and regenerating Drift output.
 
 ## 5. Release / tagging plan
 
