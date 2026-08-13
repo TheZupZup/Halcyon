@@ -8,12 +8,28 @@ focused on the cross-platform Dart code.
 > New to the code itself? The [codebase tour](codebase-tour.md) maps where each
 > feature lives and how the pieces fit together.
 
-## Required Flutter version
+## Required toolchain versions
 
-This project is pinned to **Flutter 3.44.7 (stable)**. The version lives in one
-obvious place — the [`.flutter-version`](../.flutter-version) file at the repo
-root — and the CI workflows pin the same value. Keep them in sync to avoid
-spurious `dart format` diffs from formatter changes in newer Dart releases.
+Every toolchain version lives in exactly one file. CI reads those files instead
+of repeating the values, so a bump is a one-line edit:
+
+| Tool | Pinned version | Source of truth |
+| ---- | -------------- | --------------- |
+| Flutter SDK | Flutter 3.44.7 (`stable`) | [`.flutter-version`](../.flutter-version) |
+| JDK | JDK 17 (Temurin in CI) | [`.java-version`](../.java-version) |
+| Gradle | Gradle 8.14.5 | [`android/gradle/wrapper/gradle-wrapper.properties`](../android/gradle/wrapper/gradle-wrapper.properties) |
+| Android Gradle Plugin | AGP 8.10.1 | [`android/settings.gradle`](../android/settings.gradle) |
+| Kotlin Gradle plugin | Kotlin 2.2.21 | [`android/settings.gradle`](../android/settings.gradle) |
+
+`scripts/setup_flutter.sh` and the shared `.github/actions/setup-flutter` action
+both install the Flutter version from `.flutter-version`; every workflow that
+runs Gradle hands `.java-version` to `actions/setup-java`.
+
+`test/tooling/toolchain_pins_test.dart` fails if a workflow, script or doc —
+including the table above — names a version that disagrees with those files.
+Bumping Flutter may also mean reformatting with the newer Dart and widening the
+SDK constraint in `pubspec.yaml`, so keep them in sync to avoid spurious
+`dart format` diffs.
 
 ## Quick setup
 
@@ -92,9 +108,10 @@ toolchain is installed per-environment:
 - **Dart/Flutter caches and build output** — `.dart_tool/`, `build/`, etc.
 
 CI installs Flutter via the `subosito/flutter-action` GitHub Action rather than
-these scripts, but pins the **same** `3.44.7`. The scripts exist for local and
-remote-agent environments where that Action isn't running; both paths produce
-the same checks. APK builds (CI's separate workflows, or the local
+these scripts, but reads the **same** `.flutter-version` file to decide which
+version that is (see `.github/actions/setup-flutter`). The scripts exist for
+local and remote-agent environments where that Action isn't running; both paths
+produce the same checks. APK builds (CI's separate workflows, or the local
 `flutter build apk`) require an Android SDK; `flutter analyze` and `flutter test`
 do not.
 
@@ -121,10 +138,10 @@ do not.
 ## Building a debug APK (Android)
 
 You need a working Android SDK (`ANDROID_HOME` / `ANDROID_SDK_ROOT` set) and a
-JDK that matches the bundled Gradle wrapper — **JDK 21** is the safe choice for
-the Gradle 8.14.5 / Android Gradle Plugin 8.10.1 the project pins (JDK 17
-also works). Run
-`flutter doctor` to confirm your toolchain.
+JDK that matches the bundled Gradle wrapper — use the pinned **JDK 17** from
+[`.java-version`](../.java-version), the same one CI installs for the Gradle
+8.14.5 / Android Gradle Plugin 8.10.1 the project pins. Run `flutter doctor` to
+confirm your toolchain.
 
 ```bash
 flutter pub get

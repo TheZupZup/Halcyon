@@ -31,7 +31,7 @@ jobs:
             ctest_args: '--exclude-regex linthra_audio_realtime_budget'
     name: audio-dsp (${{ matrix.build_type }})
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Configure
         run: >-

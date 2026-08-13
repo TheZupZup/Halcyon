@@ -21,17 +21,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      # Pinned to the current Flutter 3.44.x stable line for reproducible runs.
-      # Keep this in sync with .flutter-version and the SDK constraint in
-      # pubspec.yaml; bumping it may require reformatting with newer Dart.
+      # Installs the version pinned in .flutter-version (the single source of
+      # truth, also read by scripts/setup_flutter.sh). Bumping it may require
+      # reformatting with the newer Dart and a matching SDK constraint in
+      # pubspec.yaml.
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.44.7
-          cache: true
+        uses: ./.github/actions/setup-flutter
 
       # --enforce-lockfile makes `pub get` FAIL instead of silently rewriting
       # pubspec.lock when it has drifted from pubspec.yaml. This is the same
@@ -56,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # Pure bash + git: no Flutter, no network, no secrets. Catches an
       # accidentally committed keystore / .env / private key / token and a
@@ -75,7 +72,7 @@ jobs:
     if: ${{ startsWith(github.head_ref, 'release/') }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 

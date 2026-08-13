@@ -20,7 +20,7 @@ jobs:
       LINTHRA_KEY_PASSWORD: ${{ secrets.LINTHRA_KEY_PASSWORD }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Require GitHub OAuth client ID
         run: |
@@ -33,14 +33,10 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version-file: .java-version
 
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.44.7
-          cache: true
+        uses: ./.github/actions/setup-flutter
 
       - name: Install dependencies
         run: flutter pub get --enforce-lockfile

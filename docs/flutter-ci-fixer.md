@@ -43,7 +43,7 @@ The publish guard rejects changes to protected areas including:
 
 - `.github/`
 - license/copyright notice files at any path depth
-- `pubspec.yaml` and `.flutter-version`
+- `pubspec.yaml` and the toolchain pins (`.flutter-version`, `.java-version`)
 - F-Droid/store metadata and release notes
 - secret-scan policy
 - analyzer policy
