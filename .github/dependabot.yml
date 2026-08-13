@@ -16,11 +16,15 @@ updates:
   # subosito/flutter-action pin). Both directories are listed so neither drifts
   # unwatched.
   #
-  # The single "*" group means one PR bumps a given action everywhere at once.
-  # test/tooling/toolchain_pins_test.dart fails when the same action is pinned
-  # to two different refs across .github/, so a per-directory split would open
-  # PRs that are red by construction. Grouping also keeps this to one review a
-  # week instead of one per action.
+  # group-by: dependency-name is what makes the two directories safe. Without
+  # it a grouped multi-directory update opens one PR per directory, so an action
+  # used in both a workflow and the composite action would move in two separate
+  # PRs — and test/tooling/toolchain_pins_test.dart fails the moment the same
+  # action is pinned to two different refs across .github/. Both PRs would be
+  # red by construction. With it, each action gets one PR that updates every
+  # directory at once, so a ref can never be half-applied. The cost is a PR per
+  # action instead of one combined PR, which is the right trade against a
+  # guardrail that exists precisely to catch split refs.
   - package-ecosystem: "github-actions"
     directories:
       - "/"
@@ -31,6 +35,7 @@ updates:
       github-actions:
         patterns:
           - "*"
+        group-by: dependency-name
     commit-message:
       prefix: "ci"
 
