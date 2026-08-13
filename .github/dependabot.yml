@@ -1,0 +1,53 @@
+# Dependabot opens update PRs and stops there. Nothing here merges itself —
+# a human reviews every PR and decides what lands (issue #362).
+#
+# Dependabot PRs run the normal CI: ci.yml triggers on `pull_request` with no
+# branch filter, and both it and rust-core.yml declare `permissions:
+# contents: read` and use no secrets, which is exactly the context a Dependabot
+# PR gets. No dedicated token is needed here — the CI_FIXER_GITHUB_TOKEN
+# pattern in flutter-ci-fixer.yml exists because a *workflow* pushing with the
+# default GITHUB_TOKEN cannot retrigger CI. Dependabot is not a workflow, so
+# that limitation does not apply to it.
+version: 2
+
+updates:
+  # Action pins live in two places in this repo: .github/workflows/*.yml and the
+  # composite action at .github/actions/setup-flutter (which owns the only
+  # subosito/flutter-action pin). Both directories are listed so neither drifts
+  # unwatched.
+  #
+  # The single "*" group means one PR bumps a given action everywhere at once.
+  # test/tooling/toolchain_pins_test.dart fails when the same action is pinned
+  # to two different refs across .github/, so a per-directory split would open
+  # PRs that are red by construction. Grouping also keeps this to one review a
+  # week instead of one per action.
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+      - "/.github/actions/setup-flutter"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
+
+  # The Rust search core (native/linthra_core). Cargo.lock currently resolves to
+  # linthra_core and nothing else, so this finds no updates today; it is here so
+  # the first real dependency is covered from the moment it is added.
+  # rust-core.yml already runs fmt, clippy, tests and the 200k benchmark on
+  # native/linthra_core/**, so a Cargo PR gets the real checks. The lockfile is
+  # committed for the reproducible F-Droid build (#330), which is why updates
+  # have to arrive as a reviewable PR rather than a silent resolve.
+  - package-ecosystem: "cargo"
+    directory: "/native/linthra_core"
+    schedule:
+      interval: "weekly"
+    groups:
+      cargo:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore"
