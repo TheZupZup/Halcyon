@@ -81,6 +81,16 @@ jobs:
             exit 0
           fi
 
+          # A Dependabot update that breaks CI has to stay broken. The red is
+          # the whole signal — it says this bump needs a human — and a repair
+          # commit would paper over which update broke what. This runs before
+          # the credential check and both Codex attempts, so no repair is ever
+          # generated for these branches, let alone published.
+          if [[ "$head_branch" == dependabot/* ]]; then
+            echo "Skipping Dependabot branch $head_branch; update PRs stay red for review."
+            exit 0
+          fi
+
           # Only normal CI runs are repair candidates. A repair published with
           # the dedicated token triggers normal push/pull_request CI again; if
           # that new CI fails on a codex/ci-fix-* branch it is rejected below.
@@ -347,7 +357,11 @@ jobs:
   publish:
     name: Publish validated Flutter fix
     needs: fix
-    if: ${{ needs.fix.outputs.ready == 'true' }}
+    # The Dependabot check in the fix job already stops a repair being built,
+    # so target_branch can never be a dependabot/ branch here. Restated anyway:
+    # this is the last gate before a commit is pushed, and "never publish onto
+    # an update PR" is worth enforcing where the push actually happens.
+    if: ${{ needs.fix.outputs.ready == 'true' && !startsWith(needs.fix.outputs.target_branch, 'dependabot/') }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
