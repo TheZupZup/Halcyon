@@ -323,6 +323,11 @@ class _LiveControls extends ConsumerWidget {
         _StatusSlot(child: _SourceOrError(state: state)),
         const SizedBox(height: AppSpacing.md),
         PlaybackProgressBar(
+          // Identity is the track, so a track change disposes the bar's state
+          // — including a seek it is still holding optimistically — rather than
+          // carrying it onto the new song. Duration alone can't do that: two
+          // tracks can be exactly as long as each other.
+          key: ValueKey<String?>(state.currentTrack?.id),
           position: state.position,
           duration: state.duration,
           // Drives the wave's slow drift: it flows while playing and holds

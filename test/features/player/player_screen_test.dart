@@ -189,6 +189,39 @@ void main() {
       expect(controller.seeks.first, greaterThan(Duration.zero));
     });
 
+    testWidgets('a track change drops a seek the previous track was holding',
+        (tester) async {
+      // Two songs of exactly the same length — so nothing about the *shape* of
+      // the playback state changes when the track does, and only the bar's
+      // identity can tell them apart.
+      const Duration sameLength = Duration(minutes: 3);
+      final controller = _playing(duration: sameLength);
+      await _pumpScreen(tester, controller);
+
+      // Seek into the middle of song one. The bar holds that target while the
+      // ~250ms-coalesced position stream catches up.
+      await tester.tap(find.byType(WavySeekBar));
+      await tester.pumpAndSettle();
+      expect(controller.seeks, hasLength(1));
+      expect(find.text('1:30'), findsOneWidget);
+
+      // Song two starts from the beginning before that ever happened.
+      controller.emit(
+        const PlaybackState(
+          status: PlaybackStatus.playing,
+          currentTrack: Track(id: '2', title: 'Song Two', uri: '/2.mp3'),
+          source: PlaybackSource.localFile,
+          duration: sameLength,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // A position from the previous song must not ride along into this one.
+      expect(find.text('0:00'), findsOneWidget);
+      expect(find.text('1:30'), findsNothing);
+      expect(controller.seeks, hasLength(1));
+    });
+
     testWidgets('the queue button opens up-next', (tester) async {
       final controller = _playing(
         upNext: const <Track>[
