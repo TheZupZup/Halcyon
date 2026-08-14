@@ -44,5 +44,6 @@ The full index of Linthra's docs. New to the project? Start with the
 | Reporting a bug | [reporting-bugs.md](./reporting-bugs.md) |
 | Manual QA checklist | [manual-test-checklist.md](./manual-test-checklist.md) |
 | Release process & signing | [release-process.md](./release-process.md) · [signing](./release-signing.md) |
+| Dependency update bots | [dependency-updates.md](./dependency-updates.md) |
 | F-Droid readiness | [fdroid-readiness.md](./fdroid-readiness.md) |
 | Google Play readiness | [play-store-readiness.md](./play-store-readiness.md) |
