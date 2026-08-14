@@ -1,10 +1,11 @@
 name: CI
 
 # Quality, security, and release-hygiene checks on every PR and on pushes to
-# main. Three independent jobs run in parallel:
+# main. Four independent jobs run in parallel:
 #   * flutter             — format, analyze, test, lockfile-enforced pub get.
 #   * secret-scan         — offline scan for committed secrets / private data.
 #   * release-bump-guard  — release/* PRs only: the bump must be version-only.
+#   * dependency-guard    — deps/* PRs only: the update must be lockfile-only.
 on:
   push:
     branches: [main]
@@ -86,3 +87,27 @@ jobs:
           set -euo pipefail
           git diff --name-only "$BASE_SHA" HEAD \
             | ./scripts/check_release_bump_files.sh
+
+  dependency-guard:
+    name: Dependency update touches only the lockfile
+    runs-on: ubuntu-latest
+    # Only meaningful for the PRs the "Dart dependency updates" workflow opens
+    # (it pushes the deps/dart-packages branch). The updater already refuses to
+    # commit anything but pubspec.lock; re-checking here covers what happens to
+    # the branch afterwards — a well-meaning "just fix the test" commit pushed
+    # onto the update PR is exactly the change that must not ride along.
+    if: ${{ startsWith(github.head_ref, 'deps/') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Local twin: scripts/check_dependency_update_files.sh.
+      - name: Check changed files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git diff --name-only "$BASE_SHA" HEAD \
+            | ./scripts/check_dependency_update_files.sh
