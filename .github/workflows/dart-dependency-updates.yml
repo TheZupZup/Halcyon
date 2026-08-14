@@ -1,0 +1,243 @@
+name: Dart dependency updates
+
+# Weekly check for Dart/Flutter package updates that fit inside the constraints
+# already written in pubspec.yaml, prepared as one reviewable draft PR (#362).
+#
+# Nothing here merges. The workflow's whole job is to say "these packages can
+# move; here is the lockfile; here is what CI thinks of it" and then stop.
+#
+# Why this is not Dependabot. Dependabot does support the pub ecosystem, but it
+# cannot meet two of Linthra's requirements:
+#
+#   * It resolves with its own bare Dart SDK and installs no Flutter at all,
+#     while pubspec.lock has to be resolved with the SDK pinned in
+#     .flutter-version — the reproducible F-Droid build resolves from that
+#     committed lockfile (docs/release-process.md §7). The difference is not
+#     theoretical: a resolution with the pinned SDK writes `flutter: ">=3.44.0"`
+#     into the lockfile's `sdks:` block, which a Flutter-less resolver cannot
+#     arrive at.
+#   * pub has no `versioning-strategy: lockfile-only`. Its three strategies
+#     (widen / increase / increase-if-necessary) all rewrite the constraints in
+#     pubspec.yaml, and an automatic update must never do that.
+#
+# So Dependabot keeps GitHub Actions and Cargo (.github/dependabot.yml) and this
+# workflow keeps pub. See docs/dependency-updates.md.
+on:
+  schedule:
+    # Mondays, early UTC — same weekly cadence as the Dependabot ecosystems.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+# One update at a time: the runs share a branch, and a second run force-pushing
+# underneath the first would be the only way this workflow could lose work.
+concurrency:
+  group: dart-dependency-updates
+  cancel-in-progress: false
+
+# The job's own GITHUB_TOKEN stays read-only. Every write goes through the
+# dedicated publication token in the publish step, because a push or PR made
+# with GITHUB_TOKEN does not trigger the PR's normal CI — and an update PR that
+# runs no checks is a broken updater.
+permissions:
+  contents: read
+
+env:
+  UPDATE_BRANCH: deps/dart-packages
+  COMMIT_SUBJECT: "chore(deps): update Dart packages within current constraints"
+
+jobs:
+  update:
+    name: Resolve and prepare update PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The pinned SDK, from .flutter-version. This is the reason the workflow
+      # exists at all, so it is the first thing that happens.
+      - name: Set up Flutter
+        uses: ./.github/actions/setup-flutter
+
+      # Local twin: ./scripts/update_dart_dependencies.sh. Runs
+      # `flutter pub upgrade` (which resolves inside the existing constraints
+      # and only rewrites pubspec.lock), asserts nothing outside pubspec.lock
+      # moved, and re-checks the result with `flutter pub get --enforce-lockfile`.
+      # Exit 3 means everything is already at the newest allowed version.
+      - name: Resolve updates with the pinned SDK
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Kept outside the checkout: the updater refuses to continue if
+          # anything but pubspec.lock changed, and its own report is not a
+          # repository change. Exported for the publish step.
+          REPORT_DIR="$RUNNER_TEMP/dep-update"
+          echo "REPORT_DIR=$REPORT_DIR" >> "$GITHUB_ENV"
+
+          status=0
+          ./scripts/update_dart_dependencies.sh --output-dir "$REPORT_DIR" || status=$?
+          case "$status" in
+            0) echo "changed=true" >> "$GITHUB_OUTPUT" ;;
+            3) echo "changed=false" >> "$GITHUB_OUTPUT"
+               echo "No Dart package updates are available inside the current constraints." >> "$GITHUB_STEP_SUMMARY" ;;
+            *) exit "$status" ;;
+          esac
+
+      # The Flutter checks CI runs, minus the lockfile step the script already
+      # did. These are informational: a dependency that needs application
+      # changes must still reach a human as a red PR, so a failure here is
+      # recorded in the PR body rather than swallowing the update.
+      - name: Verify formatting
+        id: format
+        if: ${{ steps.resolve.outputs.changed == 'true' }}
+        continue-on-error: true
+        run: dart format --set-exit-if-changed .
+
+      - name: Analyze
+        id: analyze
+        if: ${{ steps.resolve.outputs.changed == 'true' }}
+        continue-on-error: true
+        run: flutter analyze
+
+      - name: Run tests
+        id: test
+        if: ${{ steps.resolve.outputs.changed == 'true' }}
+        continue-on-error: true
+        run: flutter test
+
+      - name: Require workflow-triggering publication token
+        if: ${{ steps.resolve.outputs.changed == 'true' }}
+        env:
+          PUBLISH_TOKEN: ${{ secrets.DEPENDENCY_UPDATE_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -z "$PUBLISH_TOKEN" ]]; then
+            echo "::error::DEPENDENCY_UPDATE_TOKEN is required to publish the update PR so it runs normal CI. See docs/dependency-updates.md."
+            exit 1
+          fi
+
+      - name: Open or update the draft dependency PR
+        if: ${{ steps.resolve.outputs.changed == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.DEPENDENCY_UPDATE_TOKEN }}
+          FORMAT_OUTCOME: ${{ steps.format.outcome }}
+          ANALYZE_OUTCOME: ${{ steps.analyze.outcome }}
+          TEST_OUTCOME: ${{ steps.test.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh auth setup-git
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Reuse the one update branch instead of opening a new PR every week.
+          remote_sha="$(git ls-remote origin "refs/heads/$UPDATE_BRANCH" | cut -f1)"
+
+          if [[ -n "$remote_sha" ]]; then
+            git fetch --no-tags origin "+refs/heads/$UPDATE_BRANCH:refs/remotes/origin/$UPDATE_BRANCH"
+
+            # Refuse to overwrite work this workflow did not create. The branch
+            # is expected to hold nothing but this workflow's own commit; if
+            # someone pushed a fix onto it, that is a human's PR now and a
+            # force-push would silently delete it.
+            foreign="$(git log --format='%an|%s' "HEAD..origin/$UPDATE_BRANCH" \
+              | grep -vxF "github-actions[bot]|$COMMIT_SUBJECT" || true)"
+            if [[ -n "$foreign" ]]; then
+              {
+                echo "### Update skipped"
+                echo
+                echo "\`$UPDATE_BRANCH\` carries commits this workflow did not write:"
+                echo
+                echo '```text'
+                echo "$foreign"
+                echo '```'
+                echo
+                echo "Refusing to force-push over them. Merge or close the open PR first."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::$UPDATE_BRANCH has commits from someone else; not publishing."
+              exit 0
+            fi
+
+            # Nothing new since the last run: leave the open PR exactly as it is
+            # rather than force-pushing an identical tree and re-notifying.
+            if git show "origin/$UPDATE_BRANCH:pubspec.lock" 2>/dev/null | diff -q - pubspec.lock >/dev/null 2>&1; then
+              echo "The open update PR already carries this lockfile; nothing to push." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          fi
+
+          git checkout -B "$UPDATE_BRANCH"
+          git add pubspec.lock
+          git commit -m "$COMMIT_SUBJECT"
+
+          if [[ -n "$remote_sha" ]]; then
+            git push --force-with-lease="$UPDATE_BRANCH:$remote_sha" origin "$UPDATE_BRANCH"
+          else
+            git push -u origin "$UPDATE_BRANCH"
+          fi
+
+          # Report the checks rather than gate on them: a dependency that needs
+          # application changes is exactly the signal this PR exists to deliver.
+          verdict() {
+            case "$1" in
+              success) printf 'passed' ;;
+              *)       printf '**failed**' ;;
+            esac
+          }
+
+          {
+            echo "Weekly Dart/Flutter package refresh, resolved with the Flutter SDK"
+            echo "pinned in \`.flutter-version\`."
+            echo
+            echo "Only \`pubspec.lock\` changed. No constraint in \`pubspec.yaml\` was"
+            echo "touched, so no direct dependency crossed a major version, and no"
+            echo "application code, test, F-Droid metadata, Fastlane file, release note,"
+            echo "signing file, license or app version was modified."
+            echo
+            cat "$REPORT_DIR/summary.md"
+            echo
+            echo "### Checks run before this PR was opened"
+            echo
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| \`flutter pub get --enforce-lockfile\` | passed |"
+            echo "| \`dart format --set-exit-if-changed .\` | $(verdict "$FORMAT_OUTCOME") |"
+            echo "| \`flutter analyze\` | $(verdict "$ANALYZE_OUTCOME") |"
+            echo "| \`flutter test\` | $(verdict "$TEST_OUTCOME") |"
+            echo
+            echo "A failure above is not a bug in this PR — it means an update needs"
+            echo "application changes, and that is a decision for a human. The PR is"
+            echo "left red on purpose; the CI fixer is kept off this branch."
+            echo
+            echo "Reproduce locally:"
+            echo
+            echo '```bash'
+            echo './scripts/setup_flutter.sh'
+            echo 'export PATH="$PWD/.tool/flutter/bin:$PATH"'
+            echo './scripts/update_dart_dependencies.sh'
+            echo '```'
+            echo
+            echo "See [docs/dependency-updates.md](docs/dependency-updates.md)."
+          } > "$REPORT_DIR/pr-body.md"
+
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$UPDATE_BRANCH" \
+            --state open --json number --jq '.[0].number // empty')"
+
+          if [[ -n "$existing" ]]; then
+            # --body-file only; leave the draft/ready state alone so a reviewer
+            # who marked the PR ready does not get it flipped back.
+            gh pr edit "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$REPORT_DIR/pr-body.md"
+            echo "Updated PR #$existing." >> "$GITHUB_STEP_SUMMARY"
+          else
+            url="$(gh pr create --repo "$GITHUB_REPOSITORY" --draft \
+              --base main --head "$UPDATE_BRANCH" \
+              --title "chore(deps): update Dart packages within current constraints" \
+              --body-file "$REPORT_DIR/pr-body.md")"
+            echo "Opened $url" >> "$GITHUB_STEP_SUMMARY"
+          fi

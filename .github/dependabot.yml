@@ -1,6 +1,17 @@
 # Dependabot opens update PRs and stops there. Nothing here merges itself —
 # a human reviews every PR and decides what lands (issue #362).
 #
+# Dart packages are deliberately NOT here. Dependabot supports the pub
+# ecosystem, but it resolves with its own bare Dart SDK and installs no Flutter,
+# while pubspec.lock has to be resolved with the SDK pinned in .flutter-version
+# for the reproducible F-Droid build — and pub has no `lockfile-only` versioning
+# strategy, so every option it offers (widen / increase / increase-if-necessary)
+# rewrites the constraints in pubspec.yaml, which an automatic update must never
+# do. .github/workflows/dart-dependency-updates.yml handles pub instead; adding
+# a `pub` entry here fails
+# test/tooling/dependency_update_guardrails_test.dart so the two cannot end up
+# fighting over the same lockfile. See docs/dependency-updates.md.
+#
 # Dependabot PRs run the normal CI: ci.yml triggers on `pull_request` with no
 # branch filter, and both it and rust-core.yml declare `permissions:
 # contents: read` and use no secrets, which is exactly the context a Dependabot
