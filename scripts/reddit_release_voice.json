@@ -1,0 +1,10 @@
+{
+  "subreddit": "Linthra",
+  "max_bullets": 5,
+  "patch_intro": "Small update this time, but there are a few things in here I'm really happy with.",
+  "feature_intro": "New Linthra update is out, and there are a few things in this one I'm really happy with.",
+  "bullet_lead": "I focused mostly on:",
+  "empty_release_note": "I kept this one simple — the full details are in the GitHub release.",
+  "closing": "Thanks to everyone testing Linthra and reporting the weird little bugs 😅",
+  "fdroid": "F-Droid will follow once the new build makes its way through their side."
+}
