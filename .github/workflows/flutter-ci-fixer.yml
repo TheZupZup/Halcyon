@@ -81,13 +81,19 @@ jobs:
             exit 0
           fi
 
-          # A Dependabot update that breaks CI has to stay broken. The red is
+          # A dependency update that breaks CI has to stay broken. The red is
           # the whole signal — it says this bump needs a human — and a repair
           # commit would paper over which update broke what. This runs before
           # the credential check and both Codex attempts, so no repair is ever
           # generated for these branches, let alone published.
-          if [[ "$head_branch" == dependabot/* ]]; then
-            echo "Skipping Dependabot branch $head_branch; update PRs stay red for review."
+          #
+          # dependabot/* covers GitHub Actions and Cargo (.github/dependabot.yml);
+          # deps/* covers the Dart/Flutter package updater
+          # (.github/workflows/dart-dependency-updates.yml), whose PRs must stay
+          # lockfile-only — a repair commit would put application code into a PR
+          # that is guarded to contain nothing but pubspec.lock.
+          if [[ "$head_branch" == dependabot/* || "$head_branch" == deps/* ]]; then
+            echo "Skipping dependency update branch $head_branch; update PRs stay red for review."
             exit 0
           fi
 
@@ -357,11 +363,14 @@ jobs:
   publish:
     name: Publish validated Flutter fix
     needs: fix
-    # The Dependabot check in the fix job already stops a repair being built,
-    # so target_branch can never be a dependabot/ branch here. Restated anyway:
-    # this is the last gate before a commit is pushed, and "never publish onto
-    # an update PR" is worth enforcing where the push actually happens.
-    if: ${{ needs.fix.outputs.ready == 'true' && !startsWith(needs.fix.outputs.target_branch, 'dependabot/') }}
+    # The dependency-branch check in the fix job already stops a repair being
+    # built, so target_branch can never be dependabot/ or deps/ here. Restated
+    # anyway: this is the last gate before a commit is pushed, and "never
+    # publish onto an update PR" is worth enforcing where the push happens.
+    if: >-
+      ${{ needs.fix.outputs.ready == 'true'
+      && !startsWith(needs.fix.outputs.target_branch, 'dependabot/')
+      && !startsWith(needs.fix.outputs.target_branch, 'deps/') }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
