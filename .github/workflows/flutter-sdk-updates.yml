@@ -1,0 +1,414 @@
+name: Flutter SDK updates
+
+# Weekly check of the official Flutter stable channel against the SDK pinned in
+# .flutter-version, prepared as one reviewable draft PR (#362).
+#
+# Nothing here merges, and nothing here migrates code. The workflow's whole job
+# is to say "a newer stable SDK exists; here is the one-line pin change; here is
+# what CI thinks of it" and then stop. If the new SDK deprecates an API Linthra
+# uses, or makes the committed lockfile fail its enforced resolve, the PR goes
+# red and stays red until a human does the migration in their own PR. That red
+# is the deliverable, not a bug.
+#
+# Detection lives in scripts/check_flutter_sdk_update.py, not in this file, so
+# the version comparison can be tested offline against fixture manifests
+# (test/tooling/flutter_sdk_update_guardrails_test.dart). The script reads the
+# official release manifest from the same flutter_infra_release bucket
+# scripts/setup_flutter.sh installs the pinned SDK from, filters it to the
+# stable channel, and classifies the gap as patch, minor or major.
+#
+# patch / minor -> this workflow opens or updates the draft PR below.
+# major         -> no PR and no pin change; it opens or updates an issue
+#                  instead, because a major SDK migration touches application
+#                  APIs and the F-Droid build in ways CI cannot judge.
+#
+# See docs/dependency-updates.md.
+on:
+  schedule:
+    # Mondays, early UTC — the same weekly cadence as the other updaters, a few
+    # minutes after the Dart package run so the two never contend.
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+
+# A manual run is the scheduled run: same detection, same safety checks, same
+# publication path. The only difference is what started it.
+concurrency:
+  group: flutter-sdk-updates
+  cancel-in-progress: false
+
+# Read-only by default. The publication job below keeps this and routes its
+# writes through the dedicated token instead, because a push or PR made with
+# GITHUB_TOKEN does not trigger the PR's normal CI — and an update PR that runs
+# no checks is a broken updater.
+permissions:
+  contents: read
+
+env:
+  UPDATE_BRANCH: toolchain/flutter-sdk
+  COMMIT_SUBJECT_PREFIX: "chore(toolchain): update Flutter SDK to "
+
+jobs:
+  check:
+    name: Check the stable channel
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.check.outputs.status }}
+      current: ${{ steps.check.outputs.current }}
+      latest: ${{ steps.check.outputs.latest }}
+      latest_release_date: ${{ steps.check.outputs.latest_release_date }}
+      latest_archive: ${{ steps.check.outputs.latest_archive }}
+      latest_hash: ${{ steps.check.outputs.latest_hash }}
+      stable_confirmed: ${{ steps.check.outputs.stable_confirmed }}
+      source: ${{ steps.check.outputs.source }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      # Local twin: python3 scripts/check_flutter_sdk_update.py. Reads
+      # .flutter-version, fetches the official stable release manifest and
+      # classifies. Exits non-zero on anything it cannot trust — a malformed
+      # pin, a manifest it cannot parse, or a "newest stable" that is behind
+      # the pin — rather than guessing a target.
+      - name: Classify the pinned SDK against stable
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_flutter_sdk_update.py \
+            --github-output "$GITHUB_OUTPUT" | tee "$RUNNER_TEMP/check.txt"
+
+      - name: Summarise
+        shell: bash
+        env:
+          STATUS: ${{ steps.check.outputs.status }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Flutter stable check"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/check.txt"
+            echo '```'
+            if [[ "$STATUS" == "up-to-date" ]]; then
+              echo
+              echo "Nothing to do."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # patch / minor -> one reusable draft PR that changes the pin and nothing else
+  # ---------------------------------------------------------------------------
+  sdk-pr:
+    name: Open or update the draft SDK PR
+    needs: check
+    if: ${{ needs.check.outputs.status == 'patch' || needs.check.outputs.status == 'minor' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Fails the run rather than opening a PR that no CI would ever look at.
+      # This step lives in this job on purpose: a week with no update never
+      # reaches it, so a missing token cannot fail a no-op run.
+      - name: Require workflow-triggering publication token
+        env:
+          PUBLISH_TOKEN: ${{ secrets.DEPENDENCY_UPDATE_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -z "$PUBLISH_TOKEN" ]]; then
+            echo "::error::DEPENDENCY_UPDATE_TOKEN is required to publish the SDK update PR so it runs normal CI. See docs/dependency-updates.md."
+            exit 1
+          fi
+
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Open or update the draft SDK update PR
+        env:
+          GH_TOKEN: ${{ secrets.DEPENDENCY_UPDATE_TOKEN }}
+          STATUS: ${{ needs.check.outputs.status }}
+          CURRENT: ${{ needs.check.outputs.current }}
+          LATEST: ${{ needs.check.outputs.latest }}
+          RELEASE_DATE: ${{ needs.check.outputs.latest_release_date }}
+          RELEASE_ARCHIVE: ${{ needs.check.outputs.latest_archive }}
+          RELEASE_HASH: ${{ needs.check.outputs.latest_hash }}
+          STABLE_CONFIRMED: ${{ needs.check.outputs.stable_confirmed }}
+          MANIFEST_SOURCE: ${{ needs.check.outputs.source }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The detection job already refused to continue on anything it could
+          # not trust, so reaching here without a confirmed stable target would
+          # mean the outputs were tampered with between jobs.
+          if [[ "$STABLE_CONFIRMED" != "true" ]]; then
+            echo "::error::The target $LATEST was not confirmed on the stable channel; refusing to open a PR."
+            exit 1
+          fi
+
+          gh auth setup-git
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          subject="${COMMIT_SUBJECT_PREFIX}${LATEST}"
+
+          # Reuse the one update branch instead of opening a new PR every week.
+          remote_sha="$(git ls-remote origin "refs/heads/$UPDATE_BRANCH" | cut -f1)"
+          branch_exists=false
+          branch_matches_target=false
+
+          if [[ -n "$remote_sha" ]]; then
+            branch_exists=true
+            git fetch --no-tags origin "+refs/heads/$UPDATE_BRANCH:refs/remotes/origin/$UPDATE_BRANCH"
+
+            # Refuse to overwrite work this workflow did not create. The branch
+            # is expected to hold nothing but this workflow's own pin commits;
+            # if someone pushed a migration onto it, that is a human's PR now
+            # and a force-push would silently delete it.
+            foreign=""
+            while IFS='|' read -r author subject_line; do
+              [[ -n "$author$subject_line" ]] || continue
+              if [[ "$author" == "github-actions[bot]" \
+                    && "$subject_line" == "$COMMIT_SUBJECT_PREFIX"* ]]; then
+                continue
+              fi
+              foreign+="$author|$subject_line"$'\n'
+            done < <(git log --format='%an|%s' "HEAD..origin/$UPDATE_BRANCH")
+
+            if [[ -n "$foreign" ]]; then
+              {
+                echo "### Update skipped"
+                echo
+                echo "\`$UPDATE_BRANCH\` carries commits this workflow did not write:"
+                echo
+                echo '```text'
+                printf '%s' "$foreign"
+                echo '```'
+                echo
+                echo "Refusing to force-push over them. Merge or close the open PR first."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::$UPDATE_BRANCH has commits from someone else; not publishing."
+              exit 0
+            fi
+
+            branch_version="$(git show "origin/$UPDATE_BRANCH:.flutter-version" 2>/dev/null | tr -d '[:space:]' || true)"
+            if [[ -z "$branch_version" ]]; then
+              echo "::error::$UPDATE_BRANCH has no readable .flutter-version; refusing to force-push over it."
+              exit 1
+            fi
+
+            if [[ "$branch_version" == "$LATEST" ]]; then
+              branch_matches_target=true
+            else
+              # The open PR must only ever move forwards. If its pin is already
+              # ahead of the target the manifest just gave us, something is
+              # wrong with the data, not with the branch.
+              if ! python3 scripts/check_flutter_sdk_update.py \
+                    --current "$branch_version" --latest "$LATEST" --quiet; then
+                echo "::error::$UPDATE_BRANCH already proposes $branch_version, which is not older than $LATEST. Refusing to rewind the open PR."
+                exit 1
+              fi
+            fi
+          fi
+
+          # The one file this updater may write. scripts/check_dependency_update_files.sh
+          # re-checks that below, and ci.yml re-checks it again against the real
+          # PR diff for any toolchain/ branch.
+          if [[ "$branch_matches_target" == "true" ]]; then
+            echo "The open PR already proposes $LATEST; not pushing again." >> "$GITHUB_STEP_SUMMARY"
+          else
+            git checkout -B "$UPDATE_BRANCH"
+            printf '%s\n' "$LATEST" > .flutter-version
+            git diff --name-only | ./scripts/check_dependency_update_files.sh --kind flutter-sdk
+            git add .flutter-version
+            git commit -m "$subject"
+
+            if [[ "$branch_exists" == "true" ]]; then
+              git push --force-with-lease="$UPDATE_BRANCH:$remote_sha" origin "$UPDATE_BRANCH"
+            else
+              git push -u origin "$UPDATE_BRANCH"
+            fi
+          fi
+
+          body="$RUNNER_TEMP/pr-body.md"
+          {
+            echo "Automatic Flutter SDK update — **$STATUS** release on the stable channel."
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Currently pinned | \`$CURRENT\` |"
+            echo "| Proposed | \`$LATEST\` |"
+            echo "| Kind | $STATUS |"
+            echo "| Released | ${RELEASE_DATE:-unknown} |"
+            echo "| Stable channel | confirmed — \`$LATEST\` is published on stable |"
+            echo
+            echo "Confirmed against the official release manifest:"
+            echo
+            echo "- source: \`$MANIFEST_SOURCE\`"
+            echo "- archive: \`${RELEASE_ARCHIVE:-unknown}\`"
+            echo "- commit: \`${RELEASE_HASH:-unknown}\`"
+            echo
+            echo "That is the same \`flutter_infra_release\` bucket \`scripts/setup_flutter.sh\`"
+            echo "downloads from, so this version is installable by the pinned setup path."
+            echo
+            echo "### What changed here"
+            echo
+            echo "One file:"
+            echo
+            echo '```text'
+            echo ".flutter-version"
+            echo '```'
+            echo
+            echo "No application code, test code, \`pubspec.yaml\`, \`pubspec.lock\`, app"
+            echo "version, F-Droid metadata, Fastlane file, release note, signing file,"
+            echo "license, Gradle, AGP, Kotlin or JDK setting was touched, and no deprecated"
+            echo "API was migrated. \`scripts/check_dependency_update_files.sh --kind flutter-sdk\`"
+            echo "enforces that here and again in CI against this PR's real diff."
+            echo
+            echo "### This PR may be red, and that is fine"
+            echo
+            echo "A new SDK can deprecate an API Linthra uses, reformat with a newer Dart,"
+            echo "or make the committed lockfile fail CI's lockfile-enforced dependency"
+            echo "install. Any of those turns this PR red. That is the finding — it says the"
+            echo "upgrade needs a migration — not a fault in the PR. **Do the migration in a"
+            echo "separate PR.** Do not push fixes onto this branch: the file guard rejects"
+            echo "them, and the next scheduled run refuses to force-push over commits it did"
+            echo "not write. The Flutter CI fixer is kept off \`toolchain/\` branches for the"
+            echo "same reason."
+            echo
+            echo "### Before merging"
+            echo
+            echo "- [ ] CI is green, or every failure is understood and handled elsewhere."
+            echo "- [ ] The lockfile still resolves under the new SDK. \`pubspec.lock\` records"
+            echo "      the SDK line it was resolved against, so a minor bump can need a"
+            echo "      lockfile refresh — which belongs in its own PR, not this one."
+            echo "- [ ] **F-Droid / reproducibility:** the F-Droid recipe and the build"
+            echo "      environment read this same pin, so the new SDK has to be available"
+            echo "      and reproducible there too. Re-read \`docs/fdroid-build-recipe.md\`"
+            echo "      and the reproducibility notes, and update them if the bump changes"
+            echo "      what a builder must install."
+            echo "- [ ] A human reviewed and merged this. Nothing here auto-merges, ever."
+            echo
+            echo "Opened by [\`flutter-sdk-updates.yml\`](.github/workflows/flutter-sdk-updates.yml)"
+            echo "for issue #362. See [docs/dependency-updates.md](docs/dependency-updates.md)."
+            echo
+            echo "Reproduce the detection locally:"
+            echo
+            echo '```bash'
+            echo 'python3 scripts/check_flutter_sdk_update.py'
+            echo '```'
+          } > "$body"
+
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$UPDATE_BRANCH" \
+            --state open --json number --jq '.[0].number // empty')"
+
+          if [[ -n "$existing" ]]; then
+            # --title/--body only; leave the draft/ready state alone so a
+            # reviewer who marked the PR ready does not get it flipped back.
+            gh pr edit "$existing" --repo "$GITHUB_REPOSITORY" \
+              --title "$subject" --body-file "$body"
+            echo "Updated PR #$existing ($CURRENT -> $LATEST)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            url="$(gh pr create --repo "$GITHUB_REPOSITORY" --draft \
+              --base main --head "$UPDATE_BRANCH" \
+              --title "$subject" --body-file "$body")"
+            echo "Opened $url ($CURRENT -> $LATEST)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # major -> an issue, no branch, no commit, no pin change
+  # ---------------------------------------------------------------------------
+  major-issue:
+    name: File the major migration issue
+    needs: check
+    if: ${{ needs.check.outputs.status == 'major' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The only write this workflow's own GITHUB_TOKEN ever gets, and only in
+      # the job that files the issue. An issue needs no CI, so it needs none of
+      # the dedicated publication token's reach.
+      issues: write
+    steps:
+      - name: Open or update the major migration issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT: ${{ needs.check.outputs.current }}
+          LATEST: ${{ needs.check.outputs.latest }}
+          RELEASE_DATE: ${{ needs.check.outputs.latest_release_date }}
+          MANIFEST_SOURCE: ${{ needs.check.outputs.source }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          major="${LATEST%%.*}"
+          title="Flutter ${major}.x is available — major SDK migration (manual)"
+
+          body="$RUNNER_TEMP/issue-body.md"
+          {
+            echo "A new **major** Flutter release is on the stable channel."
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Currently pinned | \`$CURRENT\` |"
+            echo "| New stable major | \`$LATEST\` |"
+            echo "| Released | ${RELEASE_DATE:-unknown} |"
+            echo "| Source | \`$MANIFEST_SOURCE\` |"
+            echo
+            echo "### No PR was opened, on purpose"
+            echo
+            echo "\`.flutter-version\` has **not** been changed and no commit was made."
+            echo "Patch and minor SDK updates get an automatic draft PR; a major does not,"
+            echo "because a major migration is not a one-line pin change (#362)."
+            echo
+            echo "### Why this stays manual"
+            echo
+            echo "- **Application APIs.** A major SDK removes what earlier releases only"
+            echo "  deprecated. Working through that is a code change with design decisions"
+            echo "  in it, and this repo's automation never migrates application code."
+            echo "- **The dependency graph.** The committed \`pubspec.lock\` is resolved"
+            echo "  against the pinned SDK and records the SDK line it was resolved with, so"
+            echo "  a major bump usually forces a re-resolve — and possibly constraint"
+            echo "  changes in \`pubspec.yaml\`, which no bot here may write."
+            echo "- **F-Droid and reproducibility.** The F-Droid recipe and build"
+            echo "  environment install this same pin. A major bump can change what the"
+            echo "  builder must provide and whether the build still reproduces, and CI"
+            echo "  cannot prove either. See \`docs/fdroid-build-recipe.md\` and the"
+            echo "  reproducibility notes."
+            echo "- **The Android toolchain.** A major SDK often expects a different"
+            echo "  Gradle/AGP/Kotlin/JDK combination, which is its own review."
+            echo
+            echo "### Suggested route"
+            echo
+            echo "Do the migration in a normal human PR: bump the pin, refresh the"
+            echo "lockfile with the new SDK, fix the API breaks, re-check the F-Droid"
+            echo "recipe and reproducibility notes, and let normal CI judge it."
+            echo
+            echo "Filed by [\`flutter-sdk-updates.yml\`](.github/workflows/flutter-sdk-updates.yml)"
+            echo "for issue #362. This issue is updated in place on later runs rather than"
+            echo "refiled, so the weekly check will not spam duplicates."
+          } > "$body"
+
+          # Dedupe on the exact title, which is stable for the whole major line:
+          # a later release within the same major edits this issue instead of
+          # opening another, and a genuinely new major gets a new title. Listed
+          # rather than searched, so a freshly filed issue is found on the next
+          # run without waiting for the search index.
+          existing="$(TITLE="$title" gh issue list --repo "$GITHUB_REPOSITORY" \
+            --state open --limit 200 --json number,title \
+            --jq 'map(select(.title == env.TITLE))[0].number // empty')"
+
+          if [[ -n "$existing" ]]; then
+            gh issue edit "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+            echo "Updated issue #$existing ($CURRENT -> $LATEST)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            url="$(gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "$title" --body-file "$body")"
+            echo "Filed $url ($CURRENT -> $LATEST)." >> "$GITHUB_STEP_SUMMARY"
+          fi

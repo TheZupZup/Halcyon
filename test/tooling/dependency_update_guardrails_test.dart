@@ -236,14 +236,19 @@ void main() {
 
   group('the CI fixer leaves dependency updates alone', () {
     test('the fix job skips deps/ branches alongside dependabot/', () {
-      expect(
-        fixer,
-        contains(
-            r'if [[ "$head_branch" == dependabot/* || "$head_branch" == deps/* ]]; then'),
-        reason: 'A dependency update that breaks CI must stay broken — the red '
-            'is the signal. The skip has to happen while resolving the run, '
-            'before any repair is generated.',
-      );
+      // Matched per prefix rather than as one literal line, so extending the
+      // condition for another updater's namespace (toolchain/, covered by
+      // test/tooling/flutter_sdk_update_guardrails_test.dart) cannot silently
+      // drop one of the prefixes already protected here.
+      for (final String prefix in <String>['dependabot/', 'deps/']) {
+        expect(
+          fixer,
+          contains('"\$head_branch" == $prefix*'),
+          reason: 'A dependency update that breaks CI must stay broken — the '
+              'red is the signal. The skip has to happen while resolving the '
+              'run, before any repair is generated. Missing: $prefix',
+        );
+      }
     });
 
     test('the publish job restates the skip where the push happens', () {

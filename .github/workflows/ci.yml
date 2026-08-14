@@ -6,6 +6,7 @@ name: CI
 #   * secret-scan         — offline scan for committed secrets / private data.
 #   * release-bump-guard  — release/* PRs only: the bump must be version-only.
 #   * dependency-guard    — deps/* PRs only: the update must be lockfile-only.
+#   * toolchain-guard     — toolchain/* PRs only: the update must be pin-only.
 on:
   push:
     branches: [main]
@@ -103,11 +104,39 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Local twin: scripts/check_dependency_update_files.sh.
+      # Local twin: scripts/check_dependency_update_files.sh. --kind defaults to
+      # dart-packages, whose allowlist is pubspec.lock and nothing else.
       - name: Check changed files
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           git diff --name-only "$BASE_SHA" HEAD \
-            | ./scripts/check_dependency_update_files.sh
+            | ./scripts/check_dependency_update_files.sh --kind dart-packages
+
+  toolchain-guard:
+    name: Toolchain update touches only the pin
+    runs-on: ubuntu-latest
+    # Only meaningful for the PRs the "Flutter SDK updates" workflow opens (it
+    # pushes the toolchain/flutter-sdk branch). The updater already refuses to
+    # commit anything but .flutter-version; re-checking here covers what happens
+    # to the branch afterwards — an "I'll just migrate the deprecated API while
+    # I'm here" commit pushed onto the SDK PR is exactly the change that must
+    # not ride along, because that migration is a human's separate PR.
+    if: ${{ startsWith(github.head_ref, 'toolchain/') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Same script as the dependency guard, with the SDK updater's narrower
+      # allowlist: .flutter-version, and nothing else — not even pubspec.lock,
+      # which only a human may re-resolve.
+      - name: Check changed files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git diff --name-only "$BASE_SHA" HEAD \
+            | ./scripts/check_dependency_update_files.sh --kind flutter-sdk

@@ -5,16 +5,18 @@ when something can move. It never merges anything. The bot's job is to say
 *"here is an update, and here is what CI thinks of it"*; deciding what happens
 next is a human's (issue #362).
 
-Three ecosystems are covered, by two different mechanisms:
+Four things are covered, by three different mechanisms:
 
-| Ecosystem | Handled by | Cadence |
-| --- | --- | --- |
-| GitHub Actions | Dependabot — [`.github/dependabot.yml`](../.github/dependabot.yml) | weekly |
-| Cargo (`native/linthra_core`) | Dependabot — same file | weekly |
-| Dart / Flutter packages | [`dart-dependency-updates.yml`](../.github/workflows/dart-dependency-updates.yml) | weekly |
+| What | Handled by | Cadence | Outcome |
+| --- | --- | --- | --- |
+| GitHub Actions | Dependabot — [`.github/dependabot.yml`](../.github/dependabot.yml) | weekly | PR |
+| Cargo (`native/linthra_core`) | Dependabot — same file | weekly | PR |
+| Dart / Flutter packages | [`dart-dependency-updates.yml`](../.github/workflows/dart-dependency-updates.yml) | weekly | draft PR |
+| Flutter SDK | [`flutter-sdk-updates.yml`](../.github/workflows/flutter-sdk-updates.yml) | weekly | draft PR, or an issue for a major |
 
-Toolchain updates — the Flutter SDK itself, Gradle, AGP, Kotlin, the JDK — are
-not automated yet. They are separate phases of the same issue.
+The rest of the toolchain — Gradle, AGP, Kotlin and the JDK — is not automated
+yet. Those are a separate phase of the same issue, and until then a bump to any
+of them is something a human notices and opens by hand.
 
 ## Dart / Flutter packages
 
@@ -184,3 +186,197 @@ Pass `--output-dir DIR` to also write the Markdown summary and the raw
   refuses to force-push over commits it did not write.
 - Merge manually when it is green and you are happy with it. Nothing
   auto-merges, by design.
+
+## Flutter SDK
+
+### Where the pin lives
+
+`.flutter-version`, at the repository root, holds one bare stable version and
+nothing else. It is the single source of truth for the SDK: CI installs from it
+through [`.github/actions/setup-flutter`](../.github/actions/setup-flutter/action.yml),
+contributors install from it through `scripts/setup_flutter.sh`, the Dart
+package updater resolves the lockfile with it, and the F-Droid recipe reads the
+same file. `test/tooling/toolchain_pins_test.dart` fails if a workflow or a
+document starts naming a version instead of reading this one.
+
+A Flutter SDK update is therefore a one-line change — and that is exactly what
+the updater is allowed to write.
+
+### Where the release information comes from
+
+The official Flutter release manifest:
+
+```text
+https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json
+```
+
+That is the machine-readable index behind Flutter's own archive page, served
+from the same `flutter_infra_release` bucket `scripts/setup_flutter.sh` already
+downloads the pinned SDK from. So a version this checker proposes is by
+construction a version the pinned setup path can install. No third-party
+version API, no scraped web page, no `git ls-remote` against the SDK repo.
+
+The manifest lists every release on every channel. A release is a candidate
+here only if all three hold:
+
+1. its `channel` is exactly `stable` — beta, dev and master are ignored, and so
+   are the `-0.N.pre` builds that ride the beta channel;
+2. its `version` is a bare `MAJOR.MINOR.PATCH` — this drops the historical
+   `v1.12.13+hotfix.9`-style stable tags, the only stable rows that are not
+   plain triples;
+3. its `archive` lives under `stable/`.
+
+The newest candidate is the one with the highest `(major, minor, patch)`, not
+the first row in the array — a hotfix on an older line can be published after a
+newer line already exists. The manifest's own `current_release.stable` pointer
+is resolved as a cross-check and any disagreement is reported, but the highest
+version wins either way, so the answer never depends on array order.
+
+### What it does
+
+Once a week (and on demand from **Actions → Flutter SDK updates → Run
+workflow**) the workflow compares the pin against that manifest. A manual run is
+the scheduled run: same detection, same classification, same safety checks.
+
+| Gap between pin and newest stable | Result |
+| --- | --- |
+| none | nothing happens, no PR, no issue |
+| newer patch, same major and minor | draft PR |
+| newer minor, same major | draft PR |
+| newer major | **issue**, and nothing else |
+
+The comparison lives in `scripts/check_flutter_sdk_update.py`, not in the
+workflow YAML, so it can be tested offline against fixture manifests
+(`test/tooling/flutter_sdk_update_guardrails_test.dart`). It uses no
+third-party semantic-version package; three integers and a tuple comparison are
+the whole algorithm.
+
+It fails loudly rather than guessing. A pin it cannot parse, a manifest it
+cannot parse, a manifest with no usable stable release, or a "newest stable"
+that is *older* than the pin all stop the run with a non-zero exit. In
+particular the updater never proposes a downgrade.
+
+Run it yourself:
+
+```bash
+python3 scripts/check_flutter_sdk_update.py
+python3 scripts/check_flutter_sdk_update.py --json
+```
+
+It reads two things and writes nothing.
+
+### Patch and minor: one draft PR
+
+The workflow keeps a single reusable branch:
+
+```text
+toolchain/flutter-sdk
+```
+
+A deliberately separate namespace from `deps/`, so it inherits none of the Dart
+package updater's rules; each branch namespace has its own allowlist. Repeated
+runs update that one PR rather than opening a new one every Monday, and a run
+whose target is already on the branch pushes nothing at all.
+
+The PR body states the currently pinned version, the proposed version, whether
+the gap is a patch or a minor, and the manifest entry (archive, commit,
+release date) that confirms the target really is published on the stable
+channel.
+
+### What the bot may touch
+
+Exactly one file:
+
+```text
+.flutter-version
+```
+
+Notably **not** `pubspec.lock`. A new SDK can require the lockfile to be
+re-resolved, but that resolution is what the reproducible F-Droid build depends
+on ([release-process.md](./release-process.md) §7), so it is a human's decision
+in a human's PR — not something an SDK bump drags along.
+
+`scripts/check_dependency_update_files.sh` owns the list. It takes an explicit
+`--kind`, because the two updaters have deliberately different reach:
+
+| `--kind` | Branch | May write |
+| --- | --- | --- |
+| `dart-packages` (default) | `deps/` | `pubspec.lock` |
+| `flutter-sdk` | `toolchain/` | `.flutter-version` |
+
+Neither kind can write the other's file. And as with the Dart updater, the
+guard runs twice: once inside the workflow before a commit exists, and again in
+CI against the **real PR diff** for any `toolchain/` branch — so a commit
+pushed onto the update PR afterwards is caught too. An automatic SDK update
+never changes application code, test code, dependency constraints, the app
+version, F-Droid metadata, Fastlane files, release notes, signing files or
+licenses, and it never migrates a deprecated API.
+
+### Normal CI runs on it, and red is the point
+
+The PR is published with the dedicated token, so GitHub triggers the repository's
+normal `pull_request` checks on it exactly like any other PR — format, analyze,
+test, the lockfile-enforced dependency install, the secret scan, and the
+`toolchain/` file guard.
+
+A new SDK can deprecate an API Linthra uses, reformat the codebase with a newer
+Dart, or make the committed lockfile fail its enforced resolve. Any of those
+turns the PR red, and **that is the finding**: the bump needs a migration. The
+migration is a separate, human PR. Do not push it onto the update branch — the
+file guard rejects it, and the next scheduled run refuses to force-push over
+commits it did not write.
+
+So the Flutter CI fixer is kept away from this branch too. It skips
+`toolchain/*` exactly the way it skips `dependabot/*` and `deps/*`: while
+resolving the failed run, before any repair is generated, and again in the
+publish job where the push would happen. "Repair the application code until the
+checks pass" *is* the migration, and it is not a bot's call.
+
+Nothing auto-merges. There is no merge command anywhere in the workflow, and a
+test asserts that stays true.
+
+### Major releases get an issue, not a PR
+
+A new major stable release produces no branch, no commit and no change to
+`.flutter-version`. The workflow opens — or updates, so the weekly run does not
+refile it — one issue explaining that a major migration is available, which
+version it is, and why it is intentionally manual:
+
+- **Application APIs.** A major removes what earlier releases only deprecated.
+- **The dependency graph.** The lockfile almost certainly has to be re-resolved,
+  possibly with constraint changes in `pubspec.yaml` that no bot may write.
+- **F-Droid and reproducibility.** The recipe and the build environment install
+  this same pin; a major bump can change what a builder must provide and whether
+  the build still reproduces, and CI cannot prove either.
+- **The Android toolchain.** A major SDK often expects a different
+  Gradle/AGP/Kotlin/JDK combination, which is its own review.
+
+### Reviewing an SDK update PR
+
+- Confirm the proposed version against the manifest details in the PR body.
+- Check CI. Red is informative; work out whether it is an API deprecation, a
+  formatting change from the newer Dart, or a lockfile that needs re-resolving.
+- Do any migration in a separate PR, and refresh `pubspec.lock` with the new SDK
+  there as well — the F-Droid build resolves from the committed lockfile.
+- Re-read [`fdroid-build-recipe.md`](./fdroid-build-recipe.md) and the
+  reproducibility notes, and update them if the bump changes what a builder must
+  install.
+- Merge manually when you are happy with it. Nothing auto-merges, by design.
+
+### One-time setup
+
+The same repository Actions secret the Dart package updater uses:
+
+- `DEPENDENCY_UPDATE_TOKEN` — a dedicated fine-grained token with **Contents:
+  read/write** and **Pull requests: read/write** on this repository.
+
+There is deliberately no second credential. A PR opened with the workflow's
+default `GITHUB_TOKEN` triggers no checks, and an update PR that runs no CI is a
+broken updater — so the workflow fails loudly rather than opening one. It only
+asks for the token in the job that publishes, so a week with no update (or a
+major, which files an issue) never touches it.
+
+The major-update path needs no token at all: it uses the workflow's own
+`GITHUB_TOKEN` with `issues: write`, granted in that one job. An issue runs no
+CI, so it needs none of the publication token's reach. Everything else in the
+workflow stays `contents: read`.
