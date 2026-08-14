@@ -191,10 +191,20 @@ void main() {
 
     testWidgets('a track change drops a seek the previous track was holding',
         (tester) async {
-      // Two songs of exactly the same length — so nothing about the *shape* of
-      // the playback state changes when the track does, and only the bar's
-      // identity can tell them apart.
+      // The two songs are as alike as the playback state can make them: exactly
+      // the same length, and the same *bare* id — which is legal, because ids
+      // are only unique within a provider (see `Track.==`). Nothing but the
+      // provider-namespaced uri separates them, so nothing but the uri can tell
+      // the bar it is looking at a different song.
       const Duration sameLength = Duration(minutes: 3);
+      const Track songTwo = Track(
+        id: '1',
+        title: 'Song Two',
+        uri: 'jellyfin:1',
+      );
+      expect(songTwo.id, _localTrack.id);
+      expect(songTwo.uri, isNot(_localTrack.uri));
+
       final controller = _playing(duration: sameLength);
       await _pumpScreen(tester, controller);
 
@@ -209,8 +219,8 @@ void main() {
       controller.emit(
         const PlaybackState(
           status: PlaybackStatus.playing,
-          currentTrack: Track(id: '2', title: 'Song Two', uri: '/2.mp3'),
-          source: PlaybackSource.localFile,
+          currentTrack: songTwo,
+          source: PlaybackSource.streamingDirect,
           duration: sameLength,
         ),
       );

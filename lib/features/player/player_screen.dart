@@ -326,8 +326,10 @@ class _LiveControls extends ConsumerWidget {
           // Identity is the track, so a track change disposes the bar's state
           // — including a seek it is still holding optimistically — rather than
           // carrying it onto the new song. Duration alone can't do that: two
-          // tracks can be exactly as long as each other.
-          key: ValueKey<String?>(state.currentTrack?.id),
+          // tracks can be exactly as long as each other. The uri is what Track
+          // itself calls identity (see its == ): bare ids collide across
+          // providers, the provider-namespaced uri does not.
+          key: ValueKey<String?>(state.currentTrack?.uri),
           position: state.position,
           duration: state.duration,
           // Drives the wave's slow drift: it flows while playing and holds
