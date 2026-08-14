@@ -260,6 +260,70 @@ void main() {
       expect(r.value('notes'), contains('archive is not under stable/'));
     });
 
+    // A row that names no archive at all is no more installable than one
+    // pointing outside stable/, so the three shapes below are refused for the
+    // same reason. Each claims stable at a version far above the pin, so a
+    // regression that lets one through surfaces immediately as `latest`.
+    for (final MapEntry<String, Map<String, dynamic>> broken
+        in <String, Map<String, dynamic>>{
+      'a missing archive': _release('7.0.0')..remove('archive'),
+      'a null archive': _release('7.0.1')..['archive'] = null,
+      'an empty archive': _release('7.0.2')..['archive'] = '',
+    }.entries) {
+      test('a stable row with ${broken.key} is refused', () {
+        final _Result r = _check(
+          checker,
+          current: '1.2.3',
+          stable: <String>['1.2.4'],
+          extra: <Map<String, dynamic>>[broken.value],
+        );
+        expect(r.exitCode, 0, reason: r.describe());
+        expect(r.value('latest'), '1.2.4',
+            reason: 'A stable row naming no archive under stable/ cannot be '
+                'confirmed installable by the pinned setup path, so it must '
+                'never be proposed.');
+        expect(r.value('notes'), contains('archive is not under stable/'));
+      });
+    }
+
+    test('a stable row under stable/ is still a candidate', () {
+      // The other half of the rule: tightening it must not start rejecting
+      // the ordinary rows the manifest is made of.
+      final _Result r = _check(
+        checker,
+        current: '1.2.3',
+        stable: <String>['1.2.4'],
+        extra: <Map<String, dynamic>>[
+          _release('7.0.0',
+              archive: 'stable/linux/flutter_linux_7.0.0-stable.tar.xz'),
+        ],
+      );
+      expect(r.exitCode, 0, reason: r.describe());
+      expect(r.value('latest'), '7.0.0');
+      expect(r.value('latest_archive'),
+          'stable/linux/flutter_linux_7.0.0-stable.tar.xz');
+    });
+
+    test('a manifest whose only stable rows lack an archive is an error', () {
+      // Fail-safe: no usable candidate is a hard error, not a silent
+      // "up-to-date" that would hide a stalled updater.
+      final _Result r = _runWithManifest(
+        checker,
+        const JsonEncoder.withIndent('  ').convert(<String, dynamic>{
+          'base_url':
+              'https://storage.googleapis.com/flutter_infra_release/releases',
+          'current_release': <String, String>{'stable': 'hash-stable-1.2.4'},
+          'releases': <Map<String, dynamic>>[
+            _release('1.2.4')..remove('archive'),
+            _release('1.3.0')..['archive'] = null,
+          ],
+        }),
+        <String>['--current', '1.2.3', '--json'],
+      );
+      expect(r.exitCode, isNot(0), reason: r.describe());
+      expect(r.stderr, contains('no usable `stable` release'));
+    });
+
     test('reaching a target at all is the stable-channel confirmation', () {
       final _Result r =
           _check(checker, current: '1.2.3', stable: <String>['1.3.0']);
@@ -779,11 +843,15 @@ void main() {
   // The boundary is re-checked on the PR itself, and the fixer stays away.
   // ---------------------------------------------------------------------------
   group('the boundary is re-checked on the PR itself', () {
-    test('ci.yml guards toolchain/ PRs with the same script', () {
-      expect(ci, contains("startsWith(github.head_ref, 'toolchain/')"),
+    test('ci.yml guards the SDK update branch with the same script', () {
+      expect(ci, contains("github.head_ref == 'toolchain/flutter-sdk'"),
           reason: 'CI must run the pin-only guard on SDK update PRs — against '
               'the real PR diff, not just the files the updater thinks it '
               'changed.');
+      expect(ci.contains("startsWith(github.head_ref, 'toolchain/')"), isFalse,
+          reason: 'The guard must match the updater\'s branch exactly. A '
+              'prefix match would force every future human toolchain/* PR to '
+              'touch nothing but .flutter-version.');
       expect(
           ci,
           contains(

@@ -302,12 +302,14 @@ in a human's PR — not something an SDK bump drags along.
 | `--kind` | Branch | May write |
 | --- | --- | --- |
 | `dart-packages` (default) | `deps/` | `pubspec.lock` |
-| `flutter-sdk` | `toolchain/` | `.flutter-version` |
+| `flutter-sdk` | `toolchain/flutter-sdk` | `.flutter-version` |
 
 Neither kind can write the other's file. And as with the Dart updater, the
 guard runs twice: once inside the workflow before a commit exists, and again in
-CI against the **real PR diff** for any `toolchain/` branch — so a commit
-pushed onto the update PR afterwards is caught too. An automatic SDK update
+CI against the **real PR diff** for the `toolchain/flutter-sdk` branch — so a
+commit pushed onto the update PR afterwards is caught too. CI matches that
+branch exactly, not by `toolchain/` prefix: a human's own toolchain PR is an
+ordinary PR and is not held to the pin-only rule. An automatic SDK update
 never changes application code, test code, dependency constraints, the app
 version, F-Droid metadata, Fastlane files, release notes, signing files or
 licenses, and it never migrates a deprecated API.
@@ -317,7 +319,7 @@ licenses, and it never migrates a deprecated API.
 The PR is published with the dedicated token, so GitHub triggers the repository's
 normal `pull_request` checks on it exactly like any other PR — format, analyze,
 test, the lockfile-enforced dependency install, the secret scan, and the
-`toolchain/` file guard.
+`toolchain/flutter-sdk` file guard.
 
 A new SDK can deprecate an API Linthra uses, reformat the codebase with a newer
 Dart, or make the committed lockfile fail its enforced resolve. Any of those

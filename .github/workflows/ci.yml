@@ -6,7 +6,8 @@ name: CI
 #   * secret-scan         — offline scan for committed secrets / private data.
 #   * release-bump-guard  — release/* PRs only: the bump must be version-only.
 #   * dependency-guard    — deps/* PRs only: the update must be lockfile-only.
-#   * toolchain-guard     — toolchain/* PRs only: the update must be pin-only.
+#   * toolchain-guard     — toolchain/flutter-sdk only: the bump must be
+#                           pin-only.
 on:
   push:
     branches: [main]
@@ -117,13 +118,15 @@ jobs:
   toolchain-guard:
     name: Toolchain update touches only the pin
     runs-on: ubuntu-latest
-    # Only meaningful for the PRs the "Flutter SDK updates" workflow opens (it
-    # pushes the toolchain/flutter-sdk branch). The updater already refuses to
-    # commit anything but .flutter-version; re-checking here covers what happens
-    # to the branch afterwards — an "I'll just migrate the deprecated API while
-    # I'm here" commit pushed onto the SDK PR is exactly the change that must
-    # not ride along, because that migration is a human's separate PR.
-    if: ${{ startsWith(github.head_ref, 'toolchain/') }}
+    # Only the one branch the "Flutter SDK updates" workflow pushes. The
+    # updater already refuses to commit anything but .flutter-version;
+    # re-checking here covers what happens to the branch afterwards — an "I'll
+    # just migrate the deprecated API while I'm here" commit pushed onto the
+    # SDK PR is exactly the change that must not ride along, because that
+    # migration is a human's separate PR. Matched exactly, not by prefix: a
+    # human's toolchain/* PR is an ordinary PR and must not inherit the
+    # pin-only rule.
+    if: ${{ github.head_ref == 'toolchain/flutter-sdk' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7

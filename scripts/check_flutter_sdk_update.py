@@ -49,7 +49,9 @@ A release is a candidate only if all three hold:
      `v1.12.13+hotfix.9` / `v1.5.4-hotfix.2` style entries, which are the only
      stable rows that are not plain triples and are all far below any version
      this repo could be pinned to;
-  3. `archive`, when present, lives under `stable/`.
+  3. `archive` is a non-empty string under `stable/` — a row with no archive,
+     or one pointing outside `stable/`, names nothing the pinned setup path
+     could install, so it is not a version to propose.
 
 The newest candidate is the one with the highest (major, minor, patch). The
 manifest's own `current_release.stable` hash is resolved too and reported as
@@ -273,9 +275,14 @@ def stable_releases(manifest: Dict[str, Any]) -> StableSet:
             skipped.append(str(error))
             continue
         archive = release.get("archive")
-        if isinstance(archive, str) and not archive.startswith(_ARCHIVE_PREFIX):
-            # A stable row whose archive is not under stable/ contradicts
-            # itself. Never a candidate, and worth surfacing.
+        if not isinstance(archive, str) or not archive.startswith(
+            _ARCHIVE_PREFIX
+        ):
+            # A stable row must name the archive that `scripts/setup_flutter.sh`
+            # would download, and it must live under stable/. Missing, null,
+            # empty or pointing elsewhere all contradict the channel claim, so
+            # none of them is a candidate — a version we cannot confirm is
+            # installable is not one to propose. Worth surfacing.
             notes.append(
                 f"entry #{index} claims channel {_STABLE_CHANNEL} but its "
                 f"archive is not under {_ARCHIVE_PREFIX}: {archive!r}"
