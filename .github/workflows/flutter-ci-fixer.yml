@@ -190,7 +190,7 @@ jobs:
 
       - name: Checkout exact failed revision
         if: ${{ steps.context.outputs.active == 'true' && steps.credential.outputs.enabled == 'true' }}
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.context.outputs.repair_sha }}
           fetch-depth: 0
@@ -378,7 +378,7 @@ jobs:
           fi
 
       - name: Checkout target branch revision
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.fix.outputs.target_sha }}
           fetch-depth: 0

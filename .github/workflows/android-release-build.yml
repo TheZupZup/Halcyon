@@ -149,7 +149,7 @@ jobs:
       version_code: ${{ steps.version.outputs.LINTHRA_VERSION_CODE }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # Decide, in one place, how this run should sign, whether the tag is a
       # pre-release, and how to label/name the artifacts.

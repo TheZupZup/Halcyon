@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # The JDK version comes from .java-version (the single source of truth for
       # the JDK, read by every workflow that runs Gradle), so debug and release
