@@ -77,15 +77,25 @@ class SyncedLyricsViewport extends ConsumerStatefulWidget {
 
   final Lyrics lyrics;
 
+  /// How long the one-shot scroll to a newly active line takes.
+  ///
+  /// Short enough that the line is settled well before the next one starts, and
+  /// paired with a curve that eases *in* as well as out: the follow no longer
+  /// lurches off the mark the instant a line changes, which was the abrupt part.
+  /// It is one animation per line change and nothing in between — the view
+  /// schedules no frames while a line is simply playing.
+  static const Duration scrollDuration = Duration(milliseconds: 350);
+
+  /// The curve of that scroll. Symmetric easing, so the movement starts and
+  /// stops as gently as it travels.
+  static const Curve scrollCurve = Curves.easeInOutCubic;
+
   @override
   ConsumerState<SyncedLyricsViewport> createState() =>
       _SyncedLyricsViewportState();
 }
 
 class _SyncedLyricsViewportState extends ConsumerState<SyncedLyricsViewport> {
-  /// How long the scroll to a newly active line takes.
-  static const Duration _scrollDuration = Duration(milliseconds: 420);
-
   /// How long auto-following stands down after the user scrolls by hand, so
   /// reading ahead isn't yanked back to the playing line mid-sentence. It
   /// resumes on the next line change after this, with no timer in between.
@@ -184,8 +194,10 @@ class _SyncedLyricsViewportState extends ConsumerState<SyncedLyricsViewport> {
   void _scheduleCentre(int index) {
     if (index < 0 || index >= _keys.length) return;
     if (_isFollowPaused) return;
-    // After the frame that lays the new emphasis out, so the row is measured at
-    // the size it will actually be.
+    // After the frame that lays the new active line out, so the row is measured
+    // once it exists. Its emphasis no longer changes its metrics (see
+    // LyricLineTile.styleFor), so what is measured here is what the scroll will
+    // still be aiming at when it arrives.
     WidgetsBinding.instance.addPostFrameCallback((_) => _centre(index));
   }
 
@@ -211,8 +223,8 @@ class _SyncedLyricsViewportState extends ConsumerState<SyncedLyricsViewport> {
           alignment: _activeLineAlignment,
           duration: MediaQuery.disableAnimationsOf(context)
               ? Duration.zero
-              : _scrollDuration,
-          curve: Curves.easeOutCubic,
+              : SyncedLyricsViewport.scrollDuration,
+          curve: SyncedLyricsViewport.scrollCurve,
         ),
       );
       return;

@@ -362,11 +362,15 @@ void main() {
       expect(controller.seeks, isNotEmpty);
       expect(controller.seeks.last.inSeconds, 72);
 
-      // Perform semantic decrease action
-      // Decreased position: 60s - 12s = 48s (0:48).
+      // Perform semantic decrease action.
+      // A step moves from the value just announced, not from a position the
+      // ~250ms-coalesced stream has yet to report: the bar holds the seek it
+      // just issued, so 1:12 - 12s is 1:00 (and stepping up then down returns
+      // where it started rather than jumping to 0:48).
+      expect(tester.getSemantics(seekFinder).value, '1:12 of 4:00');
       tester.semantics.decrease(find.semantics.byLabel('Playback position'));
       await tester.pumpAndSettle();
-      expect(controller.seeks.last.inSeconds, 48);
+      expect(controller.seeks.last.inSeconds, 60);
 
       handle.dispose();
     });

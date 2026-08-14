@@ -189,6 +189,49 @@ void main() {
       expect(controller.seeks.first, greaterThan(Duration.zero));
     });
 
+    testWidgets('a track change drops a seek the previous track was holding',
+        (tester) async {
+      // The two songs are as alike as the playback state can make them: exactly
+      // the same length, and the same *bare* id — which is legal, because ids
+      // are only unique within a provider (see `Track.==`). Nothing but the
+      // provider-namespaced uri separates them, so nothing but the uri can tell
+      // the bar it is looking at a different song.
+      const Duration sameLength = Duration(minutes: 3);
+      const Track songTwo = Track(
+        id: '1',
+        title: 'Song Two',
+        uri: 'jellyfin:1',
+      );
+      expect(songTwo.id, _localTrack.id);
+      expect(songTwo.uri, isNot(_localTrack.uri));
+
+      final controller = _playing(duration: sameLength);
+      await _pumpScreen(tester, controller);
+
+      // Seek into the middle of song one. The bar holds that target while the
+      // ~250ms-coalesced position stream catches up.
+      await tester.tap(find.byType(WavySeekBar));
+      await tester.pumpAndSettle();
+      expect(controller.seeks, hasLength(1));
+      expect(find.text('1:30'), findsOneWidget);
+
+      // Song two starts from the beginning before that ever happened.
+      controller.emit(
+        const PlaybackState(
+          status: PlaybackStatus.playing,
+          currentTrack: songTwo,
+          source: PlaybackSource.streamingDirect,
+          duration: sameLength,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // A position from the previous song must not ride along into this one.
+      expect(find.text('0:00'), findsOneWidget);
+      expect(find.text('1:30'), findsNothing);
+      expect(controller.seeks, hasLength(1));
+    });
+
     testWidgets('the queue button opens up-next', (tester) async {
       final controller = _playing(
         upNext: const <Track>[
