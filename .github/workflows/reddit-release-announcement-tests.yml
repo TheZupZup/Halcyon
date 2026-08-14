@@ -1,0 +1,40 @@
+name: Reddit release announcement tests
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/reddit-release-announcement.yml"
+      - ".github/workflows/reddit-release-announcement-tests.yml"
+      - "scripts/reddit_release_announcement.py"
+      - "scripts/reddit_release_voice.json"
+      - "scripts/post_reddit_release.py"
+      - "test/tooling/reddit_release_announcement_test.py"
+      - "docs/reddit-release-announcements.md"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/reddit-release-announcement.yml"
+      - ".github/workflows/reddit-release-announcement-tests.yml"
+      - "scripts/reddit_release_announcement.py"
+      - "scripts/reddit_release_voice.json"
+      - "scripts/post_reddit_release.py"
+      - "test/tooling/reddit_release_announcement_test.py"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Reddit announcement tooling
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Run tests
+        run: python3 test/tooling/reddit_release_announcement_test.py

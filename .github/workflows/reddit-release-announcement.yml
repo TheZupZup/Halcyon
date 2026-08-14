@@ -1,0 +1,137 @@
+name: Reddit release announcement
+
+# A stable GitHub Release is already the maintainer's publish decision. This
+# workflow only mirrors that announcement to r/Linthra; it never creates,
+# edits, rolls back, or blocks the release itself.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Stable release tag to preview, e.g. v0.2.2. Manual runs never post."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reddit-release-${{ github.event.release.tag_name || inputs.release_tag || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Build Reddit preview
+    runs-on: ubuntu-latest
+    # A prerelease can also emit a published event. It is deliberately not
+    # announced. Manual runs are allowed through so the generator can validate
+    # the requested tag and show the exact post without publishing it.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.release.draft == false &&
+           github.event.release.prerelease == false) }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Load release metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            jq '.release' "${GITHUB_EVENT_PATH}" > release.json
+          else
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
+              > release.json
+          fi
+
+      - name: Generate Reddit post
+        run: |
+          set -euo pipefail
+          python3 scripts/reddit_release_announcement.py \
+            --release-json release.json \
+            --voice-config scripts/reddit_release_voice.json \
+            --output-dir reddit-preview
+
+      - name: Show exact preview
+        run: |
+          {
+            echo "## Reddit release preview"
+            echo
+            echo "**Title**"
+            echo
+            cat reddit-preview/title.txt
+            echo
+            echo "**Body**"
+            echo
+            cat reddit-preview/body.md
+            if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+              echo
+              echo "> Preview only — manual runs cannot publish to Reddit."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload prepared announcement
+        if: ${{ github.event_name == 'release' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: reddit-release-announcement
+          path: reddit-preview/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish to r/Linthra
+    needs: prepare
+    runs-on: ubuntu-latest
+    # This is intentionally unreachable from workflow_dispatch. A manual run is
+    # always a preview; only GitHub's stable release event can publish.
+    if: >-
+      ${{ github.event_name == 'release' &&
+          needs.prepare.result == 'success' &&
+          vars.REDDIT_RELEASE_ANNOUNCEMENTS_ENABLED == 'true' }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Download prepared announcement
+        uses: actions/download-artifact@v8
+        with:
+          name: reddit-release-announcement
+          path: reddit-preview
+
+      - name: Publish once
+        env:
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_REFRESH_TOKEN: ${{ secrets.REDDIT_REFRESH_TOKEN }}
+          REDDIT_USER_AGENT: "linux:io.github.thezupzup.linthra.releases:v1 (by /u/TheZupZup)"
+        run: |
+          set -euo pipefail
+
+          release_url="$(jq -r '.release_url' reddit-preview/announcement.json)"
+          subreddit="$(jq -r '.subreddit' reddit-preview/announcement.json)"
+
+          python3 scripts/post_reddit_release.py \
+            --title-file reddit-preview/title.txt \
+            --body-file reddit-preview/body.md \
+            --release-url "${release_url}" \
+            --subreddit "${subreddit}"
