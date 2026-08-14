@@ -10,6 +10,11 @@ import 'package:linthra/features/player/widgets/wavy_seek_bar.dart';
 const double _barWidth = 300;
 const Duration _total = Duration(minutes: 4);
 
+/// Pumps the bar, returning the list every seek lands in.
+///
+/// Passing [seeks] back in re-pumps the *same* bar with a new [position] — the
+/// widget type and location are unchanged, so the element and its state survive
+/// and the bar sees the update exactly as it would from a position tick.
 Future<List<Duration>> _pumpBar(
   WidgetTester tester, {
   Duration position = Duration.zero,
@@ -17,8 +22,9 @@ Future<List<Duration>> _pumpBar(
   bool seekable = true,
   bool playing = false,
   PlaybackProgressStyle style = PlaybackProgressStyle.wave,
+  List<Duration>? seeks,
 }) async {
-  final List<Duration> seeks = <Duration>[];
+  seeks ??= <Duration>[];
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
@@ -31,6 +37,9 @@ Future<List<Duration>> _pumpBar(
               playing: playing,
               style: style,
               onSeek: seekable ? seeks.add : null,
+              // Keyed so a re-pump with a new position updates this bar rather
+              // than replacing it — the state under test has to survive.
+              key: const Key('progress-bar'),
             ),
           ),
         ),
@@ -39,6 +48,20 @@ Future<List<Duration>> _pumpBar(
   );
   await tester.pump();
   return seeks;
+}
+
+/// Drags the wave to [fraction] of the track and lifts the finger, returning
+/// after the frame that release produced.
+Future<void> _dragTo(WidgetTester tester, double fraction) async {
+  // The painter insets the box by the marker radius (6) at each end.
+  const double travel = _barWidth - 12;
+  final Offset centre = tester.getCenter(find.byType(WavySeekBar));
+  final TestGesture gesture = await tester.startGesture(centre);
+  await tester.pump();
+  await gesture.moveTo(centre + Offset((fraction - 0.5) * travel, 0));
+  await tester.pump();
+  await gesture.up();
+  await tester.pump();
 }
 
 void main() {
@@ -130,6 +153,136 @@ void main() {
     });
   });
 
+  group('PlaybackProgressBar seek handoff', () {
+    // The position stream is coalesced to ~250 ms for battery, so for a moment
+    // after a seek it still reports where playback *was*. These tests pin the
+    // handoff across that gap: the released target holds the display until the
+    // authoritative position reaches it, so the marker never snaps backwards
+    // and then forward again.
+
+    testWidgets('releasing a drag does not snap back to the old position',
+        (tester) async {
+      final List<Duration> seeks = <Duration>[];
+      await _pumpBar(tester, seeks: seeks);
+
+      await _dragTo(tester, 0.25);
+
+      // Released at a quarter of a four-minute song.
+      expect(seeks, hasLength(1));
+      expect(seeks.single.inSeconds, closeTo(60, 1));
+      expect(find.text('1:00'), findsOneWidget);
+      expect(find.text('0:00'), findsNothing);
+
+      // The next ticks still carry the pre-seek position — the seek has not
+      // reached playbackStateProvider yet. The bar must not show it.
+      for (final Duration stale in <Duration>[
+        const Duration(milliseconds: 250),
+        const Duration(milliseconds: 500),
+      ]) {
+        await _pumpBar(tester, position: stale, seeks: seeks);
+        expect(find.text('1:00'), findsOneWidget);
+        expect(find.text('0:00'), findsNothing);
+      }
+    });
+
+    testWidgets('normal position updates take over once playback catches up',
+        (tester) async {
+      final List<Duration> seeks = <Duration>[];
+      await _pumpBar(tester, seeks: seeks);
+      await _dragTo(tester, 0.25);
+      await _pumpBar(tester, position: Duration.zero, seeks: seeks);
+      expect(find.text('1:00'), findsOneWidget);
+
+      // The seek lands: the first authoritative position at the target hands
+      // the display straight back.
+      await _pumpBar(
+        tester,
+        position: const Duration(seconds: 60, milliseconds: 120),
+        seeks: seeks,
+      );
+      await _pumpBar(tester,
+          position: const Duration(seconds: 63), seeks: seeks);
+      expect(find.text('1:03'), findsOneWidget);
+
+      // Including an update that moves *backwards*, which a still-pinned bar
+      // would have swallowed.
+      await _pumpBar(tester,
+          position: const Duration(seconds: 30), seeks: seeks);
+      expect(find.text('0:30'), findsOneWidget);
+    });
+
+    testWidgets('a drag still seeks exactly once, however long the hold lasts',
+        (tester) async {
+      final List<Duration> seeks = <Duration>[];
+      await _pumpBar(tester, seeks: seeks);
+
+      await _dragTo(tester, 0.75);
+
+      for (final int seconds in <int>[0, 1, 180, 181]) {
+        await _pumpBar(
+          tester,
+          position: Duration(seconds: seconds),
+          seeks: seeks,
+        );
+      }
+
+      expect(seeks, hasLength(1));
+      expect(seeks.single.inSeconds, closeTo(180, 1));
+    });
+
+    testWidgets('a seek that never lands releases the bar after the timeout',
+        (tester) async {
+      final List<Duration> seeks = <Duration>[];
+      await _pumpBar(tester, seeks: seeks);
+      await _dragTo(tester, 0.25);
+
+      // Playback carries on where it was: the seek failed. The bar holds the
+      // optimistic target only while the bound allows.
+      await _pumpBar(tester,
+          position: const Duration(seconds: 1), seeks: seeks);
+      expect(find.text('1:00'), findsOneWidget);
+
+      await tester.pump(
+        PlaybackProgressBar.seekAckTimeout + const Duration(milliseconds: 1),
+      );
+      await tester.pump();
+
+      expect(find.text('0:01'), findsOneWidget);
+      expect(find.text('1:00'), findsNothing);
+    });
+
+    testWidgets('a new drag supersedes the held target', (tester) async {
+      final List<Duration> seeks = <Duration>[];
+      await _pumpBar(tester, seeks: seeks);
+      await _dragTo(tester, 0.25);
+      expect(find.text('1:00'), findsOneWidget);
+
+      // Second thoughts, before the first seek was ever reported.
+      await _dragTo(tester, 0.75);
+
+      expect(find.text('3:00'), findsOneWidget);
+      expect(seeks, hasLength(2));
+    });
+
+    testWidgets('a new track drops a target measured against the old one',
+        (tester) async {
+      final List<Duration> seeks = <Duration>[];
+      await _pumpBar(tester, seeks: seeks);
+      await _dragTo(tester, 0.25);
+      expect(find.text('1:00'), findsOneWidget);
+
+      await _pumpBar(
+        tester,
+        position: const Duration(seconds: 3),
+        duration: const Duration(minutes: 5),
+        seeks: seeks,
+      );
+
+      expect(find.text('0:03'), findsOneWidget);
+      expect(find.text('5:00'), findsOneWidget);
+    });
+  });
+
   group('PlaybackProgressBar (wave) accessibility', () {
     testWidgets('announces the position as a slider', (tester) async {
       final SemanticsHandle handle = tester.ensureSemantics();
@@ -158,9 +311,37 @@ void main() {
       expect(seeks.single, const Duration(seconds: 72));
 
       seeks.clear();
+      // A step lands on the announced value, not on a position the coalesced
+      // stream has yet to report: stepping down from 1:12 returns to 1:00,
+      // rather than stepping down from a stale 1:00 and jumping to 0:48.
+      expect(
+        tester.getSemantics(find.byType(WavySeekBar)).value,
+        '1:12 of 4:00',
+      );
       tester.semantics.decrease(find.semantics.byLabel('Playback position'));
       await tester.pump();
-      expect(seeks.single, const Duration(seconds: 48));
+      expect(seeks.single, const Duration(seconds: 60));
+
+      handle.dispose();
+    });
+
+    testWidgets('a step away from a stale position still lands where announced',
+        (tester) async {
+      final SemanticsHandle handle = tester.ensureSemantics();
+      final seeks =
+          await _pumpBar(tester, position: const Duration(minutes: 1));
+
+      // Two increases in quick succession, before either is reported: the
+      // second must build on the first rather than repeat it.
+      tester.semantics.increase(find.semantics.byLabel('Playback position'));
+      await tester.pump();
+      tester.semantics.increase(find.semantics.byLabel('Playback position'));
+      await tester.pump();
+
+      expect(
+        seeks,
+        <Duration>[const Duration(seconds: 72), const Duration(seconds: 84)],
+      );
 
       handle.dispose();
     });

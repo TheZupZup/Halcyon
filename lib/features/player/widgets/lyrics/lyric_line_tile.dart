@@ -11,9 +11,9 @@ import '../../../../core/models/lyric_focus.dart';
 ///
 /// Every colour is read from the [ColorScheme], so the tile retints with the
 /// user's branding theme and works in light and dark without a hard-coded value.
-/// The active line is never distinguished by colour *alone*: it is also larger
-/// and heavier, carries an accent marker in the gutter, and reports itself as
-/// selected to screen readers.
+/// The active line is never distinguished by colour *alone*: it is also heavier,
+/// carries an accent marker in the gutter, and reports itself as selected to
+/// screen readers.
 class LyricLineTile extends StatelessWidget {
   const LyricLineTile({
     required this.text,
@@ -126,10 +126,22 @@ class LyricLineTile extends StatelessWidget {
     );
   }
 
+  /// The line height every *timed* emphasis shares. Auto-follow animates the
+  /// list to the active line while the rows are restyling, so any metric that
+  /// differs between emphases changes row geometry mid-scroll and the target
+  /// slides out from under the animation. Holding leading — and size, below —
+  /// constant is what makes the follow land where it aimed.
+  static const double _timedHeight = 1.35;
+
   /// The text style for [emphasis], derived entirely from [theme].
   ///
-  /// The progression is opacity *and* weight, not opacity alone, so the active
-  /// line stays dominant even where a bright cover pushes the contrast around.
+  /// Emphasis is carried by opacity *and* weight, not opacity alone, so the
+  /// active line stays dominant even where a bright cover pushes the contrast
+  /// around — and, with the marker and the selected semantics, survives a user
+  /// who can't distinguish the colours. It is deliberately *not* carried by
+  /// size: every timed state shares one font size and one line height, so a line
+  /// occupies exactly the same space whether or not it is the one playing.
+  ///
   /// Sizes come from the text theme, so the user's text scaling multiplies them
   /// rather than fighting a fixed value.
   static TextStyle styleFor(ThemeData theme, LyricEmphasis emphasis) {
@@ -139,28 +151,26 @@ class LyricLineTile extends StatelessWidget {
       case LyricEmphasis.active:
         return base.copyWith(
           color: colors.onSurface,
-          fontSize: (base.fontSize ?? 16) * 1.25,
           fontWeight: FontWeight.w700,
-          height: 1.3,
-          letterSpacing: -0.2,
+          height: _timedHeight,
         );
       case LyricEmphasis.adjacent:
         return base.copyWith(
           color: colors.onSurface.withValues(alpha: 0.62),
           fontWeight: FontWeight.w500,
-          height: 1.35,
+          height: _timedHeight,
         );
       case LyricEmphasis.near:
         return base.copyWith(
           color: colors.onSurface.withValues(alpha: 0.42),
           fontWeight: FontWeight.w500,
-          height: 1.35,
+          height: _timedHeight,
         );
       case LyricEmphasis.distant:
         return base.copyWith(
           color: colors.onSurface.withValues(alpha: 0.26),
           fontWeight: FontWeight.w500,
-          height: 1.35,
+          height: _timedHeight,
         );
       case LyricEmphasis.untimed:
         // Plain lyrics are a reading surface, not a following one: one calm
@@ -175,7 +185,7 @@ class LyricLineTile extends StatelessWidget {
 
 /// The small accent pill marking the active line.
 ///
-/// It is a *redundant* cue — the line is already larger and heavier — which is
+/// It is a *redundant* cue — the line is already heavier and brighter — which is
 /// what lets the active state survive a user who can't distinguish the colours.
 /// Its gutter is reserved whether or not it is drawn, so the lines never shift
 /// sideways as the marker moves down the song.

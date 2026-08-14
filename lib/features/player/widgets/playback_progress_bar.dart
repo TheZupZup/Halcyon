@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../app/dimens.dart';
@@ -26,6 +28,14 @@ const PlaybackProgressStyle defaultPlaybackProgressStyle =
 /// drags, the marker and the elapsed label follow the finger; the actual
 /// [onSeek] fires once on release, so playback isn't spammed mid-drag.
 ///
+/// Release then *holds* that target until playback reports it. [position] comes
+/// from a stream deliberately coalesced to ~250 ms for battery, so it keeps
+/// reporting the pre-seek position for a moment after the seek is issued;
+/// showing it again the instant the finger lifts snaps the marker back to where
+/// the drag started and only then jumps forward. The bar stays optimistic
+/// across that gap instead — bounded by [seekAckTimeout], so a seek that never
+/// lands can't pin the marker somewhere playback isn't.
+///
 /// The drag preview lives here rather than in either renderer, so both the wave
 /// and the slider stay interchangeable and the time labels follow the finger the
 /// same way in both.
@@ -53,6 +63,20 @@ class PlaybackProgressBar extends StatefulWidget {
   /// Which renderer to use. Defaults to [defaultPlaybackProgressStyle].
   final PlaybackProgressStyle style;
 
+  /// How close [position] has to land to a released seek target before the bar
+  /// hands the display back to it.
+  ///
+  /// The position stream is coalesced to ~250 ms, so the first tick that
+  /// reflects a seek can already sit a flush — plus whatever the engine rounds
+  /// to — past the target. This is that budget with headroom, and still far
+  /// below a difference the eye would read as a jump.
+  static const Duration seekAckTolerance = Duration(milliseconds: 750);
+
+  /// The longest an unacknowledged seek target is held. A seek can simply fail
+  /// (a dead source, a position the engine refuses), and the bar must fall back
+  /// to the truth rather than lie indefinitely.
+  static const Duration seekAckTimeout = Duration(seconds: 3);
+
   @override
   State<PlaybackProgressBar> createState() => _PlaybackProgressBarState();
 }
@@ -61,11 +85,74 @@ class _PlaybackProgressBarState extends State<PlaybackProgressBar> {
   /// The in-progress drag position in milliseconds, or null when not dragging.
   double? _dragMs;
 
-  void _onChanged(double value) => setState(() => _dragMs = value);
+  /// The position the last completed gesture seeked to, in milliseconds, shown
+  /// in place of [PlaybackProgressBar.position] until playback acknowledges it.
+  /// Null once acknowledged, superseded, or timed out.
+  double? _pendingSeekMs;
+
+  /// Fires if that acknowledgement never comes — the bound on the optimism.
+  Timer? _pendingSeekExpiry;
+
+  @override
+  void didUpdateWidget(PlaybackProgressBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A different duration means a different source is loaded, and a target
+    // measured against the previous track is meaningless against this one.
+    if (widget.duration != oldWidget.duration) {
+      _clearPendingSeek();
+      return;
+    }
+    if (widget.position != oldWidget.position) _settlePendingSeek();
+  }
+
+  @override
+  void dispose() {
+    _pendingSeekExpiry?.cancel();
+    super.dispose();
+  }
+
+  /// Hands the display back to the authoritative position once it has reached
+  /// the pending target.
+  ///
+  /// No `setState`: this only runs from [didUpdateWidget], where the rebuild
+  /// that delivered the new position is already under way.
+  void _settlePendingSeek() {
+    final double? target = _pendingSeekMs;
+    if (target == null) return;
+    final double delta = (widget.position.inMilliseconds - target).abs();
+    if (delta > PlaybackProgressBar.seekAckTolerance.inMilliseconds) return;
+    _clearPendingSeek();
+  }
+
+  void _clearPendingSeek() {
+    _pendingSeekMs = null;
+    _pendingSeekExpiry?.cancel();
+    _pendingSeekExpiry = null;
+  }
+
+  void _onChanged(double value) {
+    setState(() {
+      // A fresh gesture supersedes the previous target outright: the finger is
+      // the most current intent there is.
+      _clearPendingSeek();
+      _dragMs = value;
+    });
+  }
 
   void _onChangeEnd(double value) {
     widget.onSeek?.call(Duration(milliseconds: value.round()));
-    setState(() => _dragMs = null);
+    _pendingSeekExpiry?.cancel();
+    _pendingSeekExpiry = Timer(
+      PlaybackProgressBar.seekAckTimeout,
+      () {
+        if (!mounted) return;
+        setState(_clearPendingSeek);
+      },
+    );
+    setState(() {
+      _dragMs = null;
+      _pendingSeekMs = value;
+    });
   }
 
   @override
@@ -78,7 +165,12 @@ class _PlaybackProgressBarState extends State<PlaybackProgressBar> {
     final int posMs = hasDuration
         ? widget.position.inMilliseconds.clamp(0, totalMs).toInt()
         : 0;
-    final double barValue = _dragMs ?? posMs.toDouble();
+    // The finger first, then a seek playback hasn't caught up with, then the
+    // truth. Each is only ever the *most current* thing known about where
+    // playback is meant to be.
+    final double barValue = _dragMs ??
+        _pendingSeekMs?.clamp(0, totalMs.toDouble()) ??
+        posMs.toDouble();
 
     final muted = theme.colorScheme.onSurfaceVariant;
     final labelStyle = theme.textTheme.labelSmall?.copyWith(

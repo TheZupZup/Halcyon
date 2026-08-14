@@ -13,6 +13,7 @@ import 'package:linthra/features/player/player_providers.dart';
 import 'package:linthra/features/player/player_screen.dart';
 import 'package:linthra/features/player/widgets/album_artwork.dart';
 import 'package:linthra/features/player/widgets/lyrics/lyric_line_tile.dart';
+import 'package:linthra/features/player/widgets/lyrics/lyrics_viewport.dart';
 import 'package:linthra/features/player/widgets/lyrics_view.dart';
 
 import 'fake_playback_controller.dart';
@@ -105,6 +106,25 @@ TextStyle _styleOf(WidgetTester tester, String text) =>
 
 double _opacityOf(WidgetTester tester, String text) =>
     _styleOf(tester, text).color!.a;
+
+/// The whole row [text] is rendered in.
+Finder _tileOf(String text) => find.ancestor(
+      of: find.text(text),
+      matching: find.byType(LyricLineTile),
+    );
+
+/// How visible that row's accent marker is — the non-colour, non-typographic
+/// cue for the active line.
+double _markerOpacityOf(WidgetTester tester, String text) {
+  return tester
+      .widget<AnimatedOpacity>(
+        find.descendant(
+          of: _tileOf(text),
+          matching: find.byType(AnimatedOpacity),
+        ),
+      )
+      .opacity;
+}
 
 /// Gives the test a tall window, so a whole song's worth of lines is on screen
 /// at once (and so Now Playing's fixed chrome fits at a large text scale).
@@ -223,11 +243,117 @@ void main() {
 
       expect(active.fontWeight, FontWeight.w700);
       expect(neighbour.fontWeight, FontWeight.w500);
-      // Larger, fully opaque, and a different colour — dominance is carried by
-      // size and weight too, never by colour alone.
-      expect(active.fontSize, greaterThan(neighbour.fontSize!));
+      // Heavier, fully opaque, and a different colour — dominance is carried by
+      // weight too, never by colour alone.
       expect(active.color!.a, 1.0);
       expect(active.color, isNot(neighbour.color));
+      // …and by the accent marker beside it, the cue that survives a reader who
+      // can see neither the weight nor the colour.
+      expect(_markerOpacityOf(tester, 'line two'), 1.0);
+      expect(_markerOpacityOf(tester, 'line one'), 0.0);
+    });
+
+    testWidgets('emphasis never changes a timed line\'s metrics',
+        (tester) async {
+      _useTallWindow(tester);
+      await _pumpPlayer(
+        tester,
+        controller: FakePlaybackController(
+          initial: _playingAt(const Duration(seconds: 12)),
+        ),
+        lyrics: _synced,
+      );
+      await _openLyrics(tester);
+
+      // Auto-follow animates the list while the rows restyle, so a size or
+      // leading that moved with emphasis would change row geometry underneath
+      // the scroll. Every timed state has to lay out identically.
+      final TextStyle active = _styleOf(tester, 'line two');
+      for (final String other in <String>[
+        'line one', // adjacent
+        'line four', // near
+        'line five', // distant
+      ]) {
+        final TextStyle style = _styleOf(tester, other);
+        expect(style.fontSize, active.fontSize, reason: '$other font size');
+        expect(style.height, active.height, reason: '$other line height');
+        expect(
+          style.letterSpacing,
+          active.letterSpacing,
+          reason: '$other letter spacing',
+        );
+      }
+    });
+
+    testWidgets('a line keeps its exact height as it becomes active',
+        (tester) async {
+      _useTallWindow(tester);
+      final controller = FakePlaybackController(
+        initial: _playingAt(const Duration(seconds: 12)),
+      );
+      await _pumpPlayer(tester, controller: controller, lyrics: _synced);
+      await _openLyrics(tester);
+
+      // Measured while it is merely adjacent…
+      final Size text = tester.getSize(find.text('line three'));
+      final Size row = tester.getSize(_tileOf('line three'));
+
+      controller.emit(_playingAt(const Duration(seconds: 22)));
+      await tester.pumpAndSettle();
+      expect(_styleOf(tester, 'line three').fontWeight, FontWeight.w700);
+
+      // …and unchanged now that it is the line playing. The whole row, marker
+      // gutter and all, keeps exactly the space it had.
+      expect(tester.getSize(find.text('line three')), text);
+      expect(tester.getSize(_tileOf('line three')), row);
+    });
+
+    testWidgets('auto-follow is one short transition, not a running animation',
+        (tester) async {
+      final controller = FakePlaybackController(
+        initial: _playingAt(const Duration(seconds: 12)),
+      );
+      await _pumpPlayer(tester, controller: controller, lyrics: _synced);
+      await _openLyrics(tester);
+
+      // Short enough to be over before the next line, eased at both ends so it
+      // neither lurches off the mark nor arrives abruptly.
+      expect(
+        SyncedLyricsViewport.scrollDuration.inMilliseconds,
+        inInclusiveRange(340, 360),
+      );
+      expect(SyncedLyricsViewport.scrollCurve, Curves.easeInOutCubic);
+
+      final ScrollableState list = tester.state<ScrollableState>(
+        find.descendant(
+          of: find.byKey(const Key('synced-lyrics')),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      final double start = list.position.pixels;
+
+      controller.emit(_playingAt(const Duration(seconds: 22)));
+      // The change reaches the viewport through the position stream and is
+      // measured in a post-frame callback, so the scroll starts a few frames
+      // later rather than on the emit itself.
+      double midway = start;
+      for (int i = 0; i < 5 && midway == start; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        midway = list.position.pixels;
+      }
+
+      // Part way there: the follow travels, it does not jump.
+      expect(midway, greaterThan(start), reason: 'auto-follow never started');
+
+      // And it arrives within its own duration.
+      await tester.pump(SyncedLyricsViewport.scrollDuration);
+      final double settled = list.position.pixels;
+      expect(settled, greaterThan(midway));
+
+      // Nothing is left running: a line that is simply playing costs no frames.
+      await tester.pumpAndSettle();
+      expect(list.position.pixels, settled);
+      expect(tester.binding.hasScheduledFrame, isFalse);
     });
 
     testWidgets('surrounding lines fade progressively, not uniformly',
