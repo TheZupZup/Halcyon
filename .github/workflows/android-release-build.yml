@@ -472,21 +472,21 @@ jobs:
           echo "Verified: all APK versions match the tag-derived version."
 
       - name: Upload release APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linthra-${{ steps.mode.outputs.signing }}-apk
           path: dist/${{ steps.mode.outputs.asset_base }}.apk
           if-no-files-found: error
 
       - name: Upload release AAB
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linthra-${{ steps.mode.outputs.signing }}-aab
           path: dist/${{ steps.mode.outputs.asset_base }}.aab
           if-no-files-found: error
 
       - name: Upload per-ABI APKs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linthra-${{ steps.mode.outputs.signing }}-apk-per-abi
           path: |
