@@ -597,6 +597,8 @@ consume our signed artifacts:
 | Secret & privacy scan on PRs & `main` | **Automatic** (`ci.yml`, job `secret-scan`; runs `scripts/check_secrets.sh` — offline, no secrets). |
 | Fastlane changelog exists for the current `versionCode` | **Automatic** on PRs & `main` (`flutter test` ▸ `test/tooling/release_changelog_test.dart`). |
 | Release-bump PR touches only version files | **Automatic** on `release/*` PRs only (`ci.yml`, job `release-bump-guard`; `scripts/check_release_bump_files.sh`). |
+| Dart/Flutter package updates inside the current constraints | **Automatic PR only** (weekly `dart-dependency-updates.yml`); resolves with the pinned SDK, changes only `pubspec.lock`, opens a **draft** PR and never merges. See [dependency-updates.md](./dependency-updates.md). |
+| Dependency-update PR touches only `pubspec.lock` | **Automatic** on `deps/*` PRs only (`ci.yml`, job `dependency-guard`; `scripts/check_dependency_update_files.sh`). |
 | Debug APK build + build-output verification | Manual (`workflow_dispatch`) + on PRs (`android-debug-apk.yml`; a "Verify build output exists" step rejects a missing/empty APK). |
 | Release APK/AAB build | **Manual** (`workflow_dispatch`) **and automatic on `v*` tags** (`android-release-build.yml`). |
 | Preparing the version-bump PR (pubspec, in-app mirror, Fastlane changelog, F-Droid `CurrentVersion`) | **Manual** (`workflow_dispatch`, `prepare-release-bump.yml`); opens a draft PR but never tags, builds, or publishes. The same edits are reproducible locally with `scripts/prepare_release_bump.py`. |
@@ -620,6 +622,8 @@ Release, writes production notes, signs a store build, or submits to F-Droid.
 | `ci.yml` · `flutter` — format, analyze, test, `pub get --enforce-lockfile` | ✅ | ✅ | — | — |
 | `ci.yml` · `secret-scan` — `scripts/check_secrets.sh` | ✅ | ✅ | — | — |
 | `ci.yml` · `release-bump-guard` — `scripts/check_release_bump_files.sh` | ✅ (only `release/*` branches) | — | — | — |
+| `ci.yml` · `dependency-guard` — `scripts/check_dependency_update_files.sh` | ✅ (only `deps/*` branches) | — | — | — |
+| `dart-dependency-updates.yml` — open/update the draft Dart package PR | — | — | — | ✅ (also weekly on a schedule) |
 | `android-debug-apk.yml` — build debug APK + verify output | ✅ | — | — | ✅ |
 | `android-release-build.yml` — release APK/AAB, tag↔pubspec preflight, attach | — | — | ✅ | ✅ |
 | `prepare-release-bump.yml` — open the version-bump PR | — | — | — | ✅ |
@@ -627,7 +631,7 @@ Release, writes production notes, signs a store build, or submits to F-Droid.
 
 The `flutter` job also runs the whole `test/` suite, which includes the
 release-safety guardrail tests below — so those gate every PR, not just release
-PRs. Nothing in `ci.yml` uses a secret, so all three jobs run identically on
+PRs. Nothing in `ci.yml` uses a secret, so all four jobs run identically on
 fork PRs.
 
 ### What the guardrails catch (and how to run them locally)
