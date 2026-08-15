@@ -94,7 +94,9 @@ jobs:
           # that is guarded to contain nothing but pubspec.lock.
           #
           # toolchain/* covers the Flutter SDK updater
-          # (.github/workflows/flutter-sdk-updates.yml). It matters most there:
+          # (.github/workflows/flutter-sdk-updates.yml) and the Gradle/AGP/
+          # Kotlin updater (.github/workflows/android-toolchain-updates.yml).
+          # It matters most there:
           # a new SDK goes red precisely when it deprecates an API Linthra uses,
           # and "repair the application code until the checks pass" is the
           # migration itself — a human decision, in a human's PR. Those PRs are
@@ -341,7 +343,7 @@ jobs:
           # Protect repository policy/configuration, release/store metadata,
           # licensing notices at any depth, toolchain/version files, and signing
           # material. The agent may repair application/test code only.
-          forbidden='(^|/)(LICENSE($|\.)|COPYING($|\.)|NOTICE($|\.))|^(\.github/|metadata/|pubspec\.yaml$|\.flutter-version$|\.java-version$|fastlane/|docs/release-notes/|scripts/check_secrets\.sh$|analysis_options\.yaml$)|(^|/)(key\.properties|[^/]*\.(jks|keystore))$'
+          forbidden='(^|/)(LICENSE($|\.)|COPYING($|\.)|NOTICE($|\.))|^(\.github/|metadata/|pubspec\.yaml$|\.flutter-version$|\.java-version$|android/settings\.gradle$|android/gradle/wrapper/gradle-wrapper\.properties$|fastlane/|docs/release-notes/|scripts/check_secrets\.sh$|analysis_options\.yaml$)|(^|/)(key\.properties|[^/]*\.(jks|keystore))$'
           for path in "${changed[@]}"; do
             if [[ "$path" =~ $forbidden ]]; then
               echo "::error::Agent touched protected path: $path"

@@ -3,8 +3,8 @@
 # check_dependency_update_files.sh — assert an automatic update only touches
 # the files that kind of update is allowed to touch.
 #
-# Linthra runs two automatic updaters (issue #362), and each one writes exactly
-# one file:
+# Linthra runs several automatic updaters (issue #362), and each one writes
+# exactly one file:
 #
 #   --kind dart-packages   pubspec.lock       the resolved dependency set
 #                          .github/workflows/dart-dependency-updates.yml
@@ -13,12 +13,25 @@
 #   --kind flutter-sdk     .flutter-version   the pinned Flutter SDK
 #                          .github/workflows/flutter-sdk-updates.yml
 #
+#   --kind gradle          android/gradle/wrapper/gradle-wrapper.properties
+#   --kind agp             android/settings.gradle
+#   --kind kotlin          android/settings.gradle
+#                          .github/workflows/android-toolchain-updates.yml
+#
 # The kinds are deliberately separate allowlists rather than one union. A
 # lockfile refresh has no business editing the toolchain pin, and an SDK bump
 # has no business re-resolving the lockfile — that second resolution is a
 # human's call, because the committed pubspec.lock is what the reproducible
 # F-Droid build resolves from (docs/release-process.md §7). Sharing one list
 # would silently give each updater the other's reach.
+#
+# Note the last two kinds: the AGP and Kotlin pins live in the *same file*, so
+# for those two a filename is not a boundary at all — this guard can only say
+# "settings.gradle changed", not "the AGP updater left Kotlin alone". That
+# second question is answered by scripts/check_toolchain_pin_diff.py, which
+# compares the file's real before/after text and rejects any change outside the
+# one version string the updater owns. The two run together, here and in CI:
+# this one bounds *which files*, that one bounds *what inside them*.
 #
 # Nothing else is allowed in either kind. In particular an automatic update
 # must never rewrite the constraints in pubspec.yaml, never touch application
@@ -49,6 +62,7 @@
 #   # Or as arguments:
 #   scripts/check_dependency_update_files.sh pubspec.lock
 #   scripts/check_dependency_update_files.sh --kind flutter-sdk .flutter-version
+#   scripts/check_dependency_update_files.sh --kind agp android/settings.gradle
 #
 # --kind defaults to dart-packages, the updater that came first.
 #
@@ -58,6 +72,7 @@
 set -uo pipefail
 
 kind="dart-packages"
+kinds="dart-packages, flutter-sdk, gradle, agp or kotlin"
 
 # Collect candidate paths from arguments, else from stdin.
 paths=()
@@ -65,7 +80,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --kind)
       if [ "$#" -lt 2 ]; then
-        echo "ERROR: --kind needs a value (dart-packages or flutter-sdk)." >&2
+        echo "ERROR: --kind needs a value ($kinds)." >&2
         exit 1
       fi
       kind="$2"
@@ -87,8 +102,19 @@ case "$kind" in
   flutter-sdk)
     allowed=(".flutter-version")
     what="Flutter SDK update" ;;
+  gradle)
+    allowed=("android/gradle/wrapper/gradle-wrapper.properties")
+    what="Gradle update" ;;
+  agp)
+    # Same file as kotlin below, on purpose — and exactly why this guard is not
+    # the whole story for these two. See scripts/check_toolchain_pin_diff.py.
+    allowed=("android/settings.gradle")
+    what="Android Gradle Plugin update" ;;
+  kotlin)
+    allowed=("android/settings.gradle")
+    what="Kotlin Gradle plugin update" ;;
   *)
-    echo "ERROR: unknown --kind '$kind' (expected dart-packages or flutter-sdk)." >&2
+    echo "ERROR: unknown --kind '$kind' (expected $kinds)." >&2
     exit 1 ;;
 esac
 

@@ -8,6 +8,8 @@ name: CI
 #   * dependency-guard    — deps/* PRs only: the update must be lockfile-only.
 #   * toolchain-guard     — toolchain/flutter-sdk only: the bump must be
 #                           pin-only.
+#   * android-toolchain-guard — the three automatic Gradle/AGP/Kotlin branches
+#                           only: the bump must be one version string.
 on:
   push:
     branches: [main]
@@ -143,3 +145,42 @@ jobs:
           set -euo pipefail
           git diff --name-only "$BASE_SHA" HEAD \
             | ./scripts/check_dependency_update_files.sh --kind flutter-sdk
+
+  android-toolchain-guard:
+    name: Android toolchain update touches only its own pin
+    runs-on: ubuntu-latest
+    # Only the three branches the "Android toolchain updates" workflow pushes,
+    # each matched exactly. A broad `toolchain/*` rule would be wrong twice
+    # over: it would hold every future human toolchain PR to the pin-only rule,
+    # and it could not tell which of the three pins the PR is allowed to move.
+    if: >-
+      ${{ github.head_ref == 'toolchain/gradle'
+      || github.head_ref == 'toolchain/agp'
+      || github.head_ref == 'toolchain/kotlin' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Two guards, the same two the updater ran before committing — but here
+      # against the real PR diff, so anything pushed onto the branch afterwards
+      # is caught too.
+      #
+      # The second one is the interesting half. AGP and Kotlin are pinned in
+      # the *same file*, so "only android/settings.gradle changed" says nothing
+      # about which of the two moved. check_toolchain_pin_diff.py answers that
+      # by putting the old version back into the new file and requiring the
+      # result to be byte-identical to the old one: a Kotlin edit riding along
+      # in an AGP PR, or a reworded comment, cannot survive that.
+      - name: Check changed files and their contents
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          kind="${HEAD_REF#toolchain/}"
+          git diff --name-only "$BASE_SHA" HEAD \
+            | ./scripts/check_dependency_update_files.sh --kind "$kind"
+          python3 scripts/check_toolchain_pin_diff.py \
+            --kind "$kind" --base "$BASE_SHA" --head HEAD

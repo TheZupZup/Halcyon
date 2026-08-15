@@ -1,0 +1,58 @@
+name: Android toolchain updater tests
+
+# Unit tests for the Python behind the Gradle / AGP / Kotlin updater (#362).
+#
+# The end-to-end guardrails live in
+# test/tooling/android_toolchain_update_guardrails_test.dart and run in ci.yml's
+# ordinary Flutter checks job on every PR. These are the layer below: the pin
+# patterns, the two upstream parsers and the classification, exercised directly
+# rather than through a subprocess. They need Python and nothing else, so they
+# run here instead of paying for an SDK install.
+#
+# Path-filtered, because they only ever fail when one of these files moves.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/android-toolchain-updates.yml"
+      - ".github/workflows/android-toolchain-update-tests.yml"
+      - "scripts/toolchain_pins.py"
+      - "scripts/check_android_toolchain_update.py"
+      - "scripts/set_android_toolchain_pin.py"
+      - "scripts/check_toolchain_pin_diff.py"
+      - "scripts/check_dependency_update_files.sh"
+      - "test/tooling/android_toolchain_update_test.py"
+      - "android/settings.gradle"
+      - "android/gradle/wrapper/gradle-wrapper.properties"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/android-toolchain-updates.yml"
+      - ".github/workflows/android-toolchain-update-tests.yml"
+      - "scripts/toolchain_pins.py"
+      - "scripts/check_android_toolchain_update.py"
+      - "scripts/set_android_toolchain_pin.py"
+      - "scripts/check_toolchain_pin_diff.py"
+      - "scripts/check_dependency_update_files.sh"
+      - "test/tooling/android_toolchain_update_test.py"
+      - "android/settings.gradle"
+      - "android/gradle/wrapper/gradle-wrapper.properties"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Toolchain updater tooling
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      # Offline: fixture release indexes and throwaway directories, no network.
+      - name: Run tests
+        run: python3 test/tooling/android_toolchain_update_test.py
