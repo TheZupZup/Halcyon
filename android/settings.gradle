@@ -19,8 +19,17 @@ pluginManagement {
 plugins {
     id "dev.flutter.flutter-plugin-loader" version "1.0.0"
     // Stay on AGP 8.x while Flutter 3.44 still supports the legacy Android DSL
-    // used by Linthra's F-Droid per-ABI versionCode hook. AGP 8.10 supports
-    // API 36 and remains compatible with the external Kotlin Gradle plugin.
+    // used by Linthra's F-Droid per-ABI versionCode hook: the applicationVariants
+    // iteration in app/build.gradle has no supported equivalent in AGP 9, so
+    // crossing that major is a migration a human does deliberately, not a pin
+    // bump. Within 8.x the plugin supports the compileSdk this app targets and
+    // stays compatible with the external Kotlin Gradle plugin below.
+    //
+    // The two versions on the next lines are updated automatically, one at a
+    // time and only within their current major, by
+    // .github/workflows/android-toolchain-updates.yml. Keep explanatory prose
+    // above this point and out of those lines — the updater is guarded to
+    // rewrite the version string and nothing else, comments included.
     id "com.android.application" version "8.10.1" apply false
     id "org.jetbrains.kotlin.android" version "2.2.21" apply false
 }

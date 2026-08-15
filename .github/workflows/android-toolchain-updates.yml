@@ -1,0 +1,492 @@
+name: Android toolchain updates
+
+# Weekly check of the official Gradle, Android Gradle Plugin and Kotlin Gradle
+# plugin release indexes against the versions this repository pins (#362, the
+# fifth and final phase).
+#
+# Nothing here merges, and nothing here migrates code. The workflow's whole job
+# is to say "a newer release exists on the line we already ship; here is the
+# one-line pin change; here is what CI thinks of it" and then stop. If the new
+# toolchain breaks the Android build, the PR goes red and stays red until a
+# human does the migration in their own PR. That red is the deliverable, not a
+# bug.
+#
+# Detection lives in scripts/check_android_toolchain_update.py, not in this
+# file, so the version comparison can be tested offline against fixture indexes
+# (test/tooling/android_toolchain_update_guardrails_test.dart and
+# test/tooling/android_toolchain_update_test.py).
+#
+# The two questions it answers per tool are deliberately independent:
+#
+#   newest release still on the pinned major -> this workflow opens or updates
+#                                               that tool's draft PR
+#   a newer major exists                     -> no PR and no pin change; it
+#                                               opens or updates an issue
+#
+# Both can be true in the same week, and when they are, both happen. A new
+# major must never hide the later patch releases on the line Linthra actually
+# ships.
+#
+# One reusable branch and one reusable draft PR per tool:
+#
+#   toolchain/gradle  android/gradle/wrapper/gradle-wrapper.properties
+#   toolchain/agp     android/settings.gradle  (com.android.application only)
+#   toolchain/kotlin  android/settings.gradle  (org.jetbrains.kotlin.android only)
+#
+# The last two share a file, so a filename allowlist is not a boundary between
+# them. scripts/check_toolchain_pin_diff.py is — it compares the file's real
+# before/after text and rejects any change outside the single version string
+# that updater owns, comments included. It runs here before a commit exists,
+# and again in ci.yml against the real PR diff.
+#
+# See docs/dependency-updates.md.
+on:
+  schedule:
+    # Mondays, early UTC — the same weekly cadence as the other updaters, a few
+    # minutes after the Flutter SDK run so the two never contend.
+    - cron: "53 4 * * 1"
+  workflow_dispatch:
+
+# A manual run is the scheduled run: same detection, same safety checks, same
+# publication path. The only difference is what started it.
+concurrency:
+  group: android-toolchain-updates
+  cancel-in-progress: false
+
+# Read-only by default. The publication job below keeps this and routes its
+# writes through the dedicated token instead, because a push or PR made with
+# GITHUB_TOKEN does not trigger the PR's normal CI — and an update PR that runs
+# no checks is a broken updater.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check the upstream release indexes
+    runs-on: ubuntu-latest
+    outputs:
+      # The full per-tool classification, as compact JSON keyed by tool. The
+      # publication jobs read their own entry out of it rather than having the
+      # check job fan out one output per tool per field.
+      results: ${{ steps.check.outputs.results }}
+      # The tools that have a newer release on their current major line, and
+      # the tools that have a newer major. A tool can appear in both.
+      pr_tools: ${{ steps.check.outputs.pr_tools }}
+      issue_tools: ${{ steps.check.outputs.issue_tools }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      # Local twin: python3 scripts/check_android_toolchain_update.py. Reads
+      # the three pin files, fetches the three official release indexes and
+      # classifies. Exits non-zero on anything it cannot trust — a malformed
+      # pin, an index it cannot parse, an index with no release on our own
+      # major line, or a "newest release" that is behind the pin — rather than
+      # guessing a target. One tool failing stops the whole run: publishing off
+      # a half-understood picture is exactly what this is meant to prevent.
+      - name: Classify the pinned toolchain against upstream
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_android_toolchain_update.py \
+            --github-output "$GITHUB_OUTPUT" | tee "$RUNNER_TEMP/check.txt"
+
+      - name: Summarise
+        shell: bash
+        env:
+          PR_TOOLS: ${{ steps.check.outputs.pr_tools }}
+          ISSUE_TOOLS: ${{ steps.check.outputs.issue_tools }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Android toolchain check"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/check.txt"
+            echo '```'
+            if [[ "$PR_TOOLS" == "[]" && "$ISSUE_TOOLS" == "[]" ]]; then
+              echo
+              echo "Nothing to do."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # A newer release on the pinned major -> one reusable draft PR per tool that
+  # changes that tool's version and nothing else.
+  # ---------------------------------------------------------------------------
+  toolchain-pr:
+    name: Draft PR for ${{ matrix.tool }}
+    needs: check
+    if: ${{ needs.check.outputs.pr_tools != '[]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      # Each tool owns its own branch and its own PR, so one tool's failure
+      # must not cancel the others' updates.
+      fail-fast: false
+      matrix:
+        tool: ${{ fromJSON(needs.check.outputs.pr_tools) }}
+    env:
+      TOOL: ${{ matrix.tool }}
+      UPDATE_BRANCH: toolchain/${{ matrix.tool }}
+      LABEL: ${{ fromJSON(needs.check.outputs.results)[matrix.tool].label }}
+      PIN_FILE: ${{ fromJSON(needs.check.outputs.results)[matrix.tool].pin_file }}
+      CURRENT: ${{ fromJSON(needs.check.outputs.results)[matrix.tool].current }}
+      TARGET: ${{ fromJSON(needs.check.outputs.results)[matrix.tool].latest_in_current_major }}
+      STATUS: ${{ fromJSON(needs.check.outputs.results)[matrix.tool].status }}
+      SOURCE: ${{ fromJSON(needs.check.outputs.results)[matrix.tool].source }}
+      STABLE_CONFIRMED: ${{ fromJSON(needs.check.outputs.results)[matrix.tool].stable_confirmed }}
+      MAJOR_STATUS: ${{ fromJSON(needs.check.outputs.results)[matrix.tool].major_status }}
+      MAJOR_LATEST: ${{ fromJSON(needs.check.outputs.results)[matrix.tool].major_latest }}
+    steps:
+      # Fails the run rather than opening a PR that no CI would ever look at.
+      # This step lives in this job on purpose: a week with no update never
+      # reaches it, so a missing token cannot fail a quiet run.
+      - name: Require workflow-triggering publication token
+        env:
+          PUBLISH_TOKEN: ${{ secrets.DEPENDENCY_UPDATE_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -z "$PUBLISH_TOKEN" ]]; then
+            echo "::error::DEPENDENCY_UPDATE_TOKEN is required to publish the $LABEL update PR so it runs normal CI. See docs/dependency-updates.md."
+            exit 1
+          fi
+
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Open or update the draft toolchain PR
+        env:
+          GH_TOKEN: ${{ secrets.DEPENDENCY_UPDATE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The detection job already refused to continue on anything it could
+          # not trust, so reaching here without a confirmed release would mean
+          # the outputs were tampered with between jobs.
+          if [[ "$STABLE_CONFIRMED" != "true" ]]; then
+            echo "::error::The target $TARGET was not confirmed as a published $LABEL release; refusing to open a PR."
+            exit 1
+          fi
+          if [[ "${TARGET%%.*}" != "${CURRENT%%.*}" ]]; then
+            echo "::error::$TARGET is not on the pinned major line ($CURRENT). A major upgrade never gets a PR."
+            exit 1
+          fi
+
+          gh auth setup-git
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          subject_prefix="chore(toolchain): update $LABEL to "
+          subject="${subject_prefix}${TARGET}"
+
+          # Reuse the one update branch instead of opening a new PR every week.
+          remote_sha="$(git ls-remote origin "refs/heads/$UPDATE_BRANCH" | cut -f1)"
+          branch_exists=false
+          branch_matches_target=false
+
+          if [[ -n "$remote_sha" ]]; then
+            branch_exists=true
+            git fetch --no-tags origin "+refs/heads/$UPDATE_BRANCH:refs/remotes/origin/$UPDATE_BRANCH"
+
+            # Refuse to overwrite work this workflow did not create. The branch
+            # is expected to hold nothing but this workflow's own pin commits
+            # for this one tool; if someone pushed a migration onto it, that is
+            # a human's PR now and a force-push would silently delete it.
+            foreign=""
+            while IFS='|' read -r author subject_line; do
+              [[ -n "$author$subject_line" ]] || continue
+              if [[ "$author" == "github-actions[bot]" \
+                    && "$subject_line" == "$subject_prefix"* ]]; then
+                continue
+              fi
+              foreign+="$author|$subject_line"$'\n'
+            done < <(git log --format='%an|%s' "HEAD..origin/$UPDATE_BRANCH")
+
+            if [[ -n "$foreign" ]]; then
+              {
+                echo "### $LABEL update skipped"
+                echo
+                echo "\`$UPDATE_BRANCH\` carries commits this workflow did not write:"
+                echo
+                echo '```text'
+                printf '%s' "$foreign"
+                echo '```'
+                echo
+                echo "Refusing to force-push over them. Merge or close the open PR first."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::$UPDATE_BRANCH has commits from someone else; not publishing."
+              exit 0
+            fi
+
+            git show "origin/$UPDATE_BRANCH:$PIN_FILE" > "$RUNNER_TEMP/branch-pin-file"
+            branch_version="$(python3 scripts/toolchain_pins.py \
+              --tool "$TOOL" --file "$RUNNER_TEMP/branch-pin-file")"
+            if [[ -z "$branch_version" ]]; then
+              echo "::error::$UPDATE_BRANCH has no readable $LABEL pin in $PIN_FILE; refusing to force-push over it."
+              exit 1
+            fi
+
+            if [[ "$branch_version" == "$TARGET" ]]; then
+              branch_matches_target=true
+            else
+              # The open PR must only ever move forwards. If its pin is already
+              # ahead of the target upstream just gave us, something is wrong
+              # with the data, not with the branch.
+              if ! python3 scripts/check_android_toolchain_update.py \
+                    --tool "$TOOL" --current "$branch_version" \
+                    --latest "$TARGET" --quiet; then
+                echo "::error::$UPDATE_BRANCH already proposes $branch_version, which is not older than $TARGET. Refusing to rewind the open PR."
+                exit 1
+              fi
+            fi
+          fi
+
+          if [[ "$branch_matches_target" == "true" ]]; then
+            echo "The open $LABEL PR already proposes $TARGET; not pushing again." >> "$GITHUB_STEP_SUMMARY"
+          else
+            git checkout -B "$UPDATE_BRANCH"
+
+            # One version string, in one file, aimed by content rather than by
+            # filename — AGP and Kotlin share android/settings.gradle.
+            python3 scripts/set_android_toolchain_pin.py \
+              --tool "$TOOL" --version "$TARGET"
+
+            # Two guards, before a commit exists. The first bounds which files
+            # moved; the second bounds what changed inside the one that did.
+            # ci.yml runs both again against the real PR diff.
+            git diff --name-only | ./scripts/check_dependency_update_files.sh --kind "$TOOL"
+            python3 scripts/check_toolchain_pin_diff.py --kind "$TOOL" --base HEAD
+
+            git add -- "$PIN_FILE"
+            git commit -m "$subject"
+
+            if [[ "$branch_exists" == "true" ]]; then
+              git push --force-with-lease="$UPDATE_BRANCH:$remote_sha" origin "$UPDATE_BRANCH"
+            else
+              git push -u origin "$UPDATE_BRANCH"
+            fi
+          fi
+
+          body="$RUNNER_TEMP/pr-body.md"
+          {
+            echo "Automatic $LABEL update — **$STATUS** release on the currently pinned major line."
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Currently pinned | \`$CURRENT\` |"
+            echo "| Proposed | \`$TARGET\` |"
+            echo "| Kind | $STATUS |"
+            echo "| Stable | confirmed — \`$TARGET\` is a published final release |"
+            echo "| Source | \`$SOURCE\` |"
+            echo
+            echo "That index is the one Gradle itself resolves this plugin or distribution"
+            echo "from, so the proposed version is installable by construction. Prereleases"
+            echo "(alpha, beta, RC, milestone, preview, nightly, snapshot) are never"
+            echo "candidates."
+            if [[ "$MAJOR_STATUS" == "available" ]]; then
+              echo
+              echo "> A newer **major** ($MAJOR_LATEST) also exists. It is deliberately not part of"
+              echo "> this PR — a major upgrade is a manual migration and gets its own issue."
+            fi
+            echo
+            echo "### What changed here"
+            echo
+            echo "One version string, in one file:"
+            echo
+            echo '```text'
+            echo "$PIN_FILE"
+            echo '```'
+            echo
+            echo "No application code, test code, \`pubspec.yaml\`, \`pubspec.lock\`,"
+            echo "\`.flutter-version\`, \`.java-version\`, app version, F-Droid metadata,"
+            echo "Fastlane file, release note, signing file, license, unrelated workflow or"
+            echo "doc was touched — and no *other* toolchain pin was touched either."
+            echo "\`scripts/check_dependency_update_files.sh --kind $TOOL\` bounds which files"
+            echo "moved, and \`scripts/check_toolchain_pin_diff.py --kind $TOOL\` bounds what"
+            echo "changed inside them: it puts the old version back and requires the file to"
+            echo "be byte-identical to its previous contents, so a comment rewrite or a"
+            echo "second pin in the same file is rejected. Both run here and again in CI"
+            echo "against this PR's real diff."
+            echo
+            echo "### This PR may be red, and that is fine"
+            echo
+            echo "A newer build tool can change defaults, tighten a deprecation or need a"
+            echo "different configuration. Any of that turns this PR red. That is the"
+            echo "finding — it says the upgrade needs work — not a fault in the PR. **Do the"
+            echo "migration in a separate PR.** Do not push fixes onto this branch: the"
+            echo "guards reject them, and the next scheduled run refuses to force-push over"
+            echo "commits it did not write. The Flutter CI fixer is kept off \`toolchain/\`"
+            echo "branches for the same reason."
+            echo
+            echo "### Before merging"
+            echo
+            echo "- [ ] CI is green, or every failure is understood and handled elsewhere."
+            echo "- [ ] **Flutter compatibility:** the Flutter version in \`.flutter-version\`"
+            echo "      ships its own Android build logic and supports a range of build"
+            echo "      tooling. Confirm the proposed version is inside that range rather"
+            echo "      than merely newer."
+            echo "- [ ] **F-Droid / reproducibility:** the F-Droid builder resolves this"
+            echo "      toolchain offline from these same files, so the proposed version has"
+            echo "      to be available and reproducible there too. Re-read"
+            echo "      \`docs/fdroid-build-recipe.md\` and the reproducibility notes, and"
+            echo "      update them if the bump changes what a builder must install."
+            echo "- [ ] A human reviewed and merged this. Nothing here auto-merges, ever."
+            echo
+            echo "Opened by [\`android-toolchain-updates.yml\`](.github/workflows/android-toolchain-updates.yml)"
+            echo "for issue #362. See [docs/dependency-updates.md](docs/dependency-updates.md)."
+            echo
+            echo "Reproduce the detection locally:"
+            echo
+            echo '```bash'
+            echo "python3 scripts/check_android_toolchain_update.py --tool $TOOL"
+            echo '```'
+          } > "$body"
+
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$UPDATE_BRANCH" \
+            --state open --json number --jq '.[0].number // empty')"
+
+          if [[ -n "$existing" ]]; then
+            # --title/--body only; leave the draft/ready state alone so a
+            # reviewer who marked the PR ready does not get it flipped back.
+            gh pr edit "$existing" --repo "$GITHUB_REPOSITORY" \
+              --title "$subject" --body-file "$body"
+            echo "Updated PR #$existing ($LABEL $CURRENT -> $TARGET)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            url="$(gh pr create --repo "$GITHUB_REPOSITORY" --draft \
+              --base main --head "$UPDATE_BRANCH" \
+              --title "$subject" --body-file "$body")"
+            echo "Opened $url ($LABEL $CURRENT -> $TARGET)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # A newer major -> an issue, no branch, no commit, no pin change.
+  # ---------------------------------------------------------------------------
+  major-issue:
+    name: Major upgrade issue for ${{ matrix.tool }}
+    needs: check
+    if: ${{ needs.check.outputs.issue_tools != '[]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The only write this workflow's own GITHUB_TOKEN ever gets, and only in
+      # the job that files the issue. An issue needs no CI, so it needs none of
+      # the dedicated publication token's reach.
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        tool: ${{ fromJSON(needs.check.outputs.issue_tools) }}
+    env:
+      TOOL: ${{ matrix.tool }}
+      LABEL: ${{ fromJSON(needs.check.outputs.results)[matrix.tool].label }}
+      PIN_FILE: ${{ fromJSON(needs.check.outputs.results)[matrix.tool].pin_file }}
+      CURRENT: ${{ fromJSON(needs.check.outputs.results)[matrix.tool].current }}
+      NEWEST: ${{ fromJSON(needs.check.outputs.results)[matrix.tool].latest }}
+      NEWEST_IN_MAJOR: ${{ fromJSON(needs.check.outputs.results)[matrix.tool].latest_in_current_major }}
+      SOURCE: ${{ fromJSON(needs.check.outputs.results)[matrix.tool].source }}
+    steps:
+      # Deliberately no checkout: this path has nothing to read from the
+      # repository and must not be able to write to it.
+      - name: Open or update the major upgrade issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          major="${NEWEST%%.*}"
+          title="$LABEL ${major}.x is available — major upgrade (manual)"
+
+          body="$RUNNER_TEMP/issue-body.md"
+          {
+            echo "A new **major** $LABEL release is available."
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Currently pinned | \`$CURRENT\` |"
+            echo "| Newest stable | \`$NEWEST\` |"
+            echo "| Newest stable on the pinned major | \`$NEWEST_IN_MAJOR\` |"
+            echo "| Pinned in | \`$PIN_FILE\` |"
+            echo "| Source | \`$SOURCE\` |"
+            echo
+            echo "### No PR was opened, on purpose"
+            echo
+            echo "\`$PIN_FILE\` has **not** been changed and no commit was made. Patch and"
+            echo "minor updates *within the pinned major* get an automatic draft PR; a major"
+            echo "does not, because a major upgrade is not a one-line pin change (#362)."
+            echo
+            echo "The two are tracked separately: if the newest release on the pinned major"
+            echo "is ahead of what is pinned, that update still gets its own ordinary draft"
+            echo "PR this week. A new major never blocks it."
+            if [[ "$TOOL" == "agp" ]]; then
+              echo
+              echo "### Read this one carefully"
+              echo
+              echo "Linthra's F-Droid release still builds its per-ABI \`versionCode\`s by"
+              echo "iterating \`applicationVariants\` in \`android/app/build.gradle\`. That is"
+              echo "legacy Android DSL behaviour, and the next AGP major removes the API it"
+              echo "depends on. Bumping this pin without first porting that logic does not"
+              echo "produce a build failure so much as a **wrong \`versionCode\` scheme** —"
+              echo "which is the one thing an F-Droid release cannot get wrong, because"
+              echo "published version codes can never be reused or walked back."
+              echo
+              echo "Treat the variant/versionCode port as the actual work item here. The"
+              echo "version bump is the easy part."
+            fi
+            echo
+            echo "### Why this stays manual"
+            echo
+            echo "- **Flutter compatibility.** Flutter ships its own Gradle plugin and"
+            echo "  supports a bounded range of build tooling. The SDK pinned in"
+            echo "  \`.flutter-version\` decides what this project may actually use, and"
+            echo "  \"newer\" is not the same as \"supported\"."
+            echo "- **The Android build itself.** A major here changes defaults, removes"
+            echo "  deprecated DSL and can alter what ends up in the APK. That is a review,"
+            echo "  not a version bump."
+            echo "- **F-Droid and reproducibility.** The F-Droid builder resolves this"
+            echo "  toolchain offline from the files in this repository. A major upgrade can"
+            echo "  change what the builder must provide and whether the build still"
+            echo "  reproduces, and CI cannot prove either. See"
+            echo "  \`docs/fdroid-build-recipe.md\` and the reproducibility notes."
+            echo "- **The rest of the toolchain.** Gradle, AGP, Kotlin and the JDK move as a"
+            echo "  compatible set; one of them crossing a major usually drags the others."
+            echo
+            echo "### Suggested route"
+            echo
+            echo "Do the upgrade in a normal human PR: check Flutter's supported range"
+            echo "first, bump the pin, port whatever the major removed, re-check the"
+            echo "F-Droid recipe and reproducibility notes, and let normal CI judge it."
+            echo
+            echo "Filed by [\`android-toolchain-updates.yml\`](.github/workflows/android-toolchain-updates.yml)"
+            echo "for issue #362. This issue is updated in place on later runs rather than"
+            echo "refiled, so the weekly check will not spam duplicates."
+          } > "$body"
+
+          # Dedupe on the exact title, which is stable for the whole major line:
+          # a later release within the same major edits this issue instead of
+          # opening another, and a genuinely new major gets a new title. Listed
+          # rather than searched, so a freshly filed issue is found on the next
+          # run without waiting for the search index.
+          existing="$(TITLE="$title" gh issue list --repo "$GITHUB_REPOSITORY" \
+            --state open --limit 200 --json number,title \
+            --jq 'map(select(.title == env.TITLE))[0].number // empty')"
+
+          if [[ -n "$existing" ]]; then
+            gh issue edit "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+            echo "Updated issue #$existing ($LABEL $CURRENT -> $NEWEST)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            url="$(gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "$title" --body-file "$body")"
+            echo "Filed $url ($LABEL $CURRENT -> $NEWEST)." >> "$GITHUB_STEP_SUMMARY"
+          fi
