@@ -20,8 +20,18 @@ possible without rewriting the UI.
 
 ## Target platforms
 
-Android first, Linux desktop later, and possibly Windows — all from one Flutter
-codebase.
+Android and Linux desktop, from one Flutter codebase; possibly Windows later.
+
+Android is the platform Linthra ships on. The native Linux target builds and
+launches, and is deliberately incomplete — playback and the desktop UX are still
+being built out. What each platform does and does not have is in
+[linux-desktop.md](linux-desktop.md).
+
+Platform differences live behind interfaces, never in widgets. `HostPlatform`
+(`core/platform/host_platform.dart`) is the platform expressed as a value, so
+every selection rule is a plain, testable decision instead of a `dart:io` read
+that only ever resolves one way on a given machine; `hostPlatformProvider` is
+the same value for provider-level selection.
 
 ## Tech stack
 
@@ -104,6 +114,12 @@ lib/
 - **`DownloadRepository`** (`core/repositories/`) — enforces the user-initiated,
   mobile-data-respecting download policy in one place. See
   [offline-cache.md](offline-cache.md).
+- **`MediaSessionBinding`** (`core/services/media_session_binding.dart`) — the
+  platform media session (notification, lock screen, Android Auto), separated
+  from playback itself. Android attaches the `audio_service` session;
+  a platform with none gets an inert binding, so `audio_service` is never
+  initialised where it has no implementation. MPRIS becomes a third
+  implementation of this interface rather than a branch inside startup.
 
 ## The single playback seam (local + cast)
 

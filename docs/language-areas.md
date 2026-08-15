@@ -8,6 +8,7 @@ Linthra is a Flutter app, but the project is deliberately becoming polyglot wher
 | Kotlin | Android platform integration, SAF/MediaStore, media session, Android Auto, system channels | `android/app/src/main/kotlin/` |
 | Rust | large-library indexing/search, future grouping and duplicate primitives | `native/linthra_core/` |
 | C++ | realtime audio DSP, EQ/limiting, future audio analysis and SIMD work | `native/linthra_audio/` |
+| C++ / CMake (GTK) | the native Linux desktop runner: window identity and metadata, GTK application setup, native build configuration | `linux/` |
 | Python | release tooling, large-library fixtures, benchmarks, validation | `scripts/`, `tool/`, `tools/` |
 | SQL | SQLite schema/index/query performance for very large catalogs | `tools/large_library/schema.sql` and Drift/database work |
 
@@ -27,9 +28,15 @@ Choose Kotlin when Android itself is the feature. Linthra already has native cha
 
 `linthra_audio` owns realtime signal processing. The callback must stay bounded, allocation-free and lock-free. EQ, limiter behaviour, SIMD, channel layouts and loudness/peak analysis are useful C++ contribution areas. The current core is intentionally separated from the `just_audio` mobile binding so DSP math can be reviewed independently from Android playback plumbing.
 
+## C++ / CMake / GTK — the Linux runner
+
+`linux/` is the native entry point of the desktop app: a small GTK application that creates the window, sets Linthra's identity, and hands off to the Flutter engine. It is C++ because that is what the Flutter Linux embedder is; there is no Dart alternative for this layer.
+
+Keep it small. Anything that could live in Dart should — the runner exists to create a correct window and get out of the way, not to hold product logic. Its build configuration (`linux/CMakeLists.txt`) is also where native-dependency decisions land, such as the SQLite pre-fetch seam that keeps the build possible with no network. See [linux-desktop.md](linux-desktop.md).
+
 ## Python / tooling
 
-Python should remove repetitive maintainer work or create useful developer fixtures. Linthra already uses Python in release/branding tooling; `tools/large_library/` adds deterministic 200k-track SQLite generation and query benchmarks using only the standard library.
+Python should remove repetitive maintainer work or create useful developer fixtures. Linthra already uses Python in release/branding tooling; `tools/large_library/` adds deterministic 200k-track SQLite generation and query benchmarks using only the standard library. `scripts/check_linux_runner.py` is a good shape to copy: a config invariant that no compiler would catch, checked against its real sources of truth, with unit tests beside it.
 
 ## SQL / database performance
 

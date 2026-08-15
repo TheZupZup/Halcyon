@@ -7,7 +7,7 @@ import 'app/linthra_app.dart';
 import 'core/models/plex_session.dart';
 import 'core/models/subsonic_session.dart';
 import 'core/models/theme_mode_preference.dart';
-import 'core/services/linthra_audio_handler.dart';
+import 'core/services/media_session_binding.dart';
 import 'core/sources/plex/plex_artwork.dart';
 import 'core/sources/subsonic/subsonic_artwork.dart';
 import 'data/repositories/app_icon_variant_store_provider.dart';
@@ -141,9 +141,11 @@ Future<void> main() async {
     ],
   );
 
-  // Attaching the session is best-effort: on a platform without the native
-  // audio_service setup it returns null and basic playback still works. The
-  // handler mirrors the controller and outlives this scope with the container.
+  // Attaching the session is best-effort and platform-routed: on a platform
+  // with no media session (Linux today — MPRIS is later desktop work) the
+  // binding is the inert one and `audio_service` is never initialised at all.
+  // On Android it attaches the real session; the handler mirrors the controller
+  // and outlives this scope with the container.
   // Passing the playlist + favourites + downloads repositories lets Android Auto
   // browse Playlists/Favorites/Offline (when the user has any) alongside
   // Songs/Albums/Artists/Queue — all read straight from the persisted stores, so
@@ -154,7 +156,7 @@ Future<void> main() async {
   // content:// — the handler reads it synchronously, never a credentialed
   // getCoverArt / X-Plex-Token cover URL. The covers are fetched and cached
   // ahead of time, off the playback path, by the prewarm service started below.
-  await connectMediaSession(
+  await const PlatformMediaSessionBinding().attach(
     container.read(playbackControllerProvider),
     container.read(musicLibraryRepositoryProvider),
     playlists: container.read(playlistRepositoryProvider),

@@ -3,11 +3,13 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/playback_state.dart';
+import '../../core/platform/host_platform.dart';
 import '../../core/services/active_playback_controller.dart';
 import '../../core/services/just_audio_playback_controller.dart';
 import '../../core/services/local_playable_uri_resolver.dart';
 import '../../core/services/local_playback_controller.dart';
 import '../../core/services/offline_first_playable_uri_resolver.dart';
+import '../../core/services/platform_playback_support.dart';
 import '../../core/services/playable_uri_resolver.dart';
 import '../../core/services/playback_candidate_source.dart';
 import '../../core/services/playback_controller.dart';
@@ -25,6 +27,7 @@ import '../../core/services/routing_playable_uri_resolver.dart';
 import '../../core/services/routing_server_playback_reporter.dart';
 import '../../core/services/server_playback_reporter.dart';
 import '../../core/services/smart_precache_service.dart';
+import '../../core/services/unsupported_playback_controller.dart';
 import '../../core/sources/jellyfin/jellyfin_account_fingerprint.dart';
 import '../../core/sources/jellyfin/jellyfin_playable_uri_resolver.dart';
 import '../../core/sources/jellyfin/jellyfin_playback_reporter.dart';
@@ -36,6 +39,7 @@ import '../../core/sources/subsonic/subsonic_account_fingerprint.dart';
 import '../../core/sources/subsonic/subsonic_playable_uri_resolver.dart';
 import '../../core/sources/subsonic/subsonic_playback_reporter.dart';
 import '../../data/repositories/download_repository_provider.dart';
+import '../../data/repositories/host_platform_provider.dart';
 import '../../data/repositories/play_history_repository_provider.dart';
 import '../../data/repositories/remote_cache_index_provider.dart';
 import '../settings/jellyfin/jellyfin_settings_controller.dart';
@@ -202,6 +206,22 @@ final playbackCandidateSourceProvider = Provider<PlaybackCandidateSource>(
 
 final localPlaybackControllerProvider =
     Provider<LocalPlaybackController>((ref) {
+  // Platforms without a `just_audio` implementation get the explicit
+  // unsupported engine instead. This is the only branch: everything downstream —
+  // the routing controller, the queue UI, smart pre-cache, playback reporting —
+  // keeps talking to a LocalPlaybackController and is unaware which one it got.
+  //
+  // Building the `just_audio` controller on such a platform is what has to be
+  // avoided, not just calling it: its constructor creates an AudioPlayer, which
+  // is the plugin-backed object that does not exist there.
+  final HostPlatform host = ref.watch(hostPlatformProvider);
+  if (!PlatformPlaybackSupport.hasOnDeviceEngine(host)) {
+    final UnsupportedPlaybackController unsupported =
+        UnsupportedPlaybackController();
+    ref.onDispose(unsupported.dispose);
+    return unsupported;
+  }
+
   final controller = JustAudioPlaybackController(
     resolver: ref.read(playableUriResolverProvider),
     // Read once at construction; the candidate source itself reads the live

@@ -1,9 +1,15 @@
 # Development
 
-Linthra is a standard Flutter app. The **Android** platform scaffold (`android/`)
-is committed, so no `flutter create` step is needed. Other native platform
-folders (`linux/`, …) are generated locally when you need them, so the repo stays
-focused on the cross-platform Dart code.
+Linthra is a standard Flutter app. The **Android** (`android/`) and **Linux**
+(`linux/`) platform scaffolds are both committed, so no `flutter create` step is
+needed for either. Any other native platform folder (`windows/`, `macos/`, …)
+would be generated locally, and none is a target today.
+
+> Building for the Linux desktop? Start with
+> [linux-desktop.md](linux-desktop.md) — required native packages, how to run
+> from source, and what is intentionally unsupported so far (playback, most of
+> all). Android is the platform Linthra ships on; Linux is not production-ready
+> yet.
 
 > New to the code itself? The [codebase tour](codebase-tour.md) maps where each
 > feature lives and how the pieces fit together.
@@ -57,6 +63,10 @@ Flutter would be used, and whether an Android SDK is present.
 The verification script auto-detects `.tool/flutter`, so you don't have to
 update `PATH` just to run it.
 
+`scripts/verify_linux.sh` is the desktop twin: the same shared checks plus the
+Linux runner configuration check and `flutter build linux --release`. See
+[linux-desktop.md](linux-desktop.md).
+
 ### What `verify_android.sh` does
 
 Runs, in CI order, and exits non-zero if any real check fails:
@@ -91,21 +101,28 @@ flutter pub get
 # 2. Run on a connected Android device or emulator
 flutter run
 
-# (Optional) generate scaffolding for another platform, e.g. Linux desktop:
-flutter create --platforms=linux .
+# Or run the native Linux desktop build (see linux-desktop.md for the
+# native packages it needs first):
+flutter run -d linux
 ```
 
-> `flutter create` may regenerate template files such as `main.dart`. If
-> prompted, keep the existing versions in this repo.
+> Do **not** re-run `flutter create` to "refresh" a platform folder. It
+> regenerates template files — `lib/main.dart`, and for Linux the window
+> identity and the offline SQLite seam in `linux/` — over Linthra's own edits.
+> `.metadata` lists those files as unmanaged and
+> `scripts/check_linux_runner.py` fails if they are ever reverted.
 
 ## What is intentionally not committed
 
-The repo holds source and the committed `android/` scaffold only — the
-toolchain is installed per-environment:
+The repo holds source and the committed `android/` and `linux/` scaffolds only
+— the toolchain is installed per-environment:
 
 - **The Flutter SDK** — downloaded into the git-ignored `.tool/flutter`.
 - **The Android SDK** — provided by your machine/CI, never vendored here.
-- **Dart/Flutter caches and build output** — `.dart_tool/`, `build/`, etc.
+- **Dart/Flutter caches and build output** — `.dart_tool/`, `build/`,
+  `linux/flutter/ephemeral/`, etc.
+- **The Linux native toolchain** (clang/cmake/ninja/GTK/libsecret) — installed
+  from your distribution; see [linux-desktop.md](linux-desktop.md).
 
 CI installs Flutter via the `subosito/flutter-action` GitHub Action rather than
 these scripts, but reads the **same** `.flutter-version` file to decide which
@@ -125,6 +142,9 @@ do not.
   APK build is skipped and verification still passes if analyze/format/tests
   pass. Install the Android SDK and set `ANDROID_HOME` to enable
   `flutter build apk --debug`.
+- **Linux build dependencies missing** — `./scripts/verify_linux.sh` names the
+  packages it could not find and skips only the build step;
+  [linux-desktop.md](linux-desktop.md) lists them per distribution.
 - **`dart format` mismatch** — run `dart format .` to apply the formatter, then
   commit the result. CI uses `--set-exit-if-changed`, so unformatted code fails.
   Make sure you're on the pinned Flutter — a newer Dart can reformat differently.

@@ -1,5 +1,4 @@
-import 'dart:io';
-
+import '../platform/host_platform.dart';
 import 'android_share_service.dart';
 import 'noop_share_service.dart';
 import 'share_service.dart';
@@ -14,16 +13,22 @@ import 'share_service.dart';
 /// page simply omits the "Share Linthra" entry.
 class PlatformShareService implements ShareService {
   const PlatformShareService({
+    HostPlatform? host,
     ShareService androidService = const AndroidShareService(),
     ShareService fallbackService = const NoopShareService(),
-  })  : _androidService = androidService,
+  })  : _host = host,
+        _androidService = androidService,
         _fallbackService = fallbackService;
 
+  /// The platform to route for; null reads the real host. See
+  /// [PlatformFolderPickerService] for why this is injectable.
+  final HostPlatform? _host;
   final ShareService _androidService;
   final ShareService _fallbackService;
 
-  ShareService get _delegate =>
-      Platform.isAndroid ? _androidService : _fallbackService;
+  ShareService get _delegate => (_host ?? HostPlatform.current).isAndroid
+      ? _androidService
+      : _fallbackService;
 
   @override
   bool get isSupported => _delegate.isSupported;

@@ -53,6 +53,11 @@ For the other areas:
 
 - `native/linthra_core/` uses Cargo.
 - `native/linthra_audio/` uses CMake.
+- `linux/` is the native Linux desktop runner (C++/GTK/CMake). Its setup —
+  required distribution packages, how to run Linthra on Linux from source, and
+  what is still unsupported there — is in
+  [docs/linux-desktop.md](./docs/linux-desktop.md); `./scripts/verify_linux.sh`
+  is the desktop twin of `verify_android.sh`.
 - `tools/large_library/` contains the Python and SQLite large-library tooling.
 
 ## Before you start

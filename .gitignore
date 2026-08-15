@@ -9,9 +9,12 @@
 .packages
 build/
 
-# The android/ platform scaffold is committed. Other native platforms
-# (linux/, windows/, …) are still generated locally via `flutter create .`
-# until we decide to commit them.
+# The android/ and linux/ platform scaffolds are committed — both are real
+# build targets with CI behind them, and linux/ carries Linthra's own edits
+# (window identity, the offline SQLite seam) that a regeneration would drop.
+# linux/flutter/ephemeral is per-build output and is excluded by linux/.gitignore.
+# Any other native platform (windows/, macos/, …) is still generated locally via
+# `flutter create .`; there is no target for them yet.
 
 # IDE
 .idea/
