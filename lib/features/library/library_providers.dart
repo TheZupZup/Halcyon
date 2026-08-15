@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/services/folder_picker_service.dart';
@@ -10,6 +8,7 @@ import '../../core/sources/local/method_channel_saf_document_lister.dart';
 import '../../core/sources/local/method_channel_saf_permission_probe.dart';
 import '../../core/sources/local/saf_document_lister.dart';
 import '../../core/sources/local/saf_permission_probe.dart';
+import '../../data/repositories/host_platform_provider.dart';
 
 /// The storage seam the library scan uses to discover audio files.
 ///
@@ -38,7 +37,7 @@ final folderPickerServiceProvider = Provider<FolderPickerService>((ref) {
 /// elsewhere (desktop, tests) the unsupported binding makes a content-URI scan
 /// fall back to filesystem path resolution. Tests override it with a fake.
 final safDocumentListerProvider = Provider<SafDocumentLister>((ref) {
-  return Platform.isAndroid
+  return ref.watch(hostPlatformProvider).isAndroid
       ? const MethodChannelSafDocumentLister()
       : const UnsupportedSafDocumentLister();
 });
@@ -49,7 +48,7 @@ final safDocumentListerProvider = Provider<SafDocumentLister>((ref) {
 /// elsewhere (desktop, tests) the unsupported binding reports `null` so the
 /// persisted-permission line is simply omitted. Tests override it with a fake.
 final safPermissionProbeProvider = Provider<SafPermissionProbe>((ref) {
-  return Platform.isAndroid
+  return ref.watch(hostPlatformProvider).isAndroid
       ? const MethodChannelSafPermissionProbe()
       : const UnsupportedSafPermissionProbe();
 });

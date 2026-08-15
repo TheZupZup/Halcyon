@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/lyrics.dart';
@@ -14,6 +12,7 @@ import '../../core/services/subsonic_lyrics_provider.dart';
 import '../../core/sources/local/io_local_lyrics_reader.dart';
 import '../../core/sources/local/local_lyrics_reader.dart';
 import '../../core/sources/local/method_channel_saf_lyrics_reader.dart';
+import '../../data/repositories/host_platform_provider.dart';
 import '../settings/jellyfin/jellyfin_settings_controller.dart';
 import '../settings/jellyfin/jellyfin_settings_providers.dart';
 import '../settings/plex/plex_settings_controller.dart';
@@ -76,7 +75,7 @@ final currentTrackLyricsProvider =
 /// [lyricsServiceProvider] directly, so this is only exercised in a real app
 /// build.
 final localLyricsReaderProvider = Provider<LocalLyricsReader>((ref) {
-  return Platform.isAndroid
+  return ref.watch(hostPlatformProvider).isAndroid
       ? const MethodChannelSafLyricsReader()
       : const IoLocalLyricsReader();
 });

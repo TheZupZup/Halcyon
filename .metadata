@@ -18,6 +18,9 @@ migration:
     - platform: android
       create_revision: d8a9f9a52e5af486f80d932e838ee93861ffd863
       base_revision: d8a9f9a52e5af486f80d932e838ee93861ffd863
+    - platform: linux
+      create_revision: 84fc5cbb223bc12f83d65b647ff8a56caf779ffd
+      base_revision: 84fc5cbb223bc12f83d65b647ff8a56caf779ffd
 
   # User provided section
 
@@ -28,3 +31,8 @@ migration:
   unmanaged_files:
     - 'lib/main.dart'
     - 'ios/Runner.xcodeproj/project.pbxproj'
+    # Linthra owns these two: the window identity/metadata and the offline
+    # SQLite seam. A template migration must not restore the generated
+    # versions. scripts/check_linux_runner.py catches it if one ever does.
+    - 'linux/CMakeLists.txt'
+    - 'linux/runner/my_application.cc'

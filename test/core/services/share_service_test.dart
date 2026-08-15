@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:linthra/core/platform/host_platform.dart';
 import 'package:linthra/core/services/android_share_service.dart';
 import 'package:linthra/core/services/noop_share_service.dart';
 import 'package:linthra/core/services/platform_share_service.dart';
@@ -69,6 +70,43 @@ void main() {
         expect(android.shared, isNull);
         expect(service.isSupported, isFalse);
       }
+    });
+
+    test('on Android, shares through the ACTION_SEND chooser', () async {
+      // Injected host, so the Android branch is covered from any machine
+      // rather than only when the suite happens to run on a device.
+      final _RecordingShareService android =
+          _RecordingShareService(isSupported: true);
+      final _RecordingShareService fallback =
+          _RecordingShareService(isSupported: false);
+      final ShareService service = PlatformShareService(
+        host: HostPlatform.android,
+        androidService: android,
+        fallbackService: fallback,
+      );
+
+      expect(service.isSupported, isTrue);
+      await service.share('invite');
+      expect(android.shared, 'invite');
+      expect(fallback.shared, isNull);
+    });
+
+    test('on Linux, sharing is unsupported and reaches no Android code',
+        () async {
+      final _RecordingShareService android =
+          _RecordingShareService(isSupported: true);
+      final _RecordingShareService fallback =
+          _RecordingShareService(isSupported: false);
+      final ShareService service = PlatformShareService(
+        host: HostPlatform.linux,
+        androidService: android,
+        fallbackService: fallback,
+      );
+
+      expect(service.isSupported, isFalse);
+      await service.share('invite');
+      expect(android.shared, isNull);
+      expect(fallback.shared, 'invite');
     });
   });
 }

@@ -1,5 +1,4 @@
-import 'dart:io';
-
+import '../platform/host_platform.dart';
 import 'android_launcher_icon_service.dart';
 import 'launcher_icon_service.dart';
 import 'noop_launcher_icon_service.dart';
@@ -14,16 +13,22 @@ import 'noop_launcher_icon_service.dart';
 /// and the in-app branding selection still applies.
 class PlatformLauncherIconService implements LauncherIconService {
   const PlatformLauncherIconService({
+    HostPlatform? host,
     LauncherIconService androidService = const AndroidLauncherIconService(),
     LauncherIconService fallbackService = const NoopLauncherIconService(),
-  })  : _androidService = androidService,
+  })  : _host = host,
+        _androidService = androidService,
         _fallbackService = fallbackService;
 
+  /// The platform to route for; null reads the real host. See
+  /// [PlatformFolderPickerService] for why this is injectable.
+  final HostPlatform? _host;
   final LauncherIconService _androidService;
   final LauncherIconService _fallbackService;
 
-  LauncherIconService get _delegate =>
-      Platform.isAndroid ? _androidService : _fallbackService;
+  LauncherIconService get _delegate => (_host ?? HostPlatform.current).isAndroid
+      ? _androidService
+      : _fallbackService;
 
   @override
   bool get isSupported => _delegate.isSupported;

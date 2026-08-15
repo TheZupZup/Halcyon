@@ -1,0 +1,127 @@
+name: Linux desktop build
+
+# Keeps the native Linux target building. Linthra's Android CI is unchanged and
+# stays the gate it already is; this runs alongside it so an Android-shaped
+# change that quietly breaks the desktop build — a new plugin with no Linux
+# implementation, a service that initialises eagerly, an edit that regenerates
+# the linux/ runner from the Flutter template — fails on the PR that made it
+# rather than the next time someone tries to package a release.
+#
+# It builds the real application, not a stripped-down probe: analyze and the
+# full test suite run against the same checkout, then `flutter build linux
+# --release` produces the bundle a developer would run.
+#
+# Flatpak packaging is separate, later work (issue #376, PR 5). Nothing here
+# assumes it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only: the job only inspects the checkout and builds it. No secrets, so it
+# runs identically on fork PRs.
+permissions:
+  contents: read
+
+jobs:
+  build-linux:
+    name: Build Linux desktop
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The native toolchain `flutter build linux` shells out to. Kept as an
+      # explicit list rather than a meta-package so it is obvious what the
+      # desktop build actually needs, and so it stays comparable with the
+      # Fedora package list in docs/linux-desktop.md:
+      #
+      #   clang / cmake / ninja-build / pkg-config — the build itself
+      #   libgtk-3-dev                             — the Flutter Linux embedder
+      #   liblzma-dev, libstdc++-12-dev            — Flutter tool prerequisites
+      #   libsecret-1-dev                          — flutter_secure_storage_linux,
+      #                                              i.e. encrypted credential
+      #                                              storage. Not optional: the
+      #                                              plugin fails to build
+      #                                              without it, and Linthra
+      #                                              never falls back to
+      #                                              plaintext credentials.
+      - name: Install Linux build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libgtk-3-dev \
+            liblzma-dev \
+            libstdc++-12-dev \
+            libsecret-1-dev
+
+      # Installs the version pinned in .flutter-version, the same action every
+      # other workflow uses.
+      - name: Set up Flutter
+        uses: ./.github/actions/setup-flutter
+
+      - name: Enable Linux desktop
+        run: flutter config --enable-linux-desktop
+
+      # Same lockfile-enforced resolution as the Android jobs: the desktop build
+      # must use the exact committed dependency set, not a fresh resolution that
+      # could pull a different plugin version onto one platform only.
+      - name: Install dependencies (lockfile-enforced)
+        run: flutter pub get --enforce-lockfile
+
+      - name: Verify formatting
+        run: dart format --set-exit-if-changed .
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Run tests
+        run: flutter test
+
+      # Identity and build-hygiene guard for the committed runner: the GTK
+      # application id still matches Android's applicationId, the window title
+      # still matches AppInfo.name, and the offline SQLite seam is still wired.
+      # Cheap, and it catches a `flutter create` regeneration that the build
+      # itself would happily accept.
+      - name: Check Linux runner configuration
+        run: python3 scripts/check_linux_runner.py
+
+      - name: Test the Linux runner tooling
+        run: python3 test/tooling/check_linux_runner_test.py
+
+      # Release mode, because that is the build that has to work for packaging
+      # and it exercises the AOT path a debug build skips.
+      - name: Build Linux application
+        run: flutter build linux --release
+
+      # A build that "succeeds" without producing a runnable bundle is the
+      # failure mode worth catching explicitly — mirrors the APK size check in
+      # the Android debug workflow.
+      - name: Verify build output exists
+        run: |
+          set -euo pipefail
+          bundle="build/linux/x64/release/bundle"
+          binary="$bundle/linthra"
+          for required in "$binary" "$bundle/lib/libflutter_linux_gtk.so" "$bundle/data/flutter_assets"; do
+            if [ ! -e "$required" ]; then
+              echo "::error::Expected Linux build output missing: $required"
+              exit 1
+            fi
+          done
+          if [ ! -x "$binary" ]; then
+            echo "::error::$binary is not executable."
+            exit 1
+          fi
+          echo "Linux bundle present at $bundle."
+
+      - name: Upload Linux bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: linthra-linux-x64
+          path: build/linux/x64/release/bundle
+          if-no-files-found: error
