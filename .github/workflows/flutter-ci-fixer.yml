@@ -92,8 +92,17 @@ jobs:
           # (.github/workflows/dart-dependency-updates.yml), whose PRs must stay
           # lockfile-only — a repair commit would put application code into a PR
           # that is guarded to contain nothing but pubspec.lock.
-          if [[ "$head_branch" == dependabot/* || "$head_branch" == deps/* ]]; then
-            echo "Skipping dependency update branch $head_branch; update PRs stay red for review."
+          #
+          # toolchain/* covers the Flutter SDK updater
+          # (.github/workflows/flutter-sdk-updates.yml). It matters most there:
+          # a new SDK goes red precisely when it deprecates an API Linthra uses,
+          # and "repair the application code until the checks pass" is the
+          # migration itself — a human decision, in a human's PR. Those PRs are
+          # guarded to contain nothing but .flutter-version, so a repair commit
+          # could not land on them anyway.
+          if [[ "$head_branch" == dependabot/* || "$head_branch" == deps/* \
+                || "$head_branch" == toolchain/* ]]; then
+            echo "Skipping dependency/toolchain update branch $head_branch; update PRs stay red for review."
             exit 0
           fi
 
@@ -363,14 +372,16 @@ jobs:
   publish:
     name: Publish validated Flutter fix
     needs: fix
-    # The dependency-branch check in the fix job already stops a repair being
-    # built, so target_branch can never be dependabot/ or deps/ here. Restated
-    # anyway: this is the last gate before a commit is pushed, and "never
-    # publish onto an update PR" is worth enforcing where the push happens.
+    # The update-branch check in the fix job already stops a repair being built,
+    # so target_branch can never be dependabot/, deps/ or toolchain/ here.
+    # Restated anyway: this is the last gate before a commit is pushed, and
+    # "never publish onto an update PR" is worth enforcing where the push
+    # happens.
     if: >-
       ${{ needs.fix.outputs.ready == 'true'
       && !startsWith(needs.fix.outputs.target_branch, 'dependabot/')
-      && !startsWith(needs.fix.outputs.target_branch, 'deps/') }}
+      && !startsWith(needs.fix.outputs.target_branch, 'deps/')
+      && !startsWith(needs.fix.outputs.target_branch, 'toolchain/') }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
