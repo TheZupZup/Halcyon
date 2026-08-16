@@ -6,13 +6,13 @@ import '../platform/host_platform.dart';
 /// provider graph, so "does this build have audio?" has exactly one answer that
 /// both the app and the tests read.
 ///
-/// The rule follows the engine, not the product plan: `just_audio` — the package
-/// `JustAudioPlaybackController` wraps — publishes Android and iOS
-/// implementations and no Linux one. Desktop therefore gets
-/// `UnsupportedPlaybackController` until a real desktop backend is wired in,
-/// which is the next piece of Linux work.
+/// The rule follows the available engines, not the product plan: Android/iOS
+/// use just_audio's native implementations and Linux uses the media_kit/libmpv
+/// federated implementation. Other desktop platforms remain unsupported.
 abstract final class PlatformPlaybackSupport {
-  /// Whether `just_audio` can actually play audio on [host].
+  /// Whether Linthra can actually play on-device audio on [host].
   static bool hasOnDeviceEngine(HostPlatform host) =>
-      host == HostPlatform.android || host == HostPlatform.ios;
+      host == HostPlatform.android ||
+      host == HostPlatform.ios ||
+      host == HostPlatform.linux;
 }

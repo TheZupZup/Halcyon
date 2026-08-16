@@ -3,15 +3,21 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/playback_state.dart';
 import 'package:linthra/core/platform/host_platform.dart';
 import 'package:linthra/core/services/just_audio_playback_controller.dart';
+import 'package:linthra/core/services/linux_playback_controller.dart';
 import 'package:linthra/core/services/local_playback_controller.dart';
 import 'package:linthra/core/services/platform_playback_support.dart';
 import 'package:linthra/core/services/unsupported_playback_controller.dart';
 import 'package:linthra/data/repositories/host_platform_provider.dart';
 import 'package:linthra/features/player/player_providers.dart';
 
+import '../../support/fake_audio_player.dart';
+
 ProviderContainer _containerFor(HostPlatform host) {
   final container = ProviderContainer(
-    overrides: <Override>[hostPlatformProvider.overrideWithValue(host)],
+    overrides: <Override>[
+      hostPlatformProvider.overrideWithValue(host),
+      linuxAudioPlayerProvider.overrideWithValue(FakeAudioPlayer()),
+    ],
   );
   addTearDown(container.dispose);
   return container;
@@ -19,13 +25,13 @@ ProviderContainer _containerFor(HostPlatform host) {
 
 void main() {
   group('PlatformPlaybackSupport.hasOnDeviceEngine', () {
-    test('is true exactly where just_audio publishes an implementation', () {
+    test('is true exactly where Linthra provides an implementation', () {
       expect(PlatformPlaybackSupport.hasOnDeviceEngine(HostPlatform.android),
           isTrue);
       expect(
           PlatformPlaybackSupport.hasOnDeviceEngine(HostPlatform.ios), isTrue);
       expect(PlatformPlaybackSupport.hasOnDeviceEngine(HostPlatform.linux),
-          isFalse);
+          isTrue);
       expect(PlatformPlaybackSupport.hasOnDeviceEngine(HostPlatform.macOS),
           isFalse);
       expect(PlatformPlaybackSupport.hasOnDeviceEngine(HostPlatform.windows),
@@ -45,21 +51,21 @@ void main() {
           container.read(localPlaybackControllerProvider);
 
       expect(controller, isA<JustAudioPlaybackController>());
+      expect(controller, isNot(isA<LinuxPlaybackController>()));
     });
 
-    test('on Linux, builds the explicit unsupported engine', () {
+    test('on Linux, builds the media_kit-backed engine', () {
       final ProviderContainer container = _containerFor(HostPlatform.linux);
 
       final LocalPlaybackController controller =
           container.read(localPlaybackControllerProvider);
 
-      expect(controller, isA<UnsupportedPlaybackController>());
+      expect(controller, isA<LinuxPlaybackController>());
       expect(controller.state.status, PlaybackStatus.idle);
     });
 
-    test('every desktop platform gets the unsupported engine', () {
+    test('unsupported desktop platforms keep the unsupported engine', () {
       for (final HostPlatform host in <HostPlatform>[
-        HostPlatform.linux,
         HostPlatform.macOS,
         HostPlatform.windows,
         HostPlatform.other,
@@ -71,26 +77,12 @@ void main() {
         );
       }
     });
-
-    test('the Linux engine reports playback as unavailable, not broken',
-        () async {
-      final ProviderContainer container = _containerFor(HostPlatform.linux);
-      final LocalPlaybackController controller =
-          container.read(localPlaybackControllerProvider);
-
-      await controller.play();
-
-      expect(controller.state.status, PlaybackStatus.error);
-      expect(controller.state.errorMessage,
-          UnsupportedPlaybackController.defaultReason);
-    });
   });
 
   group('playbackControllerProvider', () {
     test('routes through the same ActivePlaybackController on Linux', () {
       // The UI depends on this provider, never on the engine. It has to build
-      // on a platform with no audio engine, otherwise the whole player feature
-      // fails to construct at startup.
+      // over the real Linux engine so the player feature constructs at startup.
       final ProviderContainer container = _containerFor(HostPlatform.linux);
 
       expect(

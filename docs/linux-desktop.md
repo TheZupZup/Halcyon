@@ -3,11 +3,11 @@
 Linthra has a native Flutter Linux target. This page is how to build and run it,
 what works today, and what deliberately does not yet.
 
-> **Linux is not production-ready.** This is the first milestone of
+> **Linux is not production-ready.** This is the second milestone of
 > [issue #376](https://github.com/TheZupZup/Linthra/issues/376): the app
-> compiles, launches, and renders in a real desktop window. **There is no audio
-> playback on Linux yet** — that is the next piece of work. Android is
-> unaffected and remains the platform Linthra actually ships on.
+> compiles, launches, renders in a real desktop window, and plays local and
+> server audio. Desktop media controls and packaging are later milestones.
+> Android is unaffected and remains the platform Linthra actually ships on.
 
 ## What exists after this milestone
 
@@ -26,14 +26,14 @@ what works today, and what deliberately does not yet.
 
 ## Required packages
 
-The Flutter Linux toolchain plus the two libraries Linthra's own plugins need.
+The Flutter Linux toolchain plus the native libraries Linthra's plugins need.
 
 ### Fedora / Fedora Kinoite
 
 ```bash
 sudo dnf install \
   clang cmake ninja-build pkgconf-pkg-config \
-  gtk3-devel xz-devel libsecret-devel
+  gtk3-devel xz-devel libsecret-devel mpv-libs mpv-devel
 ```
 
 On **Kinoite** (and any rpm-ostree system) do development work inside a
@@ -50,13 +50,13 @@ toolbox enter linthra
 ```bash
 sudo apt install \
   clang cmake ninja-build pkg-config \
-  libgtk-3-dev liblzma-dev libstdc++-12-dev libsecret-1-dev
+  libgtk-3-dev liblzma-dev libstdc++-12-dev libsecret-1-dev libmpv-dev
 ```
 
 ### Arch
 
 ```bash
-sudo pacman -S --needed clang cmake ninja pkgconf gtk3 xz libsecret
+sudo pacman -S --needed clang cmake ninja pkgconf gtk3 xz libsecret mpv
 ```
 
 ### What each one is for
@@ -67,8 +67,9 @@ sudo pacman -S --needed clang cmake ninja pkgconf gtk3 xz libsecret
 | GTK 3 development headers | the Flutter Linux embedder |
 | `liblzma` / `xz` development headers | Flutter tool prerequisite |
 | **libsecret development headers** | `flutter_secure_storage_linux` — encrypted credential storage. Not optional: without it the plugin does not build, and Linthra never falls back to plaintext credentials. |
+| **libmpv** | `just_audio_media_kit` / `media_kit` — local and HTTP(S) audio decoding, seeking, timing, and output through PulseAudio or PipeWire. Ubuntu's `libmpv-dev`, Fedora's `mpv-libs` + `mpv-devel`, and Arch's `mpv` provide it. |
 
-At **runtime** the app additionally wants a Secret Service provider
+At **runtime** the app additionally needs libmpv and wants a Secret Service provider
 (`gnome-keyring` on GNOME, `kwallet` with its Secret Service interface on KDE).
 Both are present on a standard Fedora Workstation or Kinoite install.
 
@@ -93,10 +94,14 @@ To run the same checks CI runs:
 ```
 
 That does `pub get --enforce-lockfile`, `dart format --set-exit-if-changed`,
-`flutter analyze`, `flutter test`, the runner configuration check, and
-`flutter build linux --release`. It skips only the build if the native packages
-above are missing, and says which ones. `scripts/verify_android.sh` is
-unchanged and still the Android twin.
+`flutter analyze`, `flutter test`, the runner configuration check, the same
+native audio lifecycle smoke CI runs (builds and runs
+`tool/linux_audio_backend_smoke.dart`), and `flutter build linux --release`.
+It skips the smoke test and the build if the native packages above are
+missing — including the libmpv *runtime* library, checked the same way
+media_kit loads it, since a Linux build succeeds without libmpv but can't play
+anything — and says which ones. `scripts/verify_android.sh` is unchanged and
+still the Android twin.
 
 ### Building without a network
 
@@ -141,11 +146,34 @@ Two runtime facts worth knowing:
 * Credential storage was not weakened to make Linux work, and there is no
   plaintext fallback on any platform.
 
-## What is intentionally unsupported on Linux right now
+## Audio playback
+
+Linux uses `just_audio_media_kit`, which implements the same `just_audio`
+platform contract as Android's engine but delegates decoding and output to
+media_kit/libmpv. This was chosen over a second, parallel playback stack because
+Linthra's existing `JustAudioPlaybackController` already owns the difficult
+parts: ordered playable candidates, offline-to-stream fallback, queue mutation,
+shuffle/repeat, completion, retries, position/duration state, ReplayGain, and
+safe errors. `LinuxPlaybackController` only registers the Linux implementation;
+Android still constructs `JustAudioPlaybackController` and therefore remains on
+ExoPlayer, `audio_service`, and its existing audio-focus behavior.
+
+The same resolved URI path handles regular filesystem files and direct or
+transcoded Jellyfin, Navidrome/Subsonic, and supported Plex HTTP(S) URLs. No
+source-specific player exists and credentials remain in the existing resolver.
+
+libmpv provides broad codec/container support and PulseAudio/PipeWire output.
+It is a native runtime dependency, not a binary downloaded when Linthra starts.
+The future Flatpak manifest must build or include libmpv as a declared module.
+`media_kit_libs_linux` normally offers an optional build-time mimalloc download;
+Linthra explicitly disables it in `linux/CMakeLists.txt`, so this backend adds no
+undeclared network access to an isolated `flatpak-builder` build.
+
+## Remaining Linux limitations
 
 | Area | State | Why |
 | --- | --- | --- |
-| **Audio playback** | **Unsupported** | `just_audio` publishes no Linux implementation. `localPlaybackControllerProvider` builds `UnsupportedPlaybackController` on desktop, which answers any request to play with one explicit error instead of reaching a plugin that is not there. Next PR of #376. |
+| **Audio playback** | Supported | media_kit/libmpv through `LinuxPlaybackController`; local files and resolved Jellyfin, Navidrome/Subsonic, and Plex HTTP(S) streams share one backend. |
 | Media session / MPRIS | Unsupported | `audio_service` is Android/iOS only. `PlatformMediaSessionBinding` returns the inert binding on Linux, so `audio_service` is never initialised there. MPRIS is later desktop work. |
 | Android Auto | Android-only, by design | It is an Android platform integration, not a Linthra feature. |
 | Media notification + `POST_NOTIFICATIONS` | Android-only, by design | There is no equivalent gate on Linux; desktop controls arrive with MPRIS. |
@@ -177,7 +205,7 @@ The seams that branch on it:
 | Seam | Android | Linux |
 | --- | --- | --- |
 | `PlatformMediaSessionBinding` | `audio_service` session | inert, never touches `audio_service` |
-| `localPlaybackControllerProvider` | `JustAudioPlaybackController` | `UnsupportedPlaybackController` |
+| `localPlaybackControllerProvider` | `JustAudioPlaybackController` (ExoPlayer) | `LinuxPlaybackController` (media_kit/libmpv) |
 | `PlatformFolderPickerService` | SAF tree picker | `file_picker` filesystem chooser |
 | `PlatformAudioFileScanner` | SAF content-resolver walk | `dart:io` walk |
 | `safDocumentListerProvider` | native content resolver | unsupported |

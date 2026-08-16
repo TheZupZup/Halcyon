@@ -3,18 +3,24 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/data/repositories/download_repository_provider.dart';
 import 'package:linthra/features/player/player_providers.dart';
 
+import '../../support/fake_audio_player.dart';
+
 /// Locks in the playback-lifecycle guarantee from the alpha bug report: the
 /// single [PlaybackController] must be pinned for the app session, so navigating
 /// between tabs/screens and changing settings can never recreate or dispose it
 /// (which would dispose the live `AudioPlayer` and cut the music). These tests
-/// drive the *real* `playbackControllerProvider`; on a non-mobile test host the
-/// `just_audio` engine constructs without touching any platform channel.
+/// drive the *real* `playbackControllerProvider` with the Linux AudioPlayer
+/// seam explicitly replaced so unit tests never initialize native plugins.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('playback controller lifecycle', () {
     test('is read once and survives a resolver/locator rebuild', () {
-      final container = ProviderContainer();
+      final container = ProviderContainer(
+        overrides: <Override>[
+          linuxAudioPlayerProvider.overrideWithValue(FakeAudioPlayer()),
+        ],
+      );
       addTearDown(container.dispose);
 
       final first = container.read(playbackControllerProvider);
@@ -36,7 +42,11 @@ void main() {
     });
 
     test('survives a download-store rebuild (e.g. a download completing)', () {
-      final container = ProviderContainer();
+      final container = ProviderContainer(
+        overrides: <Override>[
+          linuxAudioPlayerProvider.overrideWithValue(FakeAudioPlayer()),
+        ],
+      );
       addTearDown(container.dispose);
 
       final first = container.read(playbackControllerProvider);
@@ -53,7 +63,11 @@ void main() {
     });
 
     test('the same instance backs the provider on every read', () {
-      final container = ProviderContainer();
+      final container = ProviderContainer(
+        overrides: <Override>[
+          linuxAudioPlayerProvider.overrideWithValue(FakeAudioPlayer()),
+        ],
+      );
       addTearDown(container.dispose);
 
       final reads = List.generate(

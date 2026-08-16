@@ -1,8 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/platform/host_platform.dart';
+import 'package:linthra/core/services/linux_playback_controller.dart';
 import 'package:linthra/core/services/media_session_binding.dart';
-import 'package:linthra/core/services/unsupported_playback_controller.dart';
 import 'package:linthra/data/repositories/download_repository_provider.dart';
 import 'package:linthra/data/repositories/favorites_repository_provider.dart';
 import 'package:linthra/data/repositories/host_platform_provider.dart';
@@ -13,6 +13,8 @@ import 'package:linthra/features/library/library_providers.dart';
 import 'package:linthra/features/player/lyrics_providers.dart';
 import 'package:linthra/features/player/media_artwork_providers.dart';
 import 'package:linthra/features/player/player_providers.dart';
+
+import '../support/fake_audio_player.dart';
 
 /// What `main()` builds before the first frame, on a Linux host.
 ///
@@ -29,6 +31,7 @@ void main() {
     final container = ProviderContainer(
       overrides: <Override>[
         hostPlatformProvider.overrideWithValue(HostPlatform.linux),
+        linuxAudioPlayerProvider.overrideWithValue(FakeAudioPlayer()),
       ],
     );
     addTearDown(container.dispose);
@@ -71,18 +74,15 @@ void main() {
     }, returnsNormally);
   });
 
-  test('the engine built for Linux is the unsupported one', () {
-    // The specific guard behind the smoke test above: "it constructed" would
-    // also be true if a future change quietly put `just_audio` back on Linux,
-    // where it constructs fine and then fails at the first tap.
+  test('the engine built for Linux is the real Linux controller', () {
     expect(linuxContainer().read(localPlaybackControllerProvider),
-        isA<UnsupportedPlaybackController>());
+        isA<LinuxPlaybackController>());
   });
 
   test('the volume-normalization listener main() installs is safe to fire', () {
     // main() pushes the persisted "Normalize volume" value onto the local
-    // engine immediately. On Linux that lands on the unsupported controller,
-    // which must absorb it rather than throw before the first frame.
+    // engine immediately. The Linux backend must accept it without throwing
+    // before the first frame.
     final ProviderContainer container = linuxContainer();
 
     expect(

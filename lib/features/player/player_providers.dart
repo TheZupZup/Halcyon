@@ -1,11 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:just_audio/just_audio.dart';
 
 import '../../core/models/playback_state.dart';
 import '../../core/platform/host_platform.dart';
 import '../../core/services/active_playback_controller.dart';
 import '../../core/services/just_audio_playback_controller.dart';
+import '../../core/services/linux_playback_controller.dart';
 import '../../core/services/local_playable_uri_resolver.dart';
 import '../../core/services/local_playback_controller.dart';
 import '../../core/services/offline_first_playable_uri_resolver.dart';
@@ -204,9 +206,18 @@ final playbackCandidateSourceProvider = Provider<PlaybackCandidateSource>(
   (ref) => const NoFallbackCandidateSource(),
 );
 
+/// Test seam for Linux's native audio engine.
+///
+/// Production leaves this null so [LinuxPlaybackController] registers and
+/// creates media_kit/libmpv. Tests inject a channel-free [AudioPlayer] fake:
+/// `flutter test` intentionally does not assemble the native Linux bundle, so
+/// loading libmpv there would make otherwise deterministic unit tests depend on
+/// host packages or speakers.
+final linuxAudioPlayerProvider = Provider<AudioPlayer?>((ref) => null);
+
 final localPlaybackControllerProvider =
     Provider<LocalPlaybackController>((ref) {
-  // Platforms without a `just_audio` implementation get the explicit
+  // Platforms without an on-device implementation get the explicit
   // unsupported engine instead. This is the only branch: everything downstream —
   // the routing controller, the queue UI, smart pre-cache, playback reporting —
   // keeps talking to a LocalPlaybackController and is unaware which one it got.
@@ -222,25 +233,35 @@ final localPlaybackControllerProvider =
     return unsupported;
   }
 
-  final controller = JustAudioPlaybackController(
-    resolver: ref.read(playableUriResolverProvider),
-    // Read once at construction; the candidate source itself reads the live
-    // library lazily at play time, so the session-pinned engine still sees a
-    // fresh catalog (and default-source change) without being rebuilt.
-    candidates: ref.read(playbackCandidateSourceProvider),
-    // When a track's offline-cache file won't open (corrupt, or reclaimed after
-    // the existence check), fall back to streaming the *same* track — this
-    // resolver resolves past the offline cache (the offline-first resolver's own
-    // fallback), so even a single-source cached track recovers to its live
-    // stream rather than erroring.
-    streamingFallbackResolver: ref.read(remoteCacheResolverProvider),
-    // Record a completed play when a track reaches its end. Read lazily at
-    // completion time (not watched), so the play-history repository never ties
-    // into the engine's lifecycle. Only the track id is recorded; it stays
-    // on-device. Casting suspends the engine, so cast plays aren't counted.
-    onTrackCompleted: (track) => unawaited(
-        ref.read(playHistoryRepositoryProvider).recordCompletion(track)),
-  );
+  final controller = host == HostPlatform.linux
+      ? LinuxPlaybackController(
+          player: ref.read(linuxAudioPlayerProvider),
+          resolver: ref.read(playableUriResolverProvider),
+          candidates: ref.read(playbackCandidateSourceProvider),
+          streamingFallbackResolver: ref.read(remoteCacheResolverProvider),
+          onTrackCompleted: (track) => unawaited(
+            ref.read(playHistoryRepositoryProvider).recordCompletion(track),
+          ),
+        )
+      : JustAudioPlaybackController(
+          resolver: ref.read(playableUriResolverProvider),
+          // Read once at construction; the candidate source itself reads the live
+          // library lazily at play time, so the session-pinned engine still sees a
+          // fresh catalog (and default-source change) without being rebuilt.
+          candidates: ref.read(playbackCandidateSourceProvider),
+          // When a track's offline-cache file won't open (corrupt, or reclaimed after
+          // the existence check), fall back to streaming the *same* track — this
+          // resolver resolves past the offline cache (the offline-first resolver's own
+          // fallback), so even a single-source cached track recovers to its live
+          // stream rather than erroring.
+          streamingFallbackResolver: ref.read(remoteCacheResolverProvider),
+          // Record a completed play when a track reaches its end. Read lazily at
+          // completion time (not watched), so the play-history repository never ties
+          // into the engine's lifecycle. Only the track id is recorded; it stays
+          // on-device. Casting suspends the engine, so cast plays aren't counted.
+          onTrackCompleted: (track) => unawaited(
+              ref.read(playHistoryRepositoryProvider).recordCompletion(track)),
+        );
   ref.onDispose(controller.dispose);
   return controller;
 });
