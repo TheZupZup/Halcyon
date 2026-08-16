@@ -221,17 +221,19 @@ def _fdroid_current_version_code(text, base_version_code):
 
     operations = []
     for line in text[marker.end() :].splitlines():
-        if line and not line[0].isspace():
-            break
         stripped = line.strip()
-        if not stripped:
+        if not stripped or stripped.startswith("#"):
             continue
-        if not stripped.startswith("-"):
-            raise VersionError(
-                "Unsupported F-Droid VercodeOperation entry {!r}; refusing to "
-                "guess CurrentVersionCode.".format(stripped)
-            )
-        expression = stripped[1:].strip()
+
+        # The VercodeOperation value is a YAML list. Stop as soon as the next
+        # metadata key begins, even if a fixture/editor happened to indent it.
+        # A malformed *list item* is still an error below; only a non-list line
+        # terminates this field.
+        item = re.fullmatch(r"-\s*(.+)", stripped)
+        if item is None:
+            break
+
+        expression = item.group(1).strip()
         if (
             len(expression) >= 2
             and expression[0] == expression[-1]
