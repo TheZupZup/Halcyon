@@ -310,7 +310,13 @@ jobs:
           # path components beyond the single top-level Linthra-<tag>-linux-x64/
           # directory — never the build/linux/... or repo checkout hierarchy.
           tar -czf "$archive_file" "$archive_dir"
-          tar -tzf "$archive_file" | head -5
+          # Validate the complete archive, then preview a few entries without a
+          # `tar | head` pipeline. With `set -o pipefail`, `head` closing early
+          # makes GNU tar report a broken-pipe write error even when the archive
+          # itself is perfectly valid.
+          archive_list="$RUNNER_TEMP/linux-release-archive-list.txt"
+          tar -tzf "$archive_file" > "$archive_list"
+          head -5 "$archive_list"
 
           echo "archive_file=${archive_file}" >> "$GITHUB_ENV"
 
