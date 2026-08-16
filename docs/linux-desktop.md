@@ -94,10 +94,14 @@ To run the same checks CI runs:
 ```
 
 That does `pub get --enforce-lockfile`, `dart format --set-exit-if-changed`,
-`flutter analyze`, `flutter test`, the runner configuration check, and
-`flutter build linux --release`. It skips only the build if the native packages
-above are missing, and says which ones. `scripts/verify_android.sh` is
-unchanged and still the Android twin.
+`flutter analyze`, `flutter test`, the runner configuration check, the same
+native audio lifecycle smoke CI runs (builds and runs
+`tool/linux_audio_backend_smoke.dart`), and `flutter build linux --release`.
+It skips the smoke test and the build if the native packages above are
+missing — including the libmpv *runtime* library, checked the same way
+media_kit loads it, since a Linux build succeeds without libmpv but can't play
+anything — and says which ones. `scripts/verify_android.sh` is unchanged and
+still the Android twin.
 
 ### Building without a network
 

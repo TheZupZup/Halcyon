@@ -64,8 +64,8 @@ The verification script auto-detects `.tool/flutter`, so you don't have to
 update `PATH` just to run it.
 
 `scripts/verify_linux.sh` is the desktop twin: the same shared checks plus the
-Linux runner configuration check and `flutter build linux --release`. See
-[linux-desktop.md](linux-desktop.md).
+Linux runner configuration check, the native audio lifecycle smoke test, and
+`flutter build linux --release`. See [linux-desktop.md](linux-desktop.md).
 
 ### What `verify_android.sh` does
 
@@ -142,8 +142,9 @@ do not.
   APK build is skipped and verification still passes if analyze/format/tests
   pass. Install the Android SDK and set `ANDROID_HOME` to enable
   `flutter build apk --debug`.
-- **Linux build dependencies missing** — `./scripts/verify_linux.sh` names the
-  packages it could not find and skips only the build step;
+- **Linux build/runtime dependencies missing** — `./scripts/verify_linux.sh`
+  names the packages (including the libmpv runtime) it could not find and
+  skips only the audio smoke test and the build step;
   [linux-desktop.md](linux-desktop.md) lists them per distribution.
 - **`dart format` mismatch** — run `dart format .` to apply the formatter, then
   commit the result. CI uses `--set-exit-if-changed`, so unformatted code fails.
