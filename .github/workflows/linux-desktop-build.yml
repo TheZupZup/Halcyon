@@ -11,15 +11,52 @@ name: Linux desktop build
 # full test suite run against the same checkout, then `flutter build linux
 # --release` produces the bundle a developer would run.
 #
+# This same job also serves the Linux release path, via workflow_dispatch's
+# optional `release_tag` input — NOT a `release: published` trigger. Events
+# produced using the default GITHUB_TOKEN (which is how Linthra's release
+# workflows create tags and Releases) generally do not start new workflow
+# runs; `workflow_dispatch` (and `repository_dispatch`) are the documented
+# exceptions, so the orchestrating release workflows explicitly dispatch this
+# one instead of relying on any push/release event to fire it:
+#
+#   * Stable releases (`/publish-stable vX.Y.Z`): after
+#     publish-stable-release.yml creates the tag and the GitHub Release, it
+#     `gh workflow run`s this workflow with `release_tag=vX.Y.Z`, waits for it,
+#     and requires the resulting archive to verify the Release as published.
+#   * Alpha/beta/rc pre-releases pushed directly (`git push origin vX.Y.Z-...`
+#     by a human, not a bot): android-release-build.yml's existing
+#     attach-release job — itself triggered normally by that human's tag push
+#     — dispatches this workflow the same way, once the GitHub pre-release it
+#     just created/attached to actually exists.
+#
+# With `release_tag` set, `build-linux` checks out that EXACT tag (never
+# `main` or whatever ref happens to be at the tip) and runs unchanged; a
+# second job then packages the bundle it already built and validated into a
+# `.tar.gz` and attaches it to that Release. See docs/release-process.md §4a
+# for the full flow and where to look when a release build fails.
+#
 # Flatpak packaging is separate, later work (issue #376, PR 5). Nothing here
-# assumes it.
+# assumes it. This workflow only ever produces the native Linux tarball.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: >-
+          Existing GitHub Release tag (e.g. v0.1.15) to build at and attach
+          the Linux .tar.gz to. Leave empty for a normal manual build with no
+          Release interaction.
+        required: false
+        type: string
+        default: ""
 
-# Read-only: the job only inspects the checkout and builds it. No secrets, so it
-# runs identically on fork PRs.
+# Read-only by default: build-linux only inspects the checkout and builds it,
+# identically on fork PRs, `main`, and a plain manual run. Only the
+# package-linux-release job below (which only runs for a validated
+# release_tag, never on PR/push) elevates to `contents: write`, and only for
+# itself, to attach the Release asset.
 permissions:
   contents: read
 
@@ -27,9 +64,62 @@ jobs:
   build-linux:
     name: Build Linux desktop
     runs-on: ubuntu-latest
+    outputs:
+      is_release_build: ${{ steps.resolve.outputs.is_release_build }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
     steps:
+      # Runs on every trigger, including plain PR/push builds, where
+      # `inputs.release_tag` is simply absent/empty and this exits immediately
+      # leaving `ref` empty (so the Checkout step below falls back to its
+      # normal default). When a tag IS supplied, this is the one place that
+      # decides whether the rest of the job builds a Release at all: it
+      # validates the tag's shape before it ever reaches a filename, and
+      # confirms — via the GitHub API, not just a guess — that a Release for
+      # it actually exists, since that Release is what the packaging job will
+      # upload to. A malformed or nonexistent tag fails here, before any
+      # native dependency install or Flutter build runs.
+      - name: Validate release_tag input
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RELEASE_TAG_INPUT:-}" ]; then
+            echo "is_release_build=false" >> "$GITHUB_OUTPUT"
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "No release_tag supplied; normal build (PR/push/manual), no Release interaction."
+            exit 0
+          fi
+
+          # Same tag grammar scripts/release_preflight.sh treats as the source
+          # of truth (vMAJOR.MINOR.PATCH, optionally -alpha.N / -beta.N /
+          # -rc.N) — not just "looks vaguely tag-shaped".
+          if [[ ! "$RELEASE_TAG_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
+            echo "::error::Unexpected release tag shape: $RELEASE_TAG_INPUT"
+            exit 1
+          fi
+
+          if ! gh release view "$RELEASE_TAG_INPUT" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::No GitHub Release found for tag $RELEASE_TAG_INPUT. Create/publish the Release first, then dispatch this workflow."
+            exit 1
+          fi
+
+          echo "is_release_build=true" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG_INPUT" >> "$GITHUB_OUTPUT"
+          echo "ref=$RELEASE_TAG_INPUT" >> "$GITHUB_OUTPUT"
+          echo "Release $RELEASE_TAG_INPUT confirmed; building at that exact tag."
+
+      # For a push/pull_request/plain-manual run, steps.resolve.outputs.ref is
+      # empty, so this is exactly actions/checkout's own default behavior (PR
+      # merge ref / branch head) — unchanged from before this workflow had a
+      # release_tag input at all. For a validated release build it is the
+      # exact tag confirmed above.
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.resolve.outputs.ref }}
 
       # The native toolchain `flutter build linux` shells out to. Kept as an
       # explicit list rather than a meta-package so it is obvious what the
@@ -145,3 +235,98 @@ jobs:
           name: linthra-linux-x64
           path: build/linux/x64/release/bundle
           if-no-files-found: error
+
+  # Packages the bundle build-linux already built and validated at the exact
+  # release tag, and attaches it to the GitHub Release named by that tag. Only
+  # reachable when build-linux confirmed a validated release_tag (see
+  # "Validate release_tag input" above) — never on a plain PR, push, or
+  # no-tag manual run, so this job never sees `contents: write` there. It
+  # never re-builds anything: it only downloads the artifact build-linux
+  # already produced and verified, tars it, and uploads it, so it cannot
+  # drift from what build-linux actually built.
+  package-linux-release:
+    name: Package and attach Linux release asset
+    needs: build-linux
+    if: ${{ needs.build-linux.outputs.is_release_build == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # The artifact upload above stores the *contents* of
+      # build/linux/x64/release/bundle at its root (linthra, lib/, data/, ...),
+      # so downloading it directly into the archive's staging directory already
+      # gives the correct internal layout — no extra copy/flatten step needed.
+      - name: Download Linux bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: linthra-linux-x64
+          path: bundle
+
+      - name: Package Linux bundle
+        env:
+          # Crosses a job boundary via `needs.*.outputs`, already validated by
+          # build-linux's "Validate release_tag input" step — re-validated
+          # here too before it touches a filename, since a script should not
+          # trust an untyped string just because a previous job checked it.
+          # Kept in an env var and never interpolated directly into a run:
+          # script, so it can't be read as shell.
+          RELEASE_TAG: ${{ needs.build-linux.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          # Same tag grammar as the build-linux validation above and
+          # scripts/release_preflight.sh (vMAJOR.MINOR.PATCH, optionally
+          # -alpha.N / -beta.N / -rc.N).
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
+            echo "::error::Unexpected release tag shape: $RELEASE_TAG"
+            exit 1
+          fi
+
+          archive_dir="Linthra-${RELEASE_TAG}-linux-x64"
+          archive_file="${archive_dir}.tar.gz"
+
+          if [ ! -e "bundle/linthra" ]; then
+            echo "::error::Downloaded artifact is missing the linthra executable."
+            exit 1
+          fi
+
+          mkdir -p "$archive_dir"
+          cp -r bundle/. "$archive_dir/"
+          # upload-artifact/download-artifact round trips have lost the
+          # executable bit before; restore it explicitly rather than trust it
+          # survived, and verify the rest of the required layout is present.
+          chmod +x "$archive_dir/linthra"
+          for required in \
+            "$archive_dir/linthra" \
+            "$archive_dir/lib/libflutter_linux_gtk.so" \
+            "$archive_dir/data/flutter_assets"; do
+            if [ ! -e "$required" ]; then
+              echo "::error::Packaged Linux bundle missing: $required"
+              exit 1
+            fi
+          done
+
+          # Pack from the parent of archive_dir so the tar has no leading
+          # path components beyond the single top-level Linthra-<tag>-linux-x64/
+          # directory — never the build/linux/... or repo checkout hierarchy.
+          tar -czf "$archive_file" "$archive_dir"
+          tar -tzf "$archive_file" | head -5
+
+          echo "archive_file=${archive_file}" >> "$GITHUB_ENV"
+
+      - name: Attach archive to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build-linux.outputs.release_tag }}
+          ARCHIVE_FILE: ${{ env.archive_file }}
+        run: |
+          set -euo pipefail
+
+          # --clobber replaces only an existing asset with this exact file
+          # name (a re-run of the same Release, e.g. after a failed first
+          # attempt); it never touches other assets on the Release, such as
+          # the Android APK/AAB attached by android-release-build.yml.
+          gh release upload "$RELEASE_TAG" "$ARCHIVE_FILE" \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY"
+          echo "Attached $ARCHIVE_FILE to Release '$RELEASE_TAG'."

@@ -23,6 +23,11 @@ what works today, and what deliberately does not yet.
   desktop Secret Service (see [Secure storage](#secure-storage)).
 * CI builds the Linux target on every PR
   ([`linux-desktop-build.yml`](../.github/workflows/linux-desktop-build.yml)).
+  For an official release, that same workflow is separately dispatched to
+  build at the exact release tag, package the bundle into a `.tar.gz`, and
+  attach it to the GitHub Release — see [Release tarball](#release-tarball)
+  below and
+  [docs/release-process.md §4a](./release-process.md#4a-linux-release-tarball-dispatched-alongside-the-android-build).
 
 ## Required packages
 
@@ -235,6 +240,37 @@ widget.
 `unmanaged_files` in `.metadata`, so `flutter migrate` leaves Linthra's edits
 alone. If someone re-runs `flutter create --platforms=linux .` anyway, the
 checker above is what catches the reverted title and the lost SQLite seam.
+
+## Release tarball
+
+Every official release gets `Linthra-<tag>-linux-x64.tar.gz` attached to its
+GitHub Release automatically — e.g. `Linthra-v0.1.15-linux-x64.tar.gz` for
+tag `v0.1.15`. This isn't wired to a tag push or a Release-publish event
+(Linthra's release automation creates both using its own `GITHUB_TOKEN`,
+and GitHub generally doesn't start new workflow runs from `GITHUB_TOKEN`-
+authored events); instead `publish-stable-release.yml` (for stable releases)
+and `android-release-build.yml` (for a directly-pushed alpha/beta/rc tag)
+explicitly dispatch `linux-desktop-build.yml` at the exact release tag once
+the Release exists. The archive is exactly `flutter build linux --release`'s
+output (`build/linux/x64/release/bundle/`) at that tag, tarred with the
+bundle contents (`linthra`, `lib/`, `data/`, …) at the archive root:
+
+```bash
+tar -xzf Linthra-v0.1.15-linux-x64.tar.gz
+./Linthra-v0.1.15-linux-x64/linthra
+```
+
+**This is the native Linux build, not a self-contained package.** It still
+needs the runtime libraries in [Required packages](#required-packages) —
+libmpv and GTK 3 in particular — already installed on the machine running it,
+and a Secret Service provider for [secure storage](#secure-storage). It is
+**not** distro-independent. The eventual [Flatpak](#where-this-is-going) is
+the self-contained, sandboxed distribution target; this tarball is a plain
+native build for anyone who already has the runtime dependencies on hand, and
+it is separate work with no bearing on the Flatpak's design.
+
+See [docs/release-process.md §4a](./release-process.md#4a-linux-release-tarball-dispatched-alongside-the-android-build)
+for exactly how the CI job builds and attaches it.
 
 ## Where this is going
 
