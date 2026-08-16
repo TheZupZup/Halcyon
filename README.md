@@ -8,7 +8,7 @@
 [![Releases](https://img.shields.io/badge/download-releases-blue.svg)](https://github.com/thezupzup/linthra/releases)
 
 [![F-Droid](https://img.shields.io/badge/F--Droid-Get%20Linthra-1976D2?logo=f-droid&logoColor=white)](https://f-droid.org/packages/io.github.thezupzup.linthra/)
-[![Discord](https://img.shields.io/badge/Discord-Join%20Linthra-5865F2?logo=discord&logoColor=white)](https://discord.gg/DGzyd2aVD7)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Linthra-5865F2?logo=discord&logoColor=white)](https://discord.gg/qUXagmKFrN)
 [![Reddit](https://img.shields.io/badge/Reddit-r%2FLinthra-FF4500?logo=reddit&logoColor=white)](https://reddit.com/r/Linthra)
 
 ![Linthra](fastlane/metadata/android/en-US/images/featureGraphic.png)
