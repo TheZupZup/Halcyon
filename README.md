@@ -15,11 +15,12 @@
     <img src="https://img.shields.io/badge/Discord-Join%20Linthra-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join Discord" height="80">
   </a>
   <a href="https://reddit.com/r/Linthra">
+   
+    
+    
     <img src="https://img.shields.io/badge/Reddit-r%2FLinthra-FF4500?style=for-the-badge&logo=reddit&logoColor=white" alt="r/Linthra" height="80">
   </a>
-
-
-</p>
+  </p>
 ![Linthra](fastlane/metadata/android/en-US/images/featureGraphic.png)
 
 ### Your music, your server.
