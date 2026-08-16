@@ -7,10 +7,17 @@
 [![Latest release: v0.2.2](https://img.shields.io/badge/release-v0.2.2-7C5CFF.svg)](https://github.com/thezupzup/linthra/releases/latest)
 [![Releases](https://img.shields.io/badge/download-releases-blue.svg)](https://github.com/thezupzup/linthra/releases)
 
-[![F-Droid](https://img.shields.io/badge/F--Droid-Get%20Linthra-1976D2?style=for-the-badge&logo=f-droid&logoColor=white)](https://f-droid.org/packages/io.github.thezupzup.linthra/)
-[![Discord](https://img.shields.io/badge/Discord-Join%20Linthra-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/qUXagmKFrN)
-[![Reddit](https://img.shields.io/badge/Reddit-r%2FLinthra-FF4500?style=for-the-badge&logo=reddit&logoColor=white)](https://reddit.com/r/Linthra)
-
+<p align="center">
+  <a href="https://f-droid.org/packages/io.github.thezupzup.linthra/">
+    <img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png" alt="Get it on F-Droid" height="80">
+  </a>
+  <a href="https://discord.gg/qUXagmKFrN">
+    <img src="https://img.shields.io/badge/Discord-Join%20Linthra-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join Discord" height="80">
+  </a>
+  <a href="https://reddit.com/r/Linthra">
+    <img src="https://img.shields.io/badge/Reddit-r%2FLinthra-FF4500?style=for-the-badge&logo=reddit&logoColor=white" alt="r/Linthra" height="80">
+  </a>
+</p>
 ![Linthra](fastlane/metadata/android/en-US/images/featureGraphic.png)
 
 ### Your music, your server.
