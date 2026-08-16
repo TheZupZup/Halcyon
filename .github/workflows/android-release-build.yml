@@ -540,7 +540,9 @@ jobs:
 
   # Attaches the built artifacts to a GitHub Release for the pushed tag. This is
   # the only job that needs write access, so it is the only one granted
-  # `contents: write`.
+  # `contents: write` — plus `actions: write`, needed only by the final
+  # "Dispatch Linux release build" step below to trigger
+  # linux-desktop-build.yml for a Release this job just attached to.
   attach-release:
     name: Attach artifacts to GitHub Release
     needs: build-release
@@ -548,6 +550,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v8
@@ -628,3 +631,36 @@ jobs:
             --prerelease \
             --notes-file "$notes_file"
           echo "Created pre-release '$TAG' and attached $SIGNING universal + per-ABI APKs and AAB."
+
+      # Only for a tag pushed directly by a human (`git push origin vX.Y.Z...`),
+      # which is the one official-release path with no orchestration workflow
+      # already handling Linux: publish-stable-release.yml dispatches THIS
+      # workflow itself via workflow_dispatch (bot-pushed tags don't trigger
+      # `push`), then separately dispatches linux-desktop-build.yml on its own
+      # — dispatching it again here too would just race a second, redundant
+      # Linux build against the same Release asset. Restricting this step to
+      # `github.event_name == 'push'` skips it for that already-covered path
+      # and fires only for the direct-push case, once the step above confirms
+      # a Release actually got created/attached to. No wait/verify here —
+      # this job's own success does not depend on the Linux build, unlike
+      # publish-stable-release.yml's explicit wait for the stable path. This
+      # workflow is never itself dispatched by linux-desktop-build.yml, so
+      # there is no dispatch loop.
+      - name: Dispatch Linux release build
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build-release.outputs.target_tag }}
+        run: |
+          set -euo pipefail
+
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "No GitHub Release exists for '$TAG'; skipping Linux release dispatch."
+            exit 0
+          fi
+
+          echo "Dispatching Linux release build for '$TAG'."
+          gh workflow run linux-desktop-build.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f release_tag="$TAG"

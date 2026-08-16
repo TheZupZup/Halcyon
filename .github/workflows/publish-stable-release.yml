@@ -176,10 +176,74 @@ jobs:
           RUN_ID: ${{ steps.dispatch.outputs.run_id }}
         run: gh run watch "$RUN_ID" --repo "$GITHUB_REPOSITORY" --exit-status
 
+      # Same before/after gh run list pattern as the Android dispatch above,
+      # applied to linux-desktop-build.yml. This tag was already pushed and
+      # the Release already created by the "Create annotated tag and GitHub
+      # Release" step, both done with this job's own GITHUB_TOKEN — which is
+      # exactly why a plain push/release event can't be relied on to start
+      # the Linux workflow (GITHUB_TOKEN-authored events generally don't
+      # trigger new runs; workflow_dispatch is the documented exception), so
+      # this explicitly dispatches it instead.
+      - name: Dispatch Linux release build
+        id: dispatch-linux
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          before="$RUNNER_TEMP/linux-runs-before.txt"
+          gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow linux-desktop-build.yml \
+            --event workflow_dispatch \
+            --limit 30 \
+            --json databaseId \
+            --jq '.[].databaseId' > "$before"
+
+          gh workflow run linux-desktop-build.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f release_tag="$RELEASE_TAG"
+
+          run_id=""
+          run_url=""
+          for attempt in $(seq 1 30); do
+            candidate="$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow linux-desktop-build.yml \
+              --event workflow_dispatch \
+              --limit 10 \
+              --json databaseId,url \
+              --jq '.[0] | [.databaseId, .url] | @tsv')"
+            candidate_id="${candidate%%$'\t'*}"
+            candidate_url="${candidate#*$'\t'}"
+            if [ -n "$candidate_id" ] && ! grep -qx "$candidate_id" "$before"; then
+              run_id="$candidate_id"
+              run_url="$candidate_url"
+              break
+            fi
+            sleep 2
+          done
+
+          if [ -z "$run_id" ]; then
+            echo "::error::The Linux release build did not appear."
+            exit 1
+          fi
+
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "run_url=$run_url" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for Linux release build
+        env:
+          RUN_ID: ${{ steps.dispatch-linux.outputs.run_id }}
+        run: gh run watch "$RUN_ID" --repo "$GITHUB_REPOSITORY" --exit-status
+
       - name: Verify every public Release asset
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RUN_URL: ${{ steps.dispatch.outputs.run_url }}
+          LINUX_RUN_URL: ${{ steps.dispatch-linux.outputs.run_url }}
           PR_URL: ${{ steps.release.outputs.pr_url }}
           TARGET_SHA: ${{ steps.release.outputs.target_sha }}
         shell: bash
@@ -197,6 +261,7 @@ jobs:
             "linthra-$RELEASE_TAG-armeabi-v7a-release-signed.apk"
             "linthra-$RELEASE_TAG-arm64-v8a-release-signed.apk"
             "linthra-$RELEASE_TAG-x86_64-release-signed.apk"
+            "Linthra-$RELEASE_TAG-linux-x64.tar.gz"
           )
 
           missing=()
@@ -218,10 +283,11 @@ jobs:
             echo
             echo "Release PR: $PR_URL"
             echo "Tagged commit: \`$TARGET_SHA\`"
-            echo "Signed build: $RUN_URL"
+            echo "Signed Android build: $RUN_URL"
+            echo "Linux release build: $LINUX_RUN_URL"
             echo "Release: $release_url"
             echo
-            echo 'Signed assets:'
+            echo 'Verified assets:'
             for asset in "${required[@]}"; do
               echo "- \`$asset\`"
             done
@@ -232,6 +298,8 @@ jobs:
         env:
           RUN_ID: ${{ steps.dispatch.outputs.run_id }}
           RUN_URL: ${{ steps.dispatch.outputs.run_url }}
+          LINUX_RUN_ID: ${{ steps.dispatch-linux.outputs.run_id }}
+          LINUX_RUN_URL: ${{ steps.dispatch-linux.outputs.run_url }}
         shell: bash
         run: |
           set +e
@@ -239,15 +307,26 @@ jobs:
             echo '## ❌ Stable release publication failed'
             echo
             if [ -n "$RUN_URL" ]; then
-              echo "Signed build: $RUN_URL"
-              echo
+              echo "Signed Android build: $RUN_URL"
             fi
+            if [ -n "$LINUX_RUN_URL" ]; then
+              echo "Linux release build: $LINUX_RUN_URL"
+            fi
+            echo
             if [ -n "$RUN_ID" ]; then
-              echo 'Failed build log tail:'
+              echo 'Failed Android build log tail (if it failed):'
               echo '```text'
               gh run view "$RUN_ID" \
                 --repo "$GITHUB_REPOSITORY" \
-                --log-failed 2>&1 | tail -n 120
+                --log-failed 2>&1 | tail -n 100
+              echo '```'
+            fi
+            if [ -n "$LINUX_RUN_ID" ]; then
+              echo 'Failed Linux build log tail (if it failed):'
+              echo '```text'
+              gh run view "$LINUX_RUN_ID" \
+                --repo "$GITHUB_REPOSITORY" \
+                --log-failed 2>&1 | tail -n 100
               echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"

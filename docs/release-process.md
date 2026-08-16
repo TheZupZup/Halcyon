@@ -558,6 +558,119 @@ never touch any GitHub Release.
 > call it out in the release notes so users don't mix sources. See
 > [release-signing.md §6](./release-signing.md#6-f-droid-signing-considerations).
 
+## 4a. Linux release tarball (dispatched alongside the Android build)
+
+The Linux tarball is **not** wired to a `push: tags` or `release: published`
+event. Both would be unreliable here: Linthra's official release path pushes
+tags and creates Releases using the workflow's own `GITHUB_TOKEN`, and GitHub
+documents that events produced by `GITHUB_TOKEN` generally do **not** start
+new workflow runs — `workflow_dispatch` (and `repository_dispatch`) are the
+documented exceptions. `android-release-build.yml` already works around this
+exact limitation for the Android build (see §4); the Linux tarball reuses the
+same mechanism instead of assuming a tag push or Release event will fire
+anything.
+
+[`.github/workflows/linux-desktop-build.yml`](../.github/workflows/linux-desktop-build.yml)
+— the same workflow that already builds and validates Linux on every PR and
+push to `main` — gains an optional `workflow_dispatch` input, `release_tag`.
+Left empty (or on a plain PR/push), the workflow behaves exactly as before.
+Set to an existing Release tag, it builds at that exact tag and attaches the
+archive to that Release:
+
+- **`build-linux`** (unchanged on PRs/`main`) first validates `release_tag`
+  when one is supplied: checks its shape, then confirms via the GitHub API
+  that a Release for it actually exists (a malformed or nonexistent tag fails
+  here, before any build starts). It then checks out **that exact tag** —
+  never `main` or whatever ref happens to be at the tip — and runs the full
+  existing gate unchanged: format, analyze, the whole `flutter test` suite,
+  the runner-configuration check (`scripts/check_linux_runner.py`), the
+  runner tooling test, the native audio lifecycle smoke (a real
+  `flutter build linux --release --target=tool/linux_audio_backend_smoke.dart`
+  run under `xvfb-run`, not a bare `dart run`), the real
+  `flutter build linux --release`, and a check that the executable, the
+  Flutter engine library, and the assets directory all exist. The full
+  quality suite is deliberately **not** skipped for a release build even
+  though `main`'s own CI already ran it — a tag can in principle be cut from
+  a commit that never went through `pull_request` CI, and re-running here is
+  cheaper than maintaining a second, leaner job that could quietly drift from
+  this one.
+- **`package-linux-release`** only runs when `build-linux` confirmed a
+  validated `release_tag`. It does not rebuild anything: it downloads the
+  artifact `build-linux` already produced and validated, tars it as
+  `Linthra-<tag>-linux-x64.tar.gz` (e.g. `Linthra-v0.1.15-linux-x64.tar.gz`)
+  with the bundle contents directly at the archive root
+  (`linthra`, `lib/`, `data/`, …, no `build/linux/...` prefix), and uploads it
+  to that Release with `gh release upload --clobber`. `--clobber` only
+  replaces an asset with that exact file name, so re-running never
+  duplicates the Linux asset and never touches the Android APK/AAB.
+
+Only this second job is granted `contents: write` (scoped to itself); every
+other trigger of this workflow, including fork PRs and a plain no-tag manual
+run, stays `contents: read`.
+
+**Who dispatches it — the two official-release paths:**
+
+- **Stable releases** (`/publish-stable vX.Y.Z`, `publish-stable-release.yml`):
+  after creating the tag and the GitHub Release, the workflow
+  `gh workflow run`s `linux-desktop-build.yml` with `release_tag=vX.Y.Z`
+  (the exact same before/after `gh run list` pattern already used to find the
+  dispatched Android run), then `gh run watch ... --exit-status`s it. **A
+  failed Linux build fails the publish workflow** — the same as a failed
+  Android build already does — and the final "Verify every public Release
+  asset" step requires `Linthra-vX.Y.Z-linux-x64.tar.gz` alongside the signed
+  APK/AAB, so a stable Release is never reported published/verified with a
+  missing Linux asset.
+
+  ```
+  /publish-stable vX.Y.Z
+        ↓
+  publish-stable-release.yml creates the tag + GitHub Release
+        ↓
+  workflow_dispatch: android-release-build.yml (release_tag=vX.Y.Z) — waited on
+        ↓
+  workflow_dispatch: linux-desktop-build.yml (release_tag=vX.Y.Z) — waited on
+        ↓
+  linux-desktop-build.yml checks out the exact tag, builds, packages, attaches
+        ↓
+  publish-stable-release.yml verifies every asset, including the Linux tarball
+  ```
+
+- **Alpha/beta/rc pre-releases pushed directly** (`git push origin
+  vX.Y.Z-alpha.N` by a human, no orchestration workflow involved): this
+  *does* fire `android-release-build.yml`'s normal `push: tags: v*` trigger
+  (a human's push, unlike a bot's, isn't subject to the `GITHUB_TOKEN`
+  restriction above). Its existing `attach-release` job auto-creates/attaches
+  the GitHub pre-release as before; a small additional step at the end of
+  that job then dispatches `linux-desktop-build.yml` with `release_tag` set
+  to the pushed tag, once it has confirmed the Release exists. This step is
+  guarded to `github.event_name == 'push'` specifically so it never fires
+  when `android-release-build.yml` was itself dispatched by
+  `publish-stable-release.yml` above — that path already dispatches Linux
+  directly, and dispatching it twice would just race a redundant build
+  against the same asset. There is no wait/verify here (unlike the stable
+  path, `android-release-build.yml`'s own success does not depend on the
+  Linux build), and no dispatch loop: `linux-desktop-build.yml` never
+  dispatches anything itself.
+
+**This tarball is the native Linux build, not the future Flatpak.** It is
+Linthra's plain `flutter build linux --release` bundle — it still expects the
+Linux runtime libraries listed in
+[docs/linux-desktop.md](./linux-desktop.md#required-packages) (GTK 3,
+libmpv, a Secret Service provider, …) to already be present on the machine
+that runs it. It is **not** distro-independent or self-contained. The
+Flatpak, which will sandbox and bundle those runtime dependencies for
+Flathub, is separate, later work tracked by [issue #376](https://github.com/TheZupZup/Linthra/issues/376) and is not
+implemented by this workflow.
+
+**If the Linux release build fails**, open the failed **Linux desktop
+build** run — `publish-stable-release.yml`'s and `android-release-build.yml`'s
+job summaries link directly to it as "Linux release build" — and check
+`build-linux` first — that is where the tag validation, checkout, compile,
+test, and smoke-test steps run and where most failures surface.
+`package-linux-release` only runs after `build-linux` succeeds, so a failure
+there means the bundle built and validated fine and the problem is in
+archiving or the Release upload itself.
+
 ## 5. F-Droid relationship
 
 **Linthra is on F-Droid** (accepted `0.1.0-alpha.40+100040`). F-Droid does **not**
@@ -604,6 +717,7 @@ consume our signed artifacts:
 | Preparing the version-bump PR (pubspec, in-app mirror, Fastlane changelog, F-Droid `CurrentVersion`) | **Manual** (`workflow_dispatch`, `prepare-release-bump.yml`); opens a draft PR but never tags, builds, or publishes. The same edits are reproducible locally with `scripts/prepare_release_bump.py`. |
 | Verifying the tag matches `pubspec.yaml` (versionName/versionCode) | **Automatic** on a `v*` tag build (`scripts/release_preflight.sh`, encoding-checked against `tool/version_from_tag.dart`); fails fast on a mismatch and the workflow summary explicitly says "Version mismatch: release was not built." so it is not confused with an APK build failure. The same script is intended to be run locally before tagging (§3 step 9). Both manual and tag builds take the version from `pubspec.yaml`. |
 | Attaching APK/AAB to a Release | **Automatic** on a `v*` tag build. Alpha/beta/rc tags attach (debug- or release-signed) to a **pre-release**; stable tags attach **release-signed** assets to an existing Release only. |
+| Linux `.tar.gz` build + attach to a Release | **Automatic**, via `workflow_dispatch` (`linux-desktop-build.yml` `release_tag` input, job `package-linux-release`) — see §4a. `publish-stable-release.yml` dispatches it for every stable release; `android-release-build.yml`'s `attach-release` job dispatches it for a directly-pushed alpha/beta/rc tag. Not wired to `push: tags` or `release: published` — a `GITHUB_TOKEN`-authored tag push/Release doesn't reliably start either. |
 | Creating a GitHub **pre-release** (alpha/beta/rc) | **Automatic** on the tag build if no Release exists yet (placeholder notes; edit afterwards). |
 | Creating a stable GitHub Release | **Manual** (operator, §4); never auto-created. |
 | Drift code generation | **Manual only** (`generate-drift.yml`, `workflow_dispatch`). |
@@ -615,19 +729,25 @@ CI builds release artifacts on a tag and attaches them: it can auto-create a
 **pre-release** for alpha/beta/rc tags, but it never auto-creates a stable
 Release, writes production notes, signs a store build, or submits to F-Droid.
 
-### Which workflow runs on PRs, `main`, and tags
+### Which workflow runs on PRs, `main`, tags, and manual dispatch
 
-| Workflow · job | PR | Push to `main` | `v*` tag | Manual |
-| -------------- | -- | -------------- | -------- | ------ |
+| Workflow · job | PR | Push to `main` | `v*` tag | Manual (`workflow_dispatch`) |
+| -------------- | -- | -------------- | -------- | ----------------------------- |
 | `ci.yml` · `flutter` — format, analyze, test, `pub get --enforce-lockfile` | ✅ | ✅ | — | — |
 | `ci.yml` · `secret-scan` — `scripts/check_secrets.sh` | ✅ | ✅ | — | — |
 | `ci.yml` · `release-bump-guard` — `scripts/check_release_bump_files.sh` | ✅ (only `release/*` branches) | — | — | — |
 | `ci.yml` · `dependency-guard` — `scripts/check_dependency_update_files.sh` | ✅ (only `deps/*` branches) | — | — | — |
 | `dart-dependency-updates.yml` — open/update the draft Dart package PR | — | — | — | ✅ (also weekly on a schedule) |
 | `android-debug-apk.yml` — build debug APK + verify output | ✅ | — | — | ✅ |
-| `android-release-build.yml` — release APK/AAB, tag↔pubspec preflight, attach | — | — | ✅ | ✅ |
+| `android-release-build.yml` · `build-release`/`attach-release` — release APK/AAB, tag↔pubspec preflight, attach | — | — | ✅ | ✅ (also how `publish-stable-release.yml` triggers it for a stable release) |
+| `linux-desktop-build.yml` · `build-linux` — build/validate the Linux desktop target | ✅ | ✅ | — | ✅ (`release_tag` set: checks out that exact tag; empty: normal manual build) |
+| `linux-desktop-build.yml` · `package-linux-release` — package `.tar.gz`, attach to Release | — | — | — | ✅ (only when `release_tag` is set and its Release exists) |
 | `prepare-release-bump.yml` — open the version-bump PR | — | — | — | ✅ |
 | `generate-drift.yml` — regenerate `*.g.dart` | — | — | — | ✅ |
+
+`android-release-build.yml`'s `attach-release` job and `publish-stable-release.yml`
+are the two places that dispatch `linux-desktop-build.yml` with `release_tag`
+set — see §4a for exactly when each one fires it.
 
 The `flutter` job also runs the whole `test/` suite, which includes the
 release-safety guardrail tests below — so those gate every PR, not just release
