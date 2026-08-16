@@ -7,6 +7,7 @@ import 'app/linthra_app.dart';
 import 'core/models/plex_session.dart';
 import 'core/models/subsonic_session.dart';
 import 'core/models/theme_mode_preference.dart';
+import 'core/services/artwork_disk_cache.dart';
 import 'core/services/media_session_binding.dart';
 import 'core/sources/plex/plex_artwork.dart';
 import 'core/sources/subsonic/subsonic_artwork.dart';
@@ -269,7 +270,7 @@ Future<void> main() async {
   // row keeps its placeholder) and anything else (Jellyfin and local covers)
   // loads directly.
   // Secret-free: only the resolved NetworkImage URL is built, never logged.
-  installArtworkReferenceResolver((Uri reference) {
+  Uri? resolveArtworkReference(Uri reference) {
     final SubsonicSession? subsonicSession =
         container.read(subsonicSettingsControllerProvider.notifier).session;
     if (subsonicSession != null) {
@@ -283,7 +284,25 @@ Future<void> main() async {
       if (resolved != null) return resolved;
     }
     return null;
-  });
+  }
+
+  installArtworkReferenceResolver(resolveArtworkReference);
+
+  // Persistent, credential-free artwork cache (issue #356): backs every
+  // artworkImageProvider render with a Linthra-managed disk cache under the
+  // app-support directory, so a cover fetched once doesn't need re-fetching on
+  // the next launch — Flutter's built-in image cache is memory-only and is
+  // dropped when the process ends. Shares the resolver above to mint a fetch
+  // URL for a Subsonic/Plex reference; an already-loadable Jellyfin URL needs
+  // no resolving (the resolver returns null for it, so the key is fetched
+  // as-is). Only the credential-free key ever reaches disk — see
+  // [ArtworkDiskCache]'s class docs.
+  installArtworkDiskCache(
+    ArtworkDiskCache(
+      directory: await ArtworkDiskCache.defaultDirectory(),
+      resolveFetchUrl: (Uri key) => resolveArtworkReference(key) ?? key,
+    ),
+  );
 
   // With the sessions loaded, pull the user's server favourites (Jellyfin and
   // Subsonic/Navidrome) so the heart reflects each server from the first frame.
