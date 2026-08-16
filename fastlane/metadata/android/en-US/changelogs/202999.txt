@@ -1,0 +1,6 @@
+Linthra 0.2.2
+
+- Redesigns synced lyrics and improves the Now Playing seek experience.
+- Keeps remote artwork cached across restarts.
+- Adds a switch to disable automatic song precaching without disabling streaming or manual downloads.
+- Includes playback/lyrics stability fixes and the new Linux desktop foundation.
