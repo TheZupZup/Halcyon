@@ -18,7 +18,7 @@ generated PR is merged. See docs/release-process.md.
 Usage:
 
     python3 scripts/prepare_release_bump.py 0.1.0-alpha.37
-    python3 scripts/prepare_release_bump.py 0.1.0-alpha.37 \\
+    python3 scripts/prepare_release_bump.py 0.1.0-alpha.37 \
         --changelog "Linthra 0.1.0-alpha.37 — fixed X."
     python3 scripts/prepare_release_bump.py 0.1.0-alpha.37 --force-changelog
 
@@ -201,8 +201,79 @@ def create_changelog(path, version_name, body, allow_overwrite):
     return True
 
 
+def _fdroid_current_version_code(text, base_version_code):
+    """Return the CurrentVersionCode F-Droid will use for this metadata.
+
+    Linthra's F-Droid entry uses VercodeOperation to turn one canonical base
+    code from pubspec.yaml into three per-ABI codes (`base*10 + rank`). F-Droid's
+    update checker compares/records the highest transformed code, so writing the
+    untransformed base here makes our draft metadata internally inconsistent and
+    trips the release guardrail.
+
+    Keep this parser deliberately narrow: the repo only supports the simple
+    `%c*MULTIPLIER + OFFSET` form used by Linthra. If a future metadata change
+    introduces another operation shape, fail instead of evaluating arbitrary
+    metadata as code or silently guessing a CurrentVersionCode.
+    """
+    marker = re.search(r"^VercodeOperation:[ \t]*$", text, flags=re.MULTILINE)
+    if marker is None:
+        return base_version_code
+
+    operations = []
+    for line in text[marker.end() :].splitlines():
+        if line and not line[0].isspace():
+            break
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if not stripped.startswith("-"):
+            raise VersionError(
+                "Unsupported F-Droid VercodeOperation entry {!r}; refusing to "
+                "guess CurrentVersionCode.".format(stripped)
+            )
+        expression = stripped[1:].strip()
+        if (
+            len(expression) >= 2
+            and expression[0] == expression[-1]
+            and expression[0] in ("'", '"')
+        ):
+            expression = expression[1:-1]
+        match = re.fullmatch(r"%c\s*\*\s*(\d+)\s*\+\s*(\d+)", expression)
+        if match is None:
+            raise VersionError(
+                "Unsupported F-Droid VercodeOperation {!r}; expected "
+                "`%c*MULTIPLIER + OFFSET`. Refusing to guess "
+                "CurrentVersionCode.".format(expression)
+            )
+        multiplier = int(match.group(1))
+        offset = int(match.group(2))
+        transformed = base_version_code * multiplier + offset
+        if transformed <= 0 or transformed > _MAX_VERSION_CODE:
+            raise VersionError(
+                "F-Droid VercodeOperation {!r} transforms base versionCode {} "
+                "to {}, outside the valid Android range (1..{}).".format(
+                    expression,
+                    base_version_code,
+                    transformed,
+                    _MAX_VERSION_CODE,
+                )
+            )
+        operations.append(transformed)
+
+    if not operations:
+        raise VersionError(
+            "F-Droid metadata declares VercodeOperation but contains no "
+            "supported operations; refusing to guess CurrentVersionCode."
+        )
+    return max(operations)
+
+
 def update_fdroid_metadata(path, version_name, version_code):
     """Update CurrentVersion/CurrentVersionCode in the F-Droid metadata YAML.
+
+    When VercodeOperation is present, CurrentVersionCode must be the highest
+    transformed per-ABI code, matching F-Droid's own update-check behavior.
+    Without VercodeOperation the canonical base versionCode is used unchanged.
 
     Returns True if the file changed. If the file does not exist, returns False
     silently — the repo may not carry the draft F-Droid entry. The Builds block
@@ -221,6 +292,7 @@ def update_fdroid_metadata(path, version_name, version_code):
             "F-Droid metadata at {} has no `CurrentVersionCode:` line; "
             "refusing to guess.".format(path)
         )
+    fdroid_version_code = _fdroid_current_version_code(text, version_code)
     new_text = re.sub(
         r"^CurrentVersion:.*$",
         "CurrentVersion: {}".format(version_name),
@@ -230,7 +302,7 @@ def update_fdroid_metadata(path, version_name, version_code):
     )
     new_text = re.sub(
         r"^CurrentVersionCode:.*$",
-        "CurrentVersionCode: {}".format(version_code),
+        "CurrentVersionCode: {}".format(fdroid_version_code),
         new_text,
         count=1,
         flags=re.MULTILINE,
