@@ -2,8 +2,9 @@
 
 [![License: MPL-2.0](https://img.shields.io/badge/License-MPL--2.0-brightgreen.svg)](./LICENSE)
 [![Platform: Android](https://img.shields.io/badge/platform-Android-3ddc84.svg)](#install)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-FCC624.svg)](#install)
 [![Built with Flutter](https://img.shields.io/badge/built%20with-Flutter-02569B.svg)](https://flutter.dev)
-[![Latest release: v0.2.1](https://img.shields.io/badge/release-v0.2.1-7C5CFF.svg)](https://github.com/thezupzup/linthra/releases/latest)
+[![Latest release: v0.2.2](https://img.shields.io/badge/release-v0.2.2-7C5CFF.svg)](https://github.com/thezupzup/linthra/releases/latest)
 [![Releases](https://img.shields.io/badge/download-releases-blue.svg)](https://github.com/thezupzup/linthra/releases)
 [![Community: r/Linthra](https://img.shields.io/badge/community-r%2FLinthra-FF9F43.svg)](https://reddit.com/r/Linthra)
 
@@ -14,10 +15,11 @@
 
 ### Your music, your server.
 
-**Linthra is an open-source Android music player for people who keep their music
-on their own devices or self-hosted servers.** It plays local files and streams
-from your own Jellyfin, Navidrome / Subsonic, or Plex server. No ads, no
-tracking, no account.
+**Linthra is an open-source music player for people who keep their music on
+their own devices or self-hosted servers.** Android is the mature mobile target,
+and native Linux desktop support is now available for early testing. Linthra
+plays local files and streams from your own Jellyfin, Navidrome / Subsonic, or
+Plex server. No ads, no tracking, no account.
 
 ## Features
 
@@ -73,15 +75,17 @@ with no account, the F-Droid build is yours, free, for good.
 
 New versions land on
 [GitHub Releases](https://github.com/thezupzup/linthra/releases) first, as
-signed APKs. The current stable is v0.2.1. Linthra is also on
+signed Android APKs and, starting with v0.2.2, a native Linux x64 archive. The
+current stable is v0.2.2. Linthra is also on
 [F-Droid](https://f-droid.org/packages/io.github.thezupzup.linthra/); F-Droid
 builds may arrive a bit later while their build and review process runs. Not on
 Google Play yet.
 
-> **Don't mix install sources.** GitHub APKs and F-Droid builds are signed with
-> different keys and can't update each other. Pick one and stick with it.
+> **Don't mix Android install sources.** GitHub APKs and F-Droid builds are
+> signed with different keys and can't update each other. Pick one and stick
+> with it.
 
-To install from GitHub Releases and get updates, use
+To install from GitHub Releases and get Android updates, use
 [Obtainium](https://github.com/ImranR98/Obtainium):
 
 1. Install Obtainium.
@@ -93,6 +97,11 @@ To install from GitHub Releases and get updates, use
 Or download the `.apk` from the
 [latest release](https://github.com/thezupzup/linthra/releases/latest) and open
 it on your phone.
+
+For Linux, download `Linthra-v0.2.2-linux-x64.tar.gz` from the same GitHub
+Release. This is the native bundle, not a Flatpak yet; required runtime packages
+and native development instructions are in
+[docs/linux-desktop.md](./docs/linux-desktop.md).
 
 Notes:
 
@@ -134,9 +143,10 @@ help is needed. To support development, see
 
 ## Roadmap
 
-See [docs/roadmap.md](./docs/roadmap.md). In short: stabilize 0.1.x, then
-backup/restore, then the optional Linthra Connect and a desktop app. Linthra
-always works on its own: no Docker, no account, no required pairing.
+See [docs/roadmap.md](./docs/roadmap.md). In short: keep Android stable, deepen
+the native Linux desktop experience, and finish Flatpak/Flathub packaging while
+continuing backup/restore and optional Linthra Connect work. Linthra always
+works on its own: no Docker, no account, no required pairing.
 
 ## Documentation
 

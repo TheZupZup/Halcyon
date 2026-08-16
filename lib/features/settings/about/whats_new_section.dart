@@ -20,9 +20,9 @@ class WhatsNewSection extends StatelessWidget {
   /// handful of concise bullets and updated when cutting a new build; exposed so
   /// the widget test can assert each line renders without duplicating the copy.
   static const List<String> releaseNotes = <String>[
-    'Fixes source-build compatibility for F-Droid after the v0.2.0 release.',
-    'The Rust core now ships with a committed dependency lockfile for reproducible builds.',
-    'No playback, library, or server behavior changed in this maintenance update.',
+    'Now Playing has a smoother wavy seek bar and a redesigned synced-lyrics experience.',
+    'Remote artwork is cached on disk so covers can survive restarts without being downloaded again.',
+    'Automatic song precaching can now be disabled while normal streaming and manual downloads keep working.',
   ];
 
   @override
