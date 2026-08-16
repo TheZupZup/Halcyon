@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/plex_session.dart';
 import 'package:linthra/core/models/subsonic_session.dart';
+import 'package:linthra/core/services/artwork_disk_cache.dart';
 import 'package:linthra/core/sources/plex/plex_artwork.dart';
 import 'package:linthra/core/sources/plex/plex_track_mapper.dart';
 import 'package:linthra/core/sources/subsonic/subsonic_artwork.dart';
@@ -17,9 +18,12 @@ const _subsonicSession = SubsonicSession(
 );
 
 void main() {
-  // The resolver is a process-global on the single artwork seam; always clear it
-  // so one test can't leak its hook into the next.
-  tearDown(() => installArtworkReferenceResolver(null));
+  // The resolver and the disk cache are process-globals on the single artwork
+  // seam; always clear them so one test can't leak its hook into the next.
+  tearDown(() {
+    installArtworkReferenceResolver(null);
+    installArtworkDiskCache(null);
+  });
 
   group('artworkImageProvider', () {
     test('loads a file:// cover from disk with a FileImage', () {
@@ -262,6 +266,124 @@ void main() {
         Uri.parse('file:///data/app/cache/linthra_local_artwork/abc.img'),
       );
       expect(fileProvider, isA<FileImage>());
+    });
+  });
+
+  // Issue #356: persistent artwork caching. No [ArtworkDiskCache] installed is
+  // covered by every group above (they never install one) — this group covers
+  // the seam's behaviour once one *is* installed.
+  group('artworkImageProvider with an installed disk cache', () {
+    late Directory dir;
+
+    setUp(() async {
+      dir = await Directory.systemTemp.createTemp('artwork_image_cache_test');
+    });
+
+    tearDown(() async {
+      if (await dir.exists()) await dir.delete(recursive: true);
+    });
+
+    test('a cache hit returns a FileImage — no NetworkImage, no resolver call',
+        () async {
+      bool resolverCalled = false;
+      installArtworkReferenceResolver((Uri ref) {
+        resolverCalled = true;
+        return Uri.parse('https://should-not-be-used.example');
+      });
+      final cache = ArtworkDiskCache(
+        directory: dir,
+        fetch: (Uri url) async => <int>[1, 2, 3],
+      );
+      installArtworkDiskCache(cache);
+      final key = Uri.parse('https://server.example/Items/1/Images/Primary');
+      await cache.warm(key);
+
+      final provider = artworkImageProvider(key);
+
+      expect(provider, isA<FileImage>());
+      expect(resolverCalled, isFalse);
+    });
+
+    test(
+        'a cache miss still returns a NetworkImage exactly as before, and '
+        'warms the cache in the background for next time', () async {
+      final cache = ArtworkDiskCache(
+        directory: dir,
+        fetch: (Uri url) async => <int>[1, 2, 3],
+      );
+      installArtworkDiskCache(cache);
+      final key = Uri.parse('https://server.example/Items/1/Images/Primary');
+
+      final provider = artworkImageProvider(key);
+
+      // The render itself is unaffected by the miss — same type, same URL as
+      // with no disk cache installed at all.
+      expect(provider, isA<NetworkImage>());
+      expect((provider as NetworkImage).url, key.toString());
+
+      // The background warm this call fired is fire-and-forget; warm() itself
+      // de-dupes concurrent calls for the same key, so awaiting it again here
+      // returns the exact in-flight future the provider started, letting the
+      // test wait for it deterministically instead of guessing event-loop
+      // turns.
+      await cache.warm(key);
+      final File? cached = cache.cachedFile(key);
+      expect(cached, isNotNull);
+      expect(artworkImageProvider(key), isA<FileImage>());
+    });
+
+    test('a corrupt cache entry falls back to a fresh NetworkImage fetch',
+        () async {
+      await dir.create(recursive: true);
+      final key = Uri.parse('https://server.example/Items/1/Images/Primary');
+      final File corrupt = File('${dir.path}/anything.img');
+      // A cache hit is only ever a file whose *hashed* name ArtworkDiskCache
+      // itself would produce; this stray/corrupt file must simply be ignored
+      // (a miss), never mistaken for this key's cache entry.
+      await corrupt.writeAsBytes(<int>[]);
+      installArtworkDiskCache(
+        ArtworkDiskCache(directory: dir, fetch: (Uri url) async => null),
+      );
+
+      final provider = artworkImageProvider(key);
+
+      expect(provider, isA<NetworkImage>());
+      expect((provider as NetworkImage).url, key.toString());
+    });
+
+    test(
+        'a Subsonic reference miss warms via the resolved (authenticated) '
+        'URL but caches under the credential-free reference', () async {
+      installArtworkReferenceResolver(
+        (Uri ref) => SubsonicArtwork.resolve(ref, _subsonicSession),
+      );
+      final List<Uri> fetchedUrls = <Uri>[];
+      final cache = ArtworkDiskCache(
+        directory: dir,
+        resolveFetchUrl: (Uri ref) =>
+            SubsonicArtwork.resolve(ref, _subsonicSession) ?? ref,
+        fetch: (Uri url) async {
+          fetchedUrls.add(url);
+          return <int>[1, 2, 3];
+        },
+      );
+      installArtworkDiskCache(cache);
+      final reference = SubsonicArtwork.reference('al-7');
+
+      artworkImageProvider(reference);
+      // Awaits the same in-flight warm the provider's fire-and-forget call
+      // started (warm() de-dupes by key), rather than guessing event-loop
+      // turns.
+      await cache.warm(reference);
+
+      // The fetch went out to the authenticated getCoverArt URL...
+      expect(fetchedUrls, hasLength(1));
+      expect(fetchedUrls.single.toString(), contains('getCoverArt'));
+      expect(fetchedUrls.single.toString(), contains('the-secret-token'));
+      // ...but the cache is keyed by the credential-free reference, so a later
+      // render of the *same reference* is a hit regardless of the token.
+      expect(cache.cachedFile(reference), isNotNull);
+      expect(artworkImageProvider(reference), isA<FileImage>());
     });
   });
 }

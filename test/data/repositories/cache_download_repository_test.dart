@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/download_progress.dart';
+import 'package:linthra/core/models/playback_source.dart';
+import 'package:linthra/core/models/playback_state.dart';
 import 'package:linthra/core/models/track.dart';
 import 'package:linthra/core/repositories/download_repository.dart';
 import 'package:linthra/core/repositories/download_store.dart';
@@ -9,7 +11,10 @@ import 'package:linthra/core/repositories/offline_file_store.dart';
 import 'package:linthra/core/services/connectivity_service.dart';
 import 'package:linthra/core/services/download_scheduler.dart';
 import 'package:linthra/core/services/offline_cache_manager.dart';
+import 'package:linthra/core/services/offline_first_playable_uri_resolver.dart';
+import 'package:linthra/core/services/playable_uri_resolver.dart';
 import 'package:linthra/core/services/remote_track_downloader.dart';
+import 'package:linthra/core/services/smart_precache_service.dart';
 import 'package:linthra/data/repositories/cache_download_repository.dart';
 import 'package:linthra/data/repositories/in_memory_download_preferences.dart';
 import 'package:linthra/data/repositories/in_memory_download_store.dart';
@@ -112,6 +117,27 @@ class _SpyOfflineFileStore implements OfflineFileStore {
   Future<void> delete(String fileName) {
     deleted.add(fileName);
     return _inner.delete(fileName);
+  }
+}
+
+/// A streaming fallback that records the track it was asked to resolve and
+/// returns a canned "streaming direct" result — stands in for the real
+/// Jellyfin/Subsonic/Plex resolvers so [OfflineFirstPlayableUriResolver] can be
+/// exercised without a server (issue #356: streaming must still work when
+/// nothing is cached).
+class _RecordingStreamResolver implements PlayableUriResolver {
+  Track? resolved;
+
+  @override
+  bool handles(Track track) => true;
+
+  @override
+  Future<ResolvedPlayable> resolve(Track track) async {
+    resolved = track;
+    return ResolvedPlayable(
+      Uri.parse('https://server.example/stream/${track.id}'),
+      PlaybackSource.streamingDirect,
+    );
   }
 }
 
@@ -1617,6 +1643,104 @@ void main() {
       expect(
           downloader.fetched.any((Track t) => t.uri == 'plex:want'), isFalse);
       expect((await repo.cacheSnapshot()).usedBytes, 4);
+    });
+  });
+
+  // Issue #356: "disable song cache". Automatic song caching has exactly one
+  // gate — DownloadPreferences.preloadEnabled — surfaced in Settings as
+  // "Pre-cache upcoming tracks" and consulted only by SmartPrecacheService
+  // (see its own tests for that unit-level guarantee). These tests close the
+  // loop end-to-end against a *real* repository: turning it off truly writes
+  // no bytes, streaming still resolves normally, and explicit downloads (which
+  // never consult this preference) are unaffected.
+  group('automatic song caching can be disabled (issue #356)', () {
+    late InMemoryDownloadStore store;
+    late InMemoryOfflineFileStore files;
+    late InMemoryDownloadPreferences preferences;
+    late _FakeConnectivity connectivity;
+    late _FakeRemoteDownloader downloader;
+
+    CacheDownloadRepository build() {
+      return CacheDownloadRepository(
+        store: store,
+        files: files,
+        downloader: downloader,
+        connectivity: connectivity,
+        preferences: preferences,
+      );
+    }
+
+    setUp(() {
+      store = InMemoryDownloadStore();
+      files = InMemoryOfflineFileStore();
+      preferences = InMemoryDownloadPreferences(preloadEnabled: false);
+      connectivity = _FakeConnectivity(NetworkStatus.wifi);
+      downloader = _FakeRemoteDownloader();
+    });
+
+    test(
+        'SmartPrecacheService caches nothing through a real repository when '
+        'preloadEnabled is off', () async {
+      final CacheDownloadRepository repo = build();
+      final StreamController<PlaybackState> states =
+          StreamController<PlaybackState>.broadcast();
+      final SmartPrecacheService service = SmartPrecacheService(
+        playbackStates: states.stream,
+        prefetcher: repo,
+        preferences: preferences,
+      );
+
+      states.add(const PlaybackState(
+        status: PlaybackStatus.playing,
+        currentTrack: Track(id: 'now', title: 'now', uri: 'jellyfin:now'),
+        upNext: <Track>[
+          Track(id: 'next1', title: 'next1', uri: 'jellyfin:next1'),
+          Track(id: 'next2', title: 'next2', uri: 'jellyfin:next2'),
+        ],
+      ));
+      await _settle();
+      await _settle();
+
+      expect(downloader.fetchCount, 0);
+      expect((await repo.cacheSnapshot()).entries, isEmpty);
+      expect(await repo.downloadedTrackKeys(), isEmpty);
+
+      await service.dispose();
+      await states.close();
+    });
+
+    test('explicit downloads remain enabled when preloadEnabled is off',
+        () async {
+      final CacheDownloadRepository repo = build();
+
+      final DownloadRequestOutcome outcome =
+          await repo.requestDownload(_jellyfin('manual'));
+
+      expect(outcome, DownloadRequestOutcome.started);
+      expect(await repo.statusFor('manual'), DownloadStatus.downloaded);
+      expect(downloader.fetchCount, 1);
+    });
+
+    test(
+        'streaming still resolves via the fallback when nothing is cached '
+        '(song caching disabled)', () async {
+      // Nothing was ever downloaded or preloaded — store/files stay empty for
+      // this test, exactly what an all-session-long preloadEnabled:false user
+      // sees for a track they never explicitly downloaded.
+      final StoreCachedTrackLocator locator =
+          StoreCachedTrackLocator(store, files);
+      final _RecordingStreamResolver fallback = _RecordingStreamResolver();
+      final OfflineFirstPlayableUriResolver resolver =
+          OfflineFirstPlayableUriResolver(
+        locator: locator,
+        fallback: fallback,
+      );
+      final Track track = _jellyfin('unplayed');
+
+      final ResolvedPlayable resolved = await resolver.resolve(track);
+
+      expect(resolved.source, PlaybackSource.streamingDirect);
+      expect(fallback.resolved, track);
     });
   });
 }

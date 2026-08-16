@@ -56,6 +56,13 @@ class PrecacheSettingsSection extends ConsumerWidget {
             ),
             const SizedBox(height: AppSpacing.sm),
             Text(
+              'This is Linthra\'s automatic song cache. Turn it off to stop '
+              'Linthra fetching song data on its own — streaming still works, '
+              'and any song you explicitly download stays available offline.',
+              style: theme.textTheme.bodySmall?.copyWith(color: muted),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
               'To keep a song for good, use "Keep offline" on a download — '
               'pinned tracks are protected and never removed automatically.',
               style: theme.textTheme.bodySmall?.copyWith(color: muted),
