@@ -16,6 +16,7 @@ import 'package:linthra/features/player/widgets/lyrics/lyric_line_tile.dart';
 import 'package:linthra/features/player/widgets/lyrics/lyrics_viewport.dart';
 import 'package:linthra/features/player/widgets/lyrics_view.dart';
 
+import '../../support/fake_audio_player.dart';
 import 'fake_playback_controller.dart';
 
 /// A lyrics backend returning one canned set for the test track.
@@ -772,6 +773,7 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: <Override>[
+            linuxAudioPlayerProvider.overrideWithValue(FakeAudioPlayer()),
             lyricsServiceProvider.overrideWithValue(_FakeLyricsService(null)),
           ],
           child: const MaterialApp(

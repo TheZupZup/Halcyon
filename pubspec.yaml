@@ -36,6 +36,14 @@ dependencies:
   # services layer; the UI depends on the PlaybackController interface, never on
   # just_audio directly.
   just_audio: ^0.9.42
+  # Linux implementation of just_audio, backed by media_kit/libmpv. Keeping
+  # the federated adapter means Linux reuses Linthra's existing resolver,
+  # fallback, queue and completion controller while Android stays on ExoPlayer.
+  just_audio_media_kit: ^2.1.0
+  # Supplies media_kit's Linux native registration. libmpv is an explicit
+  # system/Flatpak runtime dependency; Linthra disables this package's optional
+  # mimalloc download in linux/CMakeLists.txt for network-isolated builds.
+  media_kit_libs_linux: ^1.2.1
   # Background playback + platform media session (notification, lock screen,
   # Android Auto). Used only by LinthraAudioHandler in the services layer, which
   # forwards session commands to PlaybackController and mirrors its state out.

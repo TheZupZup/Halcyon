@@ -24,6 +24,9 @@ bar and the About screen disagree.
 It also checks two things that are about *how* the runner builds rather than
 what it is called:
 
+  * the temporary Clang exception for flutter_secure_storage_linux stays
+    PRIVATE to that plugin target, so the legacy bundled header builds without
+    weakening -Werror for Linthra or any other plugin;
   * the SQLite pre-fetch seam (LINTHRA_SQLITE3_SOURCE_DIR) is still there, so a
     network-isolated build — flatpak-builder included — stays possible;
   * nothing under linux/ hardcodes an absolute host path, which would make the
@@ -56,6 +59,13 @@ BUILD_GRADLE = Path("android") / "app" / "build.gradle"
 # The CMake variable linux/CMakeLists.txt uses to accept an already-unpacked
 # SQLite amalgamation instead of downloading one. See docs/linux-desktop.md.
 SQLITE_SOURCE_VARIABLE = "LINTHRA_SQLITE3_SOURCE_DIR"
+
+SECURE_STORAGE_TARGET = "flutter_secure_storage_linux_plugin"
+SECURE_STORAGE_WARNING_EXCEPTION = "-Wno-error=deprecated-literal-operator"
+SECURE_STORAGE_SCOPED_EXCEPTION = re.compile(
+    rf"target_compile_options\(\s*{SECURE_STORAGE_TARGET}\s+PRIVATE\s+"
+    rf"{re.escape(SECURE_STORAGE_WARNING_EXCEPTION)}\s*\)"
+)
 
 # An absolute path baked into the native build would tie it to one machine.
 # `/` alone is far too common in CMake (every ${VAR}/sub path), so this looks
@@ -238,6 +248,22 @@ def check(root: Path) -> list[str]:
         problems.append(
             f"{CMAKELISTS} sets {SQLITE_SOURCE_VARIABLE} but never forwards it "
             "to FETCHCONTENT_SOURCE_DIR_SQLITE3, so it has no effect"
+        )
+
+    # Clang 22 diagnoses the old json.hpp bundled by
+    # flutter_secure_storage_linux 1.2.3. The exception must remain both unique
+    # and PRIVATE to that plugin; a directory/global suppression would weaken
+    # the runner's -Werror contract and hide unrelated warnings.
+    cmake_code = "\n".join(
+        line for line in cmakelists.splitlines() if not line.lstrip().startswith("#")
+    )
+    if (
+        cmake_code.count(SECURE_STORAGE_WARNING_EXCEPTION) != 1
+        or SECURE_STORAGE_SCOPED_EXCEPTION.search(cmake_code) is None
+    ):
+        problems.append(
+            "the deprecated-literal-operator exception must appear exactly "
+            f"once and be PRIVATE to {SECURE_STORAGE_TARGET}"
         )
 
     for finding in absolute_paths_under_linux(root):

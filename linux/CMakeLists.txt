@@ -108,10 +108,33 @@ if(LINTHRA_SQLITE3_SOURCE_DIR)
     "Linthra: using pre-fetched SQLite from ${LINTHRA_SQLITE3_SOURCE_DIR}")
 endif()
 
+# media_kit_libs_linux otherwise downloads and compiles mimalloc while CMake is
+# building the app. Linthra does not need the optional allocator override, and
+# flatpak-builder is network-isolated, so disable it before generated plugin
+# CMake is included. Playback uses the declared system/Flatpak libmpv runtime.
+set(MIMALLOC_USE_STATIC_LIBS OFF CACHE BOOL
+  "Do not download media_kit's optional mimalloc allocator." FORCE)
+
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+
+# flutter_secure_storage_linux 1.2.3 bundles an older nlohmann json.hpp whose
+# literal-operator declarations trigger Clang's deprecated-literal-operator
+# warning. APPLY_STANDARD_SETTINGS promotes every warning to an error, so Clang
+# 22 cannot compile that otherwise-valid upstream plugin.
+#
+# flutter_secure_storage 10 fixes the header, but also rewrites Android secure
+# storage defaults and migration. Keep PR 2 from changing Android credentials:
+# preserve -Werror everywhere and demote only this diagnostic, only for this
+# plugin target. Remove this exception when the storage major is upgraded with
+# dedicated Android migration coverage.
+if(TARGET flutter_secure_storage_linux_plugin AND
+   CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  target_compile_options(flutter_secure_storage_linux_plugin PRIVATE
+    -Wno-error=deprecated-literal-operator)
+endif()
 
 # === Installation ===
 # By default, "installing" just makes a relocatable bundle in the build

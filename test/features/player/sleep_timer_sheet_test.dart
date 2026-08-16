@@ -4,9 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/track.dart';
+import 'package:linthra/features/player/player_providers.dart';
 import 'package:linthra/features/player/sleep_timer_controller.dart';
 import 'package:linthra/features/player/widgets/now_playing_actions.dart';
 import 'package:linthra/features/player/widgets/sleep_timer_sheet.dart';
+
+import '../../support/fake_audio_player.dart';
 
 /// An inert [Timer] that never fires, so arming the countdown in a widget test
 /// schedules no real timers (which would otherwise leave the test pending).
@@ -116,8 +119,11 @@ void main() {
     testWidgets('includes a Sleep timer action that opens the sheet',
         (tester) async {
       await tester.pumpWidget(
-        const ProviderScope(
-          child: MaterialApp(
+        ProviderScope(
+          overrides: <Override>[
+            linuxAudioPlayerProvider.overrideWithValue(FakeAudioPlayer()),
+          ],
+          child: const MaterialApp(
             home: Scaffold(
               body: NowPlayingActions(
                 track: Track(id: '1', title: 'Song One', uri: 'jellyfin:1'),

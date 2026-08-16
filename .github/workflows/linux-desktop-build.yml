@@ -39,6 +39,7 @@ jobs:
       #   clang / cmake / ninja-build / pkg-config — the build itself
       #   libgtk-3-dev                             — the Flutter Linux embedder
       #   liblzma-dev, libstdc++-12-dev            — Flutter tool prerequisites
+      #   xauth / xvfb                              — headless native smoke display
       #   libsecret-1-dev                          — flutter_secure_storage_linux,
       #                                              i.e. encrypted credential
       #                                              storage. Not optional: the
@@ -46,6 +47,8 @@ jobs:
       #                                              without it, and Linthra
       #                                              never falls back to
       #                                              plaintext credentials.
+      #   libmpv-dev                                — media_kit audio backend;
+      #                                              also supplies runtime libmpv
       - name: Install Linux build dependencies
         run: |
           set -euo pipefail
@@ -58,7 +61,10 @@ jobs:
             libgtk-3-dev \
             liblzma-dev \
             libstdc++-12-dev \
-            libsecret-1-dev
+            libsecret-1-dev \
+            libmpv-dev \
+            xauth \
+            xvfb
 
       # Installs the version pinned in .flutter-version, the same action every
       # other workflow uses.
@@ -93,6 +99,20 @@ jobs:
 
       - name: Test the Linux runner tooling
         run: python3 test/tooling/check_linux_runner_test.py
+
+      # A normal Flutter widget test cannot load the Linux plugin bundle, so
+      # this target runs in the real GTK runner and opens a silent local WAV
+      # through libmpv without starting playback. Two create/load/dispose cycles
+      # cover reinitialization.
+      - name: Build native audio lifecycle smoke
+        run: >-
+          flutter build linux --release
+          --target=tool/linux_audio_backend_smoke.dart
+
+      - name: Run native audio lifecycle smoke
+        run: >-
+          xvfb-run --auto-servernum
+          build/linux/x64/release/bundle/linthra
 
       # Release mode, because that is the build that has to work for packaging
       # and it exercises the AOT path a debug build skips.

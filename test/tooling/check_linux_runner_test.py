@@ -61,6 +61,12 @@ if(LINTHRA_SQLITE3_SOURCE_DIR)
 endif()
 
 include(flutter/generated_plugins.cmake)
+
+if(TARGET flutter_secure_storage_linux_plugin AND
+   CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  target_compile_options(flutter_secure_storage_linux_plugin PRIVATE
+    -Wno-error=deprecated-literal-operator)
+endif()
 """
 
 MY_APPLICATION = """\
@@ -249,7 +255,7 @@ class OfflineBuildSeamTest(CheckoutCase):
             cmakelists='set(BINARY_NAME "exampleapp")\nset(APPLICATION_ID "io.example.app")\n',
         )
         problems = checker.check(self.root)
-        self.assertEqual(len(problems), 1)
+        self.assertEqual(len(problems), 2)
         self.assertIn("LINTHRA_SQLITE3_SOURCE_DIR", problems[0])
 
     def test_a_seam_that_is_never_forwarded_is_caught(self) -> None:
@@ -264,8 +270,43 @@ class OfflineBuildSeamTest(CheckoutCase):
             ),
         )
         problems = checker.check(self.root)
-        self.assertEqual(len(problems), 1)
+        self.assertEqual(len(problems), 2)
         self.assertIn("never forwards it", problems[0])
+
+
+class SecureStorageWarningScopeTest(CheckoutCase):
+    def test_losing_the_plugin_exception_is_caught(self) -> None:
+        cmakelists = CMAKELISTS.format(binary=BINARY, app_id=APP_ID).replace(
+            """\
+if(TARGET flutter_secure_storage_linux_plugin AND
+   CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  target_compile_options(flutter_secure_storage_linux_plugin PRIVATE
+    -Wno-error=deprecated-literal-operator)
+endif()
+""",
+            "",
+        )
+        build_checkout(self.root, cmakelists=cmakelists)
+
+        problems = checker.check(self.root)
+
+        self.assertEqual(len(problems), 1)
+        self.assertIn("deprecated-literal-operator", problems[0])
+
+    def test_a_global_exception_is_rejected(self) -> None:
+        cmakelists = CMAKELISTS.format(binary=BINARY, app_id=APP_ID).replace(
+            """\
+  target_compile_options(flutter_secure_storage_linux_plugin PRIVATE
+    -Wno-error=deprecated-literal-operator)
+""",
+            "  add_compile_options(-Wno-error=deprecated-literal-operator)\n",
+        )
+        build_checkout(self.root, cmakelists=cmakelists)
+
+        problems = checker.check(self.root)
+
+        self.assertEqual(len(problems), 1)
+        self.assertIn("PRIVATE", problems[0])
 
 
 class AbsolutePathTest(CheckoutCase):

@@ -2,13 +2,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/track.dart';
+import 'package:linthra/features/player/player_providers.dart';
 import 'package:linthra/features/player/widgets/now_playing_actions.dart';
+
+import '../../support/fake_audio_player.dart';
 
 void main() {
   testWidgets('Now Playing actions include Add to playlist', (tester) async {
     await tester.pumpWidget(
-      const ProviderScope(
-        child: MaterialApp(
+      ProviderScope(
+        overrides: <Override>[
+          linuxAudioPlayerProvider.overrideWithValue(FakeAudioPlayer()),
+        ],
+        child: const MaterialApp(
           home: Scaffold(
             body: NowPlayingActions(
               track: Track(id: '1', title: 'Song One', uri: 'jellyfin:1'),
