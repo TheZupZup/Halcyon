@@ -11,7 +11,8 @@
   <a href="https://f-droid.org/packages/io.github.thezupzup.linthra/">
     <img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png" alt="Get it on F-Droid" height="80">
  
-https://img.shields.io/badge/https%3A%2F%2Fdiscord.gg%2FqUXagmKFrN
+![Static Badge](https://img.shields.io/badge/https%3A%2F%2Fdiscord.gg%2FqUXagmKFrN)
+
 
 
 ![Linthra](fastlane/metadata/android/en-US/images/featureGraphic.png)
