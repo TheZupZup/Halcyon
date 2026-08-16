@@ -7,9 +7,7 @@
 [![Latest release: v0.2.2](https://img.shields.io/badge/release-v0.2.2-7C5CFF.svg)](https://github.com/thezupzup/linthra/releases/latest)
 [![Releases](https://img.shields.io/badge/download-releases-blue.svg)](https://github.com/thezupzup/linthra/releases)
 
-
 [<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png" alt="Get it on F-Droid" height="75">](https://f-droid.org/packages/io.github.thezupzup.linthra/)
-
 
 
 ![Linthra](fastlane/metadata/android/en-US/images/featureGraphic.png)
