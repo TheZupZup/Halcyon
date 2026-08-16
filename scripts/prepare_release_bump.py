@@ -244,7 +244,7 @@ def _fdroid_current_version_code(text, base_version_code):
         if match is None:
             raise VersionError(
                 "Unsupported F-Droid VercodeOperation {!r}; expected "
-                "`%c*MULTIPLIER + OFFSET`. Refusing to guess "
+                "`%c*MULTIPLIER + OFFSET`; refusing to guess "
                 "CurrentVersionCode.".format(expression)
             )
         multiplier = int(match.group(1))
