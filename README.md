@@ -8,10 +8,7 @@
 [![Releases](https://img.shields.io/badge/download-releases-blue.svg)](https://github.com/thezupzup/linthra/releases)
 
 
- <img alt="F-Droid Version" src="https://img.shields.io/f-droid/v/https%3A%2F%2Ff-droid.org%2Ffr%2Fpackages%2Fio.github.thezupzup.linthra%2F">
-
- 
-![Static Badge](https://img.shields.io/badge/https%3A%2F%2Fdiscord.gg%2FqUXagmKFrN)
+[<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png" alt="Get it on F-Droid" height="75">](https://f-droid.org/packages/io.github.thezupzup.linthra/)
 
 
 
