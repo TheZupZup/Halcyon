@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../../models/lyrics.dart';
 import '../../models/subsonic_session.dart';
+import '../../services/lyrics_text_parser.dart';
 import 'subsonic_api.dart';
 import 'subsonic_auth.dart';
 import 'subsonic_client.dart';
@@ -166,8 +167,8 @@ class HttpSubsonicClient implements SubsonicClient {
       _parseStructuredLyrics,
     );
     if (structured != null) return structured;
-    // Fallback: the legacy `getLyrics` (plain text, matched by artist + title)
-    // for servers without the extension. Skipped when we lack both fields.
+    // Fallback: the legacy `getLyrics` (matched by artist + title) for servers
+    // without the extension. Skipped when we lack both fields.
     if (artist != null &&
         artist.isNotEmpty &&
         title != null &&
@@ -567,20 +568,20 @@ class HttpSubsonicClient implements SubsonicClient {
     return null;
   }
 
-  /// Parses a legacy `getLyrics` envelope (`lyrics.value`, plain text) into
-  /// [Lyrics], or `null` when there's no (non-blank) text. The text is split
-  /// into untimed lines on newlines (CRLF normalized), so it renders in the same
-  /// plain-lyrics view. Any LRC-style timestamps embedded in the text are left
-  /// as-is for now (synced parsing here is a documented follow-up).
+  /// Parses a legacy `getLyrics` envelope (`lyrics.value`, plain text or LRC)
+  /// into [Lyrics], or `null` when there is no usable text.
   static Lyrics? _parseLegacyLyrics(SubsonicEnvelope envelope) {
     final Object? root = envelope.data['lyrics'];
     if (root is! Map<String, dynamic>) return null;
     final Object? value = root['value'];
-    if (value is! String || value.trim().isEmpty) return null;
+    if (value is! String) return null;
+    final Lyrics? parsed = LyricsTextParser.parseLrc(value);
+    if (parsed?.isSynced ?? false) return parsed;
+    if (value.trim().isEmpty) return null;
     final List<LyricLine> lines = value
-        .replaceAll('\r\n', '\n')
-        .replaceAll('\r', '\n')
-        .split('\n')
+        .replaceAll("\r\n", "\n")
+        .replaceAll("\r", "\n")
+        .split("\n")
         .map((String line) => LyricLine(text: line))
         .toList();
     return lines.isEmpty ? null : Lyrics(lines: lines);

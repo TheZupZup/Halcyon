@@ -407,7 +407,37 @@ void main() {
       expect(captured!.url.queryParameters['id'], 's-42');
     });
 
-    test('falls back to legacy getLyrics when the primary has none', () async {
+    test('parses synced LRC from legacy getLyrics fallback', () async {
+      final client = _client(MockClient((http.Request request) async {
+        if (request.url.path.endsWith('getLyricsBySongId.view')) {
+          return _ok(<String, dynamic>{'lyricsList': <String, dynamic>{}});
+        }
+        return _ok(<String, dynamic>{
+          'lyrics': <String, dynamic>{
+            'value': '[00:12.34]First line\n[00:25.50]Second line',
+          },
+        });
+      }));
+
+      final lyrics = await client.fetchLyrics(
+        _session,
+        's1',
+        artist: 'Kavinsky',
+        title: 'Nightcall',
+      );
+
+      expect(lyrics, isNotNull);
+      expect(lyrics!.lines, hasLength(2));
+      expect(
+        lyrics.lines.map((l) => l.text),
+        <String>['First line', 'Second line'],
+      );
+      expect(lyrics.lines.first.start, const Duration(milliseconds: 12340));
+      expect(lyrics.lines.last.start, const Duration(milliseconds: 25500));
+      expect(lyrics.isSynced, isTrue);
+    });
+
+    test('parses plain lyrics from legacy getLyrics fallback', () async {
       http.Request? legacy;
       final client = _client(MockClient((http.Request request) async {
         if (request.url.path.endsWith('getLyricsBySongId.view')) {
@@ -419,7 +449,7 @@ void main() {
           'lyrics': <String, dynamic>{
             'artist': 'Kavinsky',
             'title': 'Nightcall',
-            'value': 'Line one\r\nLine two',
+            "value": "  Line one  \r\n\r\nLine two",
           },
         });
       }));
@@ -433,7 +463,11 @@ void main() {
 
       expect(lyrics, isNotNull);
       expect(lyrics!.isSynced, isFalse);
-      expect(lyrics.lines.map((l) => l.text), <String>['Line one', 'Line two']);
+      expect(
+        lyrics.lines.map((l) => l.text),
+        <String>["  Line one  ", "", "Line two"],
+      );
+      expect(lyrics.lines.every((l) => l.start == null), isTrue);
       expect(legacy!.url.queryParameters['artist'], 'Kavinsky');
       expect(legacy!.url.queryParameters['title'], 'Nightcall');
     });
