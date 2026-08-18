@@ -20,6 +20,13 @@ import 'package:drift/drift.dart';
 /// coexist instead of silently overwriting each other under `insertOrReplace`.
 /// `id` is kept as a column because the per-provider server APIs (e.g. Jellyfin
 /// favourites/playlists) still address items by it.
+/// Sync replaces one source's rows at a time by deleting every row whose
+/// [Tracks.sourceId] matches (`DELETE FROM tracks WHERE source_id = ?`,
+/// see `upsertCatalog`). Without an index that lookup is a full scan of the
+/// whole catalog on every re-sync; a large library makes every sync
+/// noticeably slower for a delete that only ever touches one source's rows.
+/// Added in schema v4.
+@TableIndex(name: 'tracks_source_id', columns: {#sourceId})
 @DataClassName('TrackRow')
 class Tracks extends Table {
   TextColumn get id => text()();

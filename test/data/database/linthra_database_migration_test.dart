@@ -32,6 +32,57 @@ CREATE TABLE tracks (
 );
 ''';
 
+/// The exact `tracks` DDL as of schema v3 -- the v2 shape plus the nullable
+/// album-grouping columns, still with no index on `source_id`.
+const String _v3CreateTracks = '''
+CREATE TABLE tracks (
+  id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  uri TEXT NOT NULL,
+  artist_name TEXT NULL,
+  album_name TEXT NULL,
+  album_id TEXT NULL,
+  album_artist_name TEXT NULL,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  track_number INTEGER NULL,
+  artwork_uri TEXT NULL,
+  PRIMARY KEY (uri)
+);
+''';
+
+/// Opens a database whose underlying file is already at schema v3 with
+/// [seedStatements] inserted, then lets the real migration run on first use.
+Future<LinthraDatabase> _openMigratedFromV3(
+  List<String> seedStatements,
+) async {
+  final NativeDatabase executor = NativeDatabase.memory(
+    setup: (db) {
+      db.execute(_v3CreateTracks);
+      for (final String statement in seedStatements) {
+        db.execute(statement);
+      }
+      // Mark the file as schema v3 so drift runs onUpgrade(3 -> 4), not
+      // onCreate.
+      db.execute('PRAGMA user_version = 3;');
+    },
+  );
+  return LinthraDatabase.forTesting(executor);
+}
+
+/// Whether SQLite's own catalog reports an index on `tracks.source_id` --
+/// asserting the real effect of the migration (a usable index exists),
+/// rather than just that `createIndex` didn't throw.
+Future<bool> _hasSourceIdIndex(LinthraDatabase db) async {
+  final rows = await db
+      .customSelect(
+        "SELECT COUNT(*) AS c FROM sqlite_master WHERE type = 'index' "
+        "AND tbl_name = 'tracks' AND sql LIKE '%source_id%';",
+      )
+      .getSingle();
+  return (rows.data['c'] as int) > 0;
+}
+
 /// Opens a database whose underlying file is already at schema [version] with
 /// [seed] rows inserted, then lets the real migration run on first use.
 Future<LinthraDatabase> _openMigratedFromV2(
@@ -135,12 +186,109 @@ void main() {
       expect(await db.select(db.tracks).get(), hasLength(2));
     });
 
-    test('leaves the schema at v3', () async {
+    test('lands on the current schema version, not just v3', () async {
       db = await _openMigratedFromV2(<String>[]);
-      // Force the migration to run, then read the file's recorded version.
+      // A v2 database runs every subsequent onUpgrade branch in one pass
+      // (v2 -> v3 -> v4), landing on whatever the current version actually
+      // is -- not hardcoded to 4, so this doesn't go stale again the next
+      // time schemaVersion bumps.
       await db.select(db.tracks).get();
       final result = await db.customSelect('PRAGMA user_version;').getSingle();
-      expect(result.data.values.first, 3);
+      expect(result.data.values.first, db.schemaVersion);
+    });
+
+    test('also picks up the v4 index along the way', () async {
+      db = await _openMigratedFromV2(<String>[]);
+      await db.select(db.tracks).get();
+      expect(await _hasSourceIdIndex(db), isTrue);
+    });
+  });
+
+  group('v3 → v4 migration', () {
+    late LinthraDatabase db;
+
+    tearDown(() async => db.close());
+
+    test('preserves every existing row and all of its values', () async {
+      db = await _openMigratedFromV3(<String>[
+        "INSERT INTO tracks (id, source_id, title, uri, artist_name, "
+            "album_name, album_id, album_artist_name, duration_ms, "
+            "track_number, artwork_uri) VALUES "
+            "('t1', 'jellyfin', 'One', 'jellyfin:t1', 'Adele', '25', "
+            "'jellyfin:al-1', 'Adele', 180000, 1, "
+            "'https://media.example/a.jpg');",
+        "INSERT INTO tracks (id, source_id, title, uri, duration_ms) "
+            "VALUES ('t2', 'subsonic', 'Two', 'subsonic:t2', 240000);",
+      ]);
+
+      final List<TrackRow> rows = await db.select(db.tracks).get();
+      expect(rows, hasLength(2));
+
+      final TrackRow jellyfin =
+          rows.firstWhere((TrackRow r) => r.uri == 'jellyfin:t1');
+      expect(jellyfin.sourceId, 'jellyfin');
+      expect(jellyfin.albumId, 'jellyfin:al-1');
+      expect(jellyfin.albumArtistName, 'Adele');
+      expect(jellyfin.artworkUri, 'https://media.example/a.jpg');
+
+      final TrackRow subsonic =
+          rows.firstWhere((TrackRow r) => r.uri == 'subsonic:t2');
+      expect(subsonic.albumId, isNull);
+    });
+
+    test('adds a usable index on source_id', () async {
+      db = await _openMigratedFromV3(<String>[]);
+      // Force the migration to run.
+      await db.select(db.tracks).get();
+      expect(await _hasSourceIdIndex(db), isTrue);
+    });
+
+    test('a source-scoped delete still only removes that source\'s rows',
+        () async {
+      // Not a performance benchmark (an in-memory DB with two rows can't
+      // demonstrate that) -- this is the actual access pattern the index
+      // exists for (`_deleteSource` in drift_music_library_repository.dart),
+      // proving the migrated table still behaves correctly under it.
+      db = await _openMigratedFromV3(<String>[
+        "INSERT INTO tracks (id, source_id, title, uri, duration_ms) "
+            "VALUES ('t1', 'jellyfin', 'One', 'jellyfin:t1', 0);",
+        "INSERT INTO tracks (id, source_id, title, uri, duration_ms) "
+            "VALUES ('t2', 'subsonic', 'Two', 'subsonic:t2', 0);",
+      ]);
+
+      await (db.delete(db.tracks)..where((t) => t.sourceId.equals('jellyfin')))
+          .go();
+
+      final List<TrackRow> remaining = await db.select(db.tracks).get();
+      expect(remaining, hasLength(1));
+      expect(remaining.single.sourceId, 'subsonic');
+    });
+
+    test('leaves the schema at v4', () async {
+      db = await _openMigratedFromV3(<String>[]);
+      await db.select(db.tracks).get();
+      final result = await db.customSelect('PRAGMA user_version;').getSingle();
+      expect(result.data.values.first, 4);
+    });
+
+    test(
+        "the source-scoped delete's query plan actually uses the index, "
+        'not just that the index exists', () async {
+      // An unindexed lookup always needs a full SCAN; that half isn't worth
+      // proving. What actually matters: after migration, the same delete
+      // this issue is about (`_deleteSource` in
+      // drift_music_library_repository.dart) really does SEARCH via the new
+      // index instead, not just that CREATE INDEX succeeded somewhere.
+      db = await _openMigratedFromV3(<String>[]);
+      await db.select(db.tracks).get(); // force the migration to run
+      final plan = await db
+          .customSelect(
+            "EXPLAIN QUERY PLAN DELETE FROM tracks WHERE source_id = 'x';",
+          )
+          .get();
+      final String detail = plan.map((r) => r.data['detail']).join();
+      expect(detail, isNot(contains('SCAN tracks')));
+      expect(detail, contains('tracks_source_id'));
     });
   });
 
@@ -165,6 +313,18 @@ void main() {
       final TrackRow row = await db.select(db.tracks).getSingle();
       expect(row.albumId, 'plex:201');
       expect(row.albumArtistName, 'Kavinsky');
+    });
+
+    test('already has the source_id index, with no migration needed', () async {
+      final LinthraDatabase db =
+          LinthraDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+
+      // onCreate's createAll() includes every entity declared on the table,
+      // the index among them -- unlike an upgrade, which needs the explicit
+      // v3 -> v4 step because createTable alone does not.
+      await db.select(db.tracks).get();
+      expect(await _hasSourceIdIndex(db), isTrue);
     });
   });
 }

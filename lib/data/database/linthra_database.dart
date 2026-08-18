@@ -23,6 +23,10 @@ part 'linthra_database.g.dart';
 ///    one album (`library_grouping.dart`). Purely additive: existing rows keep
 ///    every value and read back with the new columns `null` until the next
 ///    source re-scan populates them.
+///  * **v4** — index on `tracks.source_id` (see `tracks_table.dart`), so a
+///    source re-sync's `DELETE ... WHERE source_id = ?` no longer scans the
+///    whole catalog to find the one source's rows. Purely additive: no rows
+///    or columns change.
 @DriftDatabase(tables: [Tracks])
 class LinthraDatabase extends _$LinthraDatabase {
   LinthraDatabase() : super(_openConnection());
@@ -32,7 +36,7 @@ class LinthraDatabase extends _$LinthraDatabase {
   LinthraDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -48,6 +52,14 @@ class LinthraDatabase extends _$LinthraDatabase {
             await _migrateTracksKeyToUri(m);
           } else if (from < 3) {
             await _addAlbumGroupingColumns(m);
+          }
+          // Independent of the branches above: a v1 database rebuilt by
+          // _migrateTracksKeyToUri still needs the index added separately
+          // here, same as a v2 or v3 database does -- createTable never
+          // creates indexes declared on the table, and createAll() (the
+          // fresh-install path) is the only place that already includes it.
+          if (from < 4) {
+            await _addTracksSourceIdIndex(m);
           }
         },
       );
@@ -98,6 +110,19 @@ class LinthraDatabase extends _$LinthraDatabase {
       await m.addColumn(tracks, tracks.albumId);
       await m.addColumn(tracks, tracks.albumArtistName);
     });
+  }
+
+  /// v(1|2|3) → v4: add the index a fresh install already gets from
+  /// [Tracks]'s `@TableIndex` via `createAll()`. `createTable` (used by the
+  /// v1 → v2 rebuild above) only ever issues `CREATE TABLE`, never the
+  /// indexes declared on it, so every upgrade path needs this run
+  /// separately regardless of which version it started from.
+  ///
+  /// **Purely additive, and data is preserved.** An index changes lookup
+  /// performance, not row contents; no existing value is read, moved, or
+  /// dropped.
+  Future<void> _addTracksSourceIdIndex(Migrator m) async {
+    await m.createIndex(tracksSourceId);
   }
 }
 

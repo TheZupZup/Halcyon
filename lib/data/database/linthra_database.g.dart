@@ -579,11 +579,13 @@ abstract class _$LinthraDatabase extends GeneratedDatabase {
   _$LinthraDatabase(QueryExecutor e) : super(e);
   $LinthraDatabaseManager get managers => $LinthraDatabaseManager(this);
   late final $TracksTable tracks = $TracksTable(this);
+  late final Index tracksSourceId = Index('tracks_source_id',
+      'CREATE INDEX tracks_source_id ON tracks (source_id)');
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
   @override
-  List<DatabaseSchemaEntity> get allSchemaEntities => [tracks];
+  List<DatabaseSchemaEntity> get allSchemaEntities => [tracks, tracksSourceId];
 }
 
 typedef $$TracksTableCreateCompanionBuilder = TracksCompanion Function({
