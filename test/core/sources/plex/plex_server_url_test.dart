@@ -46,6 +46,16 @@ void main() {
       );
     });
 
+    test('brackets an IPv6 literal host and stays parseable', () {
+      final String result = PlexServerUrl.normalize('http://[::1]:32400');
+      expect(result, 'http://[::1]:32400');
+
+      final Uri? reparsed = Uri.tryParse(result);
+      expect(reparsed, isNotNull);
+      expect(reparsed!.host, '::1');
+      expect(reparsed.port, 32400);
+    });
+
     test('rejects an empty address', () {
       expect(
         () => PlexServerUrl.normalize('   '),

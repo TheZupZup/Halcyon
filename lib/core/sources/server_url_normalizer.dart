@@ -37,12 +37,24 @@ class ParsedServerUrl {
   });
 
   final String scheme;
+
+  /// As reported by [Uri.host]. For an IPv6 literal this has no brackets
+  /// (e.g. `::1`, not `[::1]`) -- that's how Dart's own URI parsing
+  /// reports it. Use [hostForUrl], not this field directly, when
+  /// rebuilding a URL string.
   final String host;
+
   final int? port;
 
   /// Trailing slashes already trimmed; query and fragment already dropped
   /// ([Uri] parsing drops those from `.path` itself).
   final String path;
+
+  /// [host], bracketed when it's an IPv6 literal -- safe to drop straight
+  /// into a rebuilt URL string. An IPv6 literal is the only kind of host
+  /// [Uri.host] ever reports containing a colon (a bare DNS hostname or
+  /// IPv4 address never does), so that's a reliable and cheap check.
+  String get hostForUrl => host.contains(':') ? '[$host]' : host;
 
   /// Rebuilds the clean base URL: `scheme://host[:port][path]`, no
   /// trailing slash. [pathOverride] lets a provider substitute a
@@ -52,7 +64,7 @@ class ParsedServerUrl {
     final StringBuffer buffer = StringBuffer()
       ..write(scheme)
       ..write('://')
-      ..write(host);
+      ..write(hostForUrl);
     if (port != null) {
       buffer
         ..write(':')
