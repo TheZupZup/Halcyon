@@ -151,35 +151,44 @@ class _PlayPauseButton extends StatelessWidget {
 
     return Tooltip(
       message: playing ? 'Pause' : 'Play',
-      child: Container(
-        width: 72,
-        height: 72,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: <Color>[gradientTop, gradientBottom],
-          ),
-          boxShadow: <BoxShadow>[
-            BoxShadow(
-              color: colorScheme.secondary.withValues(alpha: 0.45),
-              blurRadius: 24,
-              spreadRadius: -4,
-              offset: const Offset(0, 8),
+      // Hand-built from Container/InkWell rather than IconButton (for the
+      // brand gradient + glow), so unlike the transport row's other buttons
+      // it doesn't get a button role or enabled state for free -- Tooltip
+      // only contributes the label. Declared explicitly here so screen
+      // readers announce this the same way as every other control.
+      child: Semantics(
+        button: true,
+        enabled: onTap != null,
+        child: Container(
+          width: 72,
+          height: 72,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: <Color>[gradientTop, gradientBottom],
             ),
-          ],
-        ),
-        child: Material(
-          type: MaterialType.transparency,
-          shape: const CircleBorder(),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: onTap,
-            child: Center(
-              child: loading
-                  ? _loadingIcon(onAccent)
-                  : _playIcon(playing, onAccent),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: colorScheme.secondary.withValues(alpha: 0.45),
+                blurRadius: 24,
+                spreadRadius: -4,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            shape: const CircleBorder(),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: onTap,
+              child: Center(
+                child: loading
+                    ? _loadingIcon(onAccent)
+                    : _playIcon(playing, onAccent),
+              ),
             ),
           ),
         ),
