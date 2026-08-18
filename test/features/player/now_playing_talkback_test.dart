@@ -86,7 +86,10 @@ void main() {
         tester.getSemantics(playFinder),
         matchesSemantics(
           tooltip: 'Play',
+          isButton: true,
           isFocusable: true,
+          isEnabled: true,
+          hasEnabledState: true,
           hasTapAction: true,
           hasFocusAction: true,
         ),
@@ -111,7 +114,10 @@ void main() {
         tester.getSemantics(pauseFinder),
         matchesSemantics(
           tooltip: 'Pause',
+          isButton: true,
           isFocusable: true,
+          isEnabled: true,
+          hasEnabledState: true,
           hasTapAction: true,
           hasFocusAction: true,
         ),
