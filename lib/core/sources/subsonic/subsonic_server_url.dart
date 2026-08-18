@@ -1,3 +1,4 @@
+import '../server_url_normalizer.dart';
 import 'subsonic_exception.dart';
 
 /// Validates and normalizes the server address the user types into the
@@ -20,53 +21,22 @@ import 'subsonic_exception.dart';
 ///    (`http://host:4533/rest`) still gets a clean root — Linthra appends
 ///    `/rest/<method>.view` itself, so a kept `/rest` would double it into
 ///    `/rest/rest/ping.view`.
+///
+/// The trim/scheme/host/port/path mechanics are shared with the other
+/// providers via [ServerUrlNormalizer]; the `/rest` stripping above and the
+/// user-facing error text below stay Subsonic-specific.
 abstract final class SubsonicServerUrl {
   /// Returns a clean base URL (no trailing slash) for [input], or throws a
   /// [SubsonicException] of kind [SubsonicErrorKind.invalidUrl] with a friendly
   /// reason when the address can't be used.
   static String normalize(String input) {
-    final String trimmed = input.trim();
-    if (trimmed.isEmpty) {
-      throw const SubsonicException.invalidUrl(
-        'Enter your server address, e.g. https://music.example.com',
-      );
+    final ParsedServerUrl parsed;
+    try {
+      parsed = ServerUrlNormalizer.parse(input);
+    } on ServerUrlParseFailure catch (failure) {
+      throw SubsonicException.invalidUrl(_messageFor(failure.kind));
     }
-
-    // No scheme typed → assume https (the common self-hosted default).
-    final String withScheme =
-        trimmed.contains('://') ? trimmed : 'https://$trimmed';
-
-    final Uri? uri = Uri.tryParse(withScheme);
-    if (uri == null) {
-      throw const SubsonicException.invalidUrl(
-        "That doesn't look like a valid web address.",
-      );
-    }
-
-    final String scheme = uri.scheme.toLowerCase();
-    if (scheme != 'http' && scheme != 'https') {
-      throw const SubsonicException.invalidUrl(
-        'The address must start with https:// (or http:// on a local network).',
-      );
-    }
-
-    if (uri.host.isEmpty) {
-      throw const SubsonicException.invalidUrl(
-        'The address is missing a server name, e.g. music.example.com',
-      );
-    }
-
-    final StringBuffer base = StringBuffer()
-      ..write(scheme)
-      ..write('://')
-      ..write(uri.host);
-    if (uri.hasPort) {
-      base
-        ..write(':')
-        ..write(uri.port);
-    }
-    base.write(_stripRestSuffix(_trimTrailingSlashes(uri.path)));
-    return base.toString();
+    return parsed.toBase(pathOverride: _stripRestSuffix(parsed.path));
   }
 
   /// Like [normalize] but returns `null` instead of throwing, for callers that
@@ -79,12 +49,17 @@ abstract final class SubsonicServerUrl {
     }
   }
 
-  static String _trimTrailingSlashes(String path) {
-    int end = path.length;
-    while (end > 0 && path[end - 1] == '/') {
-      end--;
+  static String _messageFor(ServerUrlErrorKind kind) {
+    switch (kind) {
+      case ServerUrlErrorKind.empty:
+        return 'Enter your server address, e.g. https://music.example.com';
+      case ServerUrlErrorKind.unparseable:
+        return "That doesn't look like a valid web address.";
+      case ServerUrlErrorKind.unsupportedScheme:
+        return 'The address must start with https:// (or http:// on a local network).';
+      case ServerUrlErrorKind.emptyHost:
+        return 'The address is missing a server name, e.g. music.example.com';
     }
-    return path.substring(0, end);
   }
 
   /// Drops a trailing `/rest` segment (the Subsonic API mount) from an otherwise

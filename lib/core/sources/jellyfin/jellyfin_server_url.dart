@@ -1,3 +1,4 @@
+import '../server_url_normalizer.dart';
 import 'jellyfin_exception.dart';
 
 /// Validates and normalizes the server address the user types into settings.
@@ -15,53 +16,22 @@ import 'jellyfin_exception.dart';
 ///    often mount Jellyfin under one.
 ///  - A trailing slash, query, and fragment are stripped so the result is a
 ///    clean base to which API paths can be appended.
+///
+/// The trim/scheme/host/port/path mechanics are shared with the other
+/// providers via [ServerUrlNormalizer]; only the user-facing error text
+/// below is Jellyfin-specific.
 abstract final class JellyfinServerUrl {
   /// Returns a clean base URL (no trailing slash) for [input], or throws a
   /// [JellyfinException] of kind [JellyfinErrorKind.invalidUrl] with a friendly
   /// reason when the address can't be used.
   static String normalize(String input) {
-    final String trimmed = input.trim();
-    if (trimmed.isEmpty) {
-      throw const JellyfinException.invalidUrl(
-        'Enter your Jellyfin server address, e.g. https://music.example.com',
-      );
+    final ParsedServerUrl parsed;
+    try {
+      parsed = ServerUrlNormalizer.parse(input);
+    } on ServerUrlParseFailure catch (failure) {
+      throw JellyfinException.invalidUrl(_messageFor(failure.kind));
     }
-
-    // No scheme typed → assume https (the Cloudflare-proxied default).
-    final String withScheme =
-        trimmed.contains('://') ? trimmed : 'https://$trimmed';
-
-    final Uri? uri = Uri.tryParse(withScheme);
-    if (uri == null) {
-      throw const JellyfinException.invalidUrl(
-        "That doesn't look like a valid web address.",
-      );
-    }
-
-    final String scheme = uri.scheme.toLowerCase();
-    if (scheme != 'http' && scheme != 'https') {
-      throw const JellyfinException.invalidUrl(
-        'The address must start with https:// (or http:// on a local network).',
-      );
-    }
-
-    if (uri.host.isEmpty) {
-      throw const JellyfinException.invalidUrl(
-        'The address is missing a server name, e.g. music.example.com',
-      );
-    }
-
-    final StringBuffer base = StringBuffer()
-      ..write(scheme)
-      ..write('://')
-      ..write(uri.host);
-    if (uri.hasPort) {
-      base
-        ..write(':')
-        ..write(uri.port);
-    }
-    base.write(_trimTrailingSlashes(uri.path));
-    return base.toString();
+    return parsed.toBase();
   }
 
   /// Like [normalize] but returns `null` instead of throwing, for callers that
@@ -74,11 +44,16 @@ abstract final class JellyfinServerUrl {
     }
   }
 
-  static String _trimTrailingSlashes(String path) {
-    int end = path.length;
-    while (end > 0 && path[end - 1] == '/') {
-      end--;
+  static String _messageFor(ServerUrlErrorKind kind) {
+    switch (kind) {
+      case ServerUrlErrorKind.empty:
+        return 'Enter your Jellyfin server address, e.g. https://music.example.com';
+      case ServerUrlErrorKind.unparseable:
+        return "That doesn't look like a valid web address.";
+      case ServerUrlErrorKind.unsupportedScheme:
+        return 'The address must start with https:// (or http:// on a local network).';
+      case ServerUrlErrorKind.emptyHost:
+        return 'The address is missing a server name, e.g. music.example.com';
     }
-    return path.substring(0, end);
   }
 }
