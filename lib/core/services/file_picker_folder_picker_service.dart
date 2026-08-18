@@ -1,6 +1,7 @@
 import 'package:file_picker/file_picker.dart';
 
 import 'folder_picker_service.dart';
+import 'linux_music_directory.dart';
 
 /// A [FolderPickerService] backed by the `file_picker` plugin — the desktop
 /// (GTK/Win32) folder chooser.
@@ -13,12 +14,22 @@ import 'folder_picker_service.dart';
 /// which returns a `content://` tree URI with a persisted read grant, and uses
 /// this class only as the desktop fallback (where a filesystem path is correct).
 class FilePickerFolderPickerService implements FolderPickerService {
-  const FilePickerFolderPickerService();
+  const FilePickerFolderPickerService({
+    LinuxMusicDirectory suggestedDirectory = const LinuxMusicDirectory(),
+  }) : _suggestedDirectory = suggestedDirectory;
+
+  /// Resolves the folder the chooser should open to. Only ever suggests a
+  /// starting point — the user is free to navigate anywhere else — and only
+  /// ever resolves to something on Linux; every other desktop platform gets
+  /// `null`, i.e. the chooser's own default.
+  final LinuxMusicDirectory _suggestedDirectory;
 
   @override
-  Future<String?> pickFolder() {
+  Future<String?> pickFolder() async {
+    final String? initialDirectory = await _suggestedDirectory.resolve();
     return FilePicker.platform.getDirectoryPath(
       dialogTitle: 'Select your music folder',
+      initialDirectory: initialDirectory,
     );
   }
 }
