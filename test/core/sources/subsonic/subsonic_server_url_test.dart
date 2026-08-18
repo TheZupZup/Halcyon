@@ -84,6 +84,23 @@ void main() {
       );
     });
 
+    test('brackets an IPv6 literal host and stays parseable', () {
+      final String result = SubsonicServerUrl.normalize('http://[::1]:4533');
+      expect(result, 'http://[::1]:4533');
+
+      final Uri? reparsed = Uri.tryParse(result);
+      expect(reparsed, isNotNull);
+      expect(reparsed!.host, '::1');
+      expect(reparsed.port, 4533);
+    });
+
+    test('brackets an IPv6 host while still stripping a pasted /rest', () {
+      expect(
+        SubsonicServerUrl.normalize('http://[::1]:4533/rest'),
+        'http://[::1]:4533',
+      );
+    });
+
     test('rejects an empty address', () {
       expect(
         () => SubsonicServerUrl.normalize('   '),

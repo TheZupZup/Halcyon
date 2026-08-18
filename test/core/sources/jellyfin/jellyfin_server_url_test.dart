@@ -60,6 +60,23 @@ void main() {
       );
     });
 
+    test('brackets an IPv6 literal host and stays parseable', () {
+      final String result = JellyfinServerUrl.normalize('https://[::1]:8096');
+      expect(result, 'https://[::1]:8096');
+
+      final Uri? reparsed = Uri.tryParse(result);
+      expect(reparsed, isNotNull);
+      expect(reparsed!.host, '::1');
+      expect(reparsed.port, 8096);
+    });
+
+    test('brackets a full IPv6 literal host with a subpath', () {
+      expect(
+        JellyfinServerUrl.normalize('https://[2001:db8::1]/jellyfin'),
+        'https://[2001:db8::1]/jellyfin',
+      );
+    });
+
     test('rejects an empty address', () {
       expect(
         () => JellyfinServerUrl.normalize('   '),
