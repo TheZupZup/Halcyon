@@ -76,6 +76,13 @@ class LinuxMusicDirectory {
       return await file.readAsString();
     } on FileSystemException {
       return null;
+    } on FormatException {
+      // readAsString() decodes as UTF-8 and throws FormatException on invalid
+      // bytes. A corrupt/non-UTF-8 user-dirs.dirs is exactly the "can't be
+      // trusted" case this class otherwise fails safe on, so it's treated the
+      // same as a missing file rather than propagating and blocking the
+      // chooser from opening at all.
+      return null;
     }
   }
 

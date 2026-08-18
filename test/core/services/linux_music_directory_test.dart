@@ -137,6 +137,35 @@ void main() {
     });
 
     test(
+        'falls back to null instead of throwing when user-dirs.dirs contains '
+        'malformed UTF-8', () async {
+      // File.readAsString() decodes as UTF-8 and throws FormatException on
+      // invalid bytes (e.g. a lone continuation byte). That must be treated
+      // like any other untrustworthy config, not propagate and prevent the
+      // folder picker from opening.
+      final Directory configDir = Directory(p.join(tempHome.path, '.config'))
+        ..createSync(recursive: true);
+      File(p.join(configDir.path, 'user-dirs.dirs')).writeAsBytesSync(
+        <int>[
+          0x58,
+          0x44,
+          0x47,
+          0x5F,
+          0xFF,
+          0xFE,
+          0x0A
+        ], // "XDG_" + invalid bytes
+      );
+
+      final result = await resolver.resolve(
+        host: HostPlatform.linux,
+        environment: envFor(tempHome),
+      );
+
+      expect(result, isNull);
+    });
+
+    test(
         'falls back to null when the entry is disabled (XDG_MUSIC_DIR="\$HOME")',
         () async {
       await writeUserDirs('XDG_MUSIC_DIR="\$HOME"');
