@@ -1,30 +1,34 @@
 /// The response shape of `GET /status` — confirms an address is a reachable
 /// Audiobookshelf server before any credentials are sent.
 class AudiobookshelfServerStatus {
-  const AudiobookshelfServerStatus({
-    required this.serverVersion,
-    this.isInitialized,
-  });
+  const AudiobookshelfServerStatus({this.serverVersion, this.isInitialized});
 
-  final String serverVersion;
+  /// `null` on servers older than v2.6.0, which don't report a version at
+  /// all: confirmed directly against `/status`'s real handler across
+  /// release tags back to v2.2.0, not just the current server source.
+  final String? serverVersion;
 
   /// Whether the server has completed initial setup (a root user exists).
-  /// `null` when the field was absent from an unexpected response shape.
   final bool? isInitialized;
 
-  /// Parses `GET /status`'s response, or returns `null` when it doesn't
-  /// carry `app: "audiobookshelf"` (a different server, or a
-  /// Cloudflare/reverse-proxy error page that happens to be valid JSON) or is
-  /// missing a version — the two things that confirm this is genuinely an
-  /// Audiobookshelf server, not just something that answered on this address.
+  /// Parses `GET /status`'s response, or returns `null` when nothing about
+  /// it confirms this is genuinely an Audiobookshelf server (a different
+  /// server, or a Cloudflare/reverse-proxy error page that happens to be
+  /// valid JSON).
+  ///
+  /// `app: "audiobookshelf"` was only added in v2.6.0 (confirmed against the
+  /// real `/status` handler at v2.2.0, v2.5.0, v2.6.0, and the current tag),
+  /// so it's checked only when present. A server old enough not to send it
+  /// still identifies itself well enough via `isInit`, the one field every
+  /// version examined has always sent.
   static AudiobookshelfServerStatus? fromJson(Map<String, dynamic> json) {
     final Object? app = json['app'];
-    if (app != 'audiobookshelf') return null;
-    final String? version = _coerceString(json['serverVersion']);
-    if (version == null) return null;
+    if (app != null && app != 'audiobookshelf') return null;
+    final Object? isInit = json['isInit'];
+    if (app == null && isInit is! bool) return null;
     return AudiobookshelfServerStatus(
-      serverVersion: version,
-      isInitialized: json['isInit'] as bool?,
+      serverVersion: _coerceString(json['serverVersion']),
+      isInitialized: isInit is bool ? isInit : null,
     );
   }
 }

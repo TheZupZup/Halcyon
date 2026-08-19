@@ -30,14 +30,15 @@ class AudiobookshelfAuthenticator {
 
   /// Signs in and returns a session.
   ///
-  /// [serverStatus], when known from a prior [testConnection], is carried
-  /// into the session (server version) for display and diagnostics. When it
-  /// is absent, sign-in reads `/status` itself so the session still records
-  /// the server's version — best-effort, since the auth call is the real
-  /// gate and a status hiccup must not block a valid sign-in.
+  /// [serverStatus], when known from a prior [testConnection] against this
+  /// same [rawUrl], is reused instead of fetching it again. When it is
+  /// absent, sign-in fetches `/status` itself first. Credentials are only
+  /// ever sent to [baseUrl] once that address has confirmed it's an
+  /// Audiobookshelf server, never on a status-fetch failure. A caller must
+  /// not pass a [serverStatus] obtained for a different address.
   ///
-  /// Throws [AudiobookshelfException] for a bad URL, missing username, or
-  /// rejected credentials.
+  /// Throws [AudiobookshelfException] for a bad URL, an unconfirmed server,
+  /// a missing username, or rejected credentials.
   Future<AudiobookshelfSession> signIn({
     required String rawUrl,
     required String username,
@@ -53,11 +54,11 @@ class AudiobookshelfAuthenticator {
       );
     }
 
-    // Reuse a known server status, else read it now so the session captures
-    // the version for diagnostics. Swallow its failure: the auth call below
-    // surfaces the real, friendly error for a bad address or down server.
-    final AudiobookshelfServerStatus? status =
-        serverStatus ?? await _tryFetchServerStatus(baseUrl);
+    // Reuse a status already confirmed for this address, else confirm it
+    // now. Left to throw on failure: credentials must never reach an
+    // address that hasn't confirmed it's an Audiobookshelf server.
+    final AudiobookshelfServerStatus status =
+        serverStatus ?? await _client.fetchServerStatus(baseUrl);
 
     final AudiobookshelfAuthResult result = await _client.authenticateByName(
       baseUrl: baseUrl,
@@ -72,17 +73,7 @@ class AudiobookshelfAuthenticator {
       refreshToken: result.refreshToken,
       userName: result.userName ?? trimmedUsername,
       defaultLibraryId: result.defaultLibraryId,
-      serverVersion: status?.serverVersion,
+      serverVersion: status.serverVersion,
     );
-  }
-
-  Future<AudiobookshelfServerStatus?> _tryFetchServerStatus(
-    String baseUrl,
-  ) async {
-    try {
-      return await _client.fetchServerStatus(baseUrl);
-    } on AudiobookshelfException {
-      return null;
-    }
   }
 }

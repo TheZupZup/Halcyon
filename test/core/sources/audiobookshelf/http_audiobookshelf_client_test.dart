@@ -65,6 +65,23 @@ void main() {
       expect(status.serverVersion, '2.19.0');
     });
 
+    test(
+        'accepts a pre-v2.6.0 server, which sends neither app nor '
+        'serverVersion', () async {
+      // Confirmed against the real /status handler at release tags v2.2.0
+      // and v2.5.0: only isInit (and, from v2.5.0, language) was sent before
+      // app/serverVersion were added in v2.6.0. A server still running one
+      // of those versions must not be rejected as "not Audiobookshelf".
+      final client = _client(MockClient((_) async {
+        return _json(<String, dynamic>{'isInit': true, 'language': 'en-us'});
+      }));
+
+      final status = await client.fetchServerStatus(_base);
+
+      expect(status.isInitialized, isTrue);
+      expect(status.serverVersion, isNull);
+    });
+
     test('throws notAudiobookshelf when app is not "audiobookshelf"', () async {
       final client = _client(MockClient((_) async {
         return _json(<String, dynamic>{

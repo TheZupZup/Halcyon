@@ -83,23 +83,24 @@ class AudiobookshelfSession {
       };
 
   /// Rebuilds a session from [toJson] output, or returns `null` if any
-  /// required field is missing/blank (e.g. a partially written or corrupted
-  /// record), so the app treats it as "not signed in" rather than crashing.
+  /// required field is missing, blank, or the wrong type (e.g. a partially
+  /// written or corrupted record), so the app treats it as "not signed in"
+  /// rather than crashing on a bad cast.
   static AudiobookshelfSession? fromJson(Map<String, dynamic> json) {
-    final String? baseUrl = json['baseUrl'] as String?;
-    final String? userId = json['userId'] as String?;
-    final String? accessToken = json['accessToken'] as String?;
-    if (baseUrl == null || baseUrl.isEmpty) return null;
-    if (userId == null || userId.isEmpty) return null;
-    if (accessToken == null || accessToken.isEmpty) return null;
+    final String? baseUrl = _string(json['baseUrl']);
+    final String? userId = _string(json['userId']);
+    final String? accessToken = _string(json['accessToken']);
+    if (baseUrl == null || userId == null || accessToken == null) {
+      return null;
+    }
     return AudiobookshelfSession(
       baseUrl: baseUrl,
       userId: userId,
       accessToken: accessToken,
-      refreshToken: json['refreshToken'] as String?,
-      userName: json['userName'] as String?,
-      defaultLibraryId: json['defaultLibraryId'] as String?,
-      serverVersion: json['serverVersion'] as String?,
+      refreshToken: _string(json['refreshToken']),
+      userName: _string(json['userName']),
+      defaultLibraryId: _string(json['defaultLibraryId']),
+      serverVersion: _string(json['serverVersion']),
     );
   }
 
@@ -134,4 +135,13 @@ class AudiobookshelfSession {
       'userName: $userName, defaultLibraryId: $defaultLibraryId, '
       'serverVersion: $serverVersion, accessToken: <redacted>, '
       'refreshToken: <redacted>)';
+}
+
+/// Reads [value] as a non-blank [String], or `null` for anything else
+/// (absent, wrong type, or empty/whitespace-only), used by [fromJson] so a
+/// field of the wrong type never throws, it's just treated as absent.
+String? _string(Object? value) {
+  if (value is! String) return null;
+  final String trimmed = value.trim();
+  return trimmed.isEmpty ? null : trimmed;
 }

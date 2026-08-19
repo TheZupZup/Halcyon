@@ -47,7 +47,10 @@ void main() {
 
   group('signIn', () {
     test('signs in and builds a session from the result', () async {
-      final fake = FakeAudiobookshelfClient(authResult: _authResult);
+      final fake = FakeAudiobookshelfClient(
+        serverStatus: _status,
+        authResult: _authResult,
+      );
       final authenticator = AudiobookshelfAuthenticator(fake);
 
       final AudiobookshelfSession session = await authenticator.signIn(
@@ -101,22 +104,24 @@ void main() {
     });
 
     test(
-        'a status-fetch failure does not block sign-in — the auth call is '
-        'the real gate', () async {
+        'a status-fetch failure blocks sign-in, credentials are never sent '
+        'to an unconfirmed address', () async {
       final fake = FakeAudiobookshelfClient(
         authResult: _authResult,
         serverStatusError: AudiobookshelfException.notReachable(),
       );
       final authenticator = AudiobookshelfAuthenticator(fake);
 
-      final session = await authenticator.signIn(
-        rawUrl: 'audiobooks.example.com',
-        username: 'jon',
-        password: 'hunter2',
+      expect(
+        () => authenticator.signIn(
+          rawUrl: 'audiobooks.example.com',
+          username: 'jon',
+          password: 'hunter2',
+        ),
+        throwsA(isA<AudiobookshelfException>()),
       );
-
-      expect(session.userId, 'user-1');
-      expect(session.serverVersion, isNull);
+      expect(fake.lastUsername, isNull);
+      expect(fake.lastPassword, isNull);
     });
 
     test('an empty username is rejected before any request is made', () async {
@@ -143,6 +148,7 @@ void main() {
     test('rejected credentials surface as the client\'s own exception',
         () async {
       final fake = FakeAudiobookshelfClient(
+        serverStatus: _status,
         authError: AudiobookshelfException.unauthorized(),
       );
       final authenticator = AudiobookshelfAuthenticator(fake);

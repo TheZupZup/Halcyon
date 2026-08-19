@@ -69,6 +69,47 @@ void main() {
         isNull,
       );
     });
+
+    test('a wrong-typed required field returns null instead of throwing', () {
+      expect(
+        () => AudiobookshelfSession.fromJson(<String, dynamic>{
+          'baseUrl': 12345,
+          'userId': 'user-1',
+          'accessToken': 'tok-abc',
+        }),
+        returnsNormally,
+      );
+      expect(
+        AudiobookshelfSession.fromJson(<String, dynamic>{
+          'baseUrl': 12345,
+          'userId': 'user-1',
+          'accessToken': 'tok-abc',
+        }),
+        isNull,
+      );
+      expect(
+        AudiobookshelfSession.fromJson(<String, dynamic>{
+          'baseUrl': 'https://audiobooks.example.com',
+          'userId': <String, dynamic>{'not': 'a string'},
+          'accessToken': 'tok-abc',
+        }),
+        isNull,
+      );
+    });
+
+    test('a wrong-typed optional field is treated as absent, not a crash', () {
+      final AudiobookshelfSession? rebuilt =
+          AudiobookshelfSession.fromJson(<String, dynamic>{
+        'baseUrl': 'https://audiobooks.example.com',
+        'userId': 'user-1',
+        'accessToken': 'tok-abc',
+        'serverVersion': 2.19,
+        'defaultLibraryId': true,
+      });
+      expect(rebuilt, isNotNull);
+      expect(rebuilt!.serverVersion, isNull);
+      expect(rebuilt.defaultLibraryId, isNull);
+    });
   });
 
   test('toString redacts both tokens', () {
