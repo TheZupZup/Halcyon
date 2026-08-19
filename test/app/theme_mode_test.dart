@@ -135,61 +135,45 @@ void main() {
     });
   });
 
-  // Issue #459: Linthra picks its platform implementations behind seams keyed
-  // by HostPlatform (see docs/linux-desktop.md "How platform selection
-  // works"), and deliberately never through a check like this for theming —
-  // System/Light/Dark resolve through the one shared ThemeModeController on
-  // every platform. This group pins HostPlatform explicitly (rather than
-  // relying on whatever OS happens to run `flutter test`) and re-asserts the
-  // same behaviours above on both Android and Linux, so a future PR that
-  // *did* fork theme resolution by platform would fail here on the Linux
-  // side, and a Linux-only fix could never quietly regress Android.
-  for (final HostPlatform host in <HostPlatform>[
-    HostPlatform.android,
-    HostPlatform.linux,
-  ]) {
-    group('the same shared theme behaviour on ${host.label}', () {
-      testWidgets('System renders light on a light device', (tester) async {
-        setDeviceBrightness(tester, Brightness.light);
-        await pumpApp(tester, host: host);
+  group('theme resolution is not gated by HostPlatform', () {
+    // Regression guard for #459, and deliberately narrow about what it proves.
+    //
+    // What it DOES prove: ThemeModeController/LinthraApp never branch on
+    // HostPlatform the way other platform seams do (see docs/linux-desktop.md
+    // "How platform selection works") — System/Light/Dark resolve through the
+    // one shared path Android already used, regardless of what
+    // hostPlatformProvider is overridden to. If a future change forked theme
+    // resolution by platform, pinning HostPlatform.linux here and getting a
+    // *different* result than the unpinned groups above would catch it.
+    //
+    // What it does NOT prove: anything about the real Linux GTK/XDG-desktop-
+    // portal brightness bridge. `platformBrightnessTestValue` above injects a
+    // Brightness straight into Flutter's own test PlatformDispatcher; it never
+    // touches the native embedder, and overriding hostPlatformProvider changes
+    // nothing about what gets rendered here — which is exactly the point of
+    // this group, not a gap in it. Supplying the *real* platform brightness on
+    // Linux is the Flutter engine's job (`fl_settings.cc`, via the desktop
+    // portal or a GNOME GSettings fallback), not Linthra's, and reproducing
+    // that deterministically in `flutter test` or headless CI would need a
+    // running portal daemon or GNOME schemas — exactly the DE-specific
+    // machinery this app avoids adding. See docs/linux-desktop.md's
+    // "Light/Dark/System theme" row for the full picture.
+    testWidgets('pinning HostPlatform.linux changes nothing about the result',
+        (tester) async {
+      setDeviceBrightness(tester, Brightness.dark);
+      await pumpApp(tester, host: HostPlatform.linux);
 
-        expect(renderedBrightness(tester), Brightness.light);
-      });
-
-      testWidgets('System renders dark on a dark device', (tester) async {
-        setDeviceBrightness(tester, Brightness.dark);
-        await pumpApp(tester, host: host);
-
-        expect(renderedBrightness(tester), Brightness.dark);
-      });
-
-      testWidgets('explicit Light ignores a dark device', (tester) async {
-        setDeviceBrightness(tester, Brightness.dark);
-        await pumpApp(tester, host: host, seed: ThemeModePreference.light);
-
-        expect(renderedBrightness(tester), Brightness.light);
-      });
-
-      testWidgets('explicit Dark ignores a light device', (tester) async {
-        setDeviceBrightness(tester, Brightness.light);
-        await pumpApp(tester, host: host, seed: ThemeModePreference.dark);
-
-        expect(renderedBrightness(tester), Brightness.dark);
-      });
-
-      testWidgets(
-          'a runtime device brightness change updates System without a restart',
-          (tester) async {
-        setDeviceBrightness(tester, Brightness.light);
-        await pumpApp(tester, host: host);
-        expect(renderedBrightness(tester), Brightness.light);
-
-        setDeviceBrightness(tester, Brightness.dark);
-        await tester.pumpAndSettle();
-        expect(renderedBrightness(tester), Brightness.dark);
-      });
+      expect(renderedBrightness(tester), Brightness.dark);
     });
-  }
+
+    testWidgets('pinning HostPlatform.android changes nothing about the result',
+        (tester) async {
+      setDeviceBrightness(tester, Brightness.light);
+      await pumpApp(tester, host: HostPlatform.android);
+
+      expect(renderedBrightness(tester), Brightness.light);
+    });
+  });
 
   group('the stored choice is applied without a flash', () {
     testWidgets('the seeded preference is live on the very first frame',

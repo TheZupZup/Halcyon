@@ -179,7 +179,7 @@ undeclared network access to an isolated `flatpak-builder` build.
 | Area | State | Why |
 | --- | --- | --- |
 | **Audio playback** | Supported | media_kit/libmpv through `LinuxPlaybackController`; local files and resolved Jellyfin, Navidrome/Subsonic, and Plex HTTP(S) streams share one backend. |
-| **Light/Dark/System theme** | Supported | Settings → Appearance's System/Light/Dark choice ([issue #459](https://github.com/TheZupZup/Linthra/issues/459)) is the same shared `ThemeModePreference`/`ThemeModeController` Android uses, mapped onto `MaterialApp`'s own `themeMode`. System follows the desktop's light/dark preference through Flutter's Linux (GTK) embedder and updates live with no restart — no `gsettings`/D-Bus/GNOME/KDE-specific code in Linthra itself, and no separate Linux theme path. See `test/app/theme_mode_test.dart`. |
+| **Light/Dark/System theme** | Supported (app side); the native brightness bridge itself is Flutter's, not independently verified here | Settings → Appearance's System/Light/Dark choice ([issue #459](https://github.com/TheZupZup/Linthra/issues/459)) is the same shared `ThemeModePreference`/`ThemeModeController` Android uses, mapped onto `MaterialApp`'s own `themeMode` — no `gsettings`/D-Bus/GNOME/KDE-specific code in Linthra itself, and no separate Linux theme path (`test/app/theme_mode_test.dart` proves that). *Supplying* System's brightness on Linux is Flutter's GTK embedder (via the XDG desktop portal or a GNOME GSettings fallback); that native bridge is outside Linthra's code and isn't exercised by `flutter test`, which runs on the Dart VM and injects brightness straight into Flutter's test `PlatformDispatcher`. Reproducing the real bridge deterministically in CI would need a running portal daemon or GNOME schemas — exactly the DE-specific setup this app avoids adding — so it stays untested here and is a known gap, not a claimed guarantee. |
 | Media session / MPRIS | Unsupported | `audio_service` is Android/iOS only. `PlatformMediaSessionBinding` returns the inert binding on Linux, so `audio_service` is never initialised there. MPRIS is later desktop work. |
 | Android Auto | Android-only, by design | It is an Android platform integration, not a Linthra feature. |
 | Media notification + `POST_NOTIFICATIONS` | Android-only, by design | There is no equivalent gate on Linux; desktop controls arrive with MPRIS. |
@@ -191,7 +191,11 @@ undeclared network access to an isolated `flatpak-builder` build.
 | Desktop layout, keyboard shortcuts, media keys | Not started | The existing layout renders in the window and is usable for development. The desktop UX pass is later work in #376. |
 
 Nothing in that table is faked. Each one is an explicit implementation behind an
-existing interface, so it is visible in the code and covered by tests.
+existing interface, so it is visible in the code and covered by tests — with
+one caveat: the Light/Dark/System theme row's *app-side* wiring is covered, but
+the native GTK/portal brightness bridge underneath it is Flutter's own
+responsibility and is not, and cannot easily be, exercised by `flutter test`;
+see that row for why.
 
 ## How platform selection works
 
