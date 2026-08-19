@@ -167,7 +167,7 @@ void main() {
         container.read(themeModeControllerProvider),
         ThemeModePreference.system,
       );
-      expect(find.textContaining('follows your phone'), findsOneWidget);
+      expect(find.textContaining('follows your device'), findsOneWidget);
     });
 
     testWidgets('picking Light selects and persists it', (tester) async {
@@ -188,9 +188,9 @@ void main() {
           ThemeModePreference.light,
         ),
       );
-      // The blurb switches away from the "follows your phone" wording once a
+      // The blurb switches away from the "follows your device" wording once a
       // mode is pinned, so the card always states what is actually happening.
-      expect(find.textContaining('follows your phone'), findsNothing);
+      expect(find.textContaining('follows your device'), findsNothing);
       expect(
           find.textContaining('always uses the light theme'), findsOneWidget);
     });

@@ -28,7 +28,7 @@ final sharedPreferencesThemeModeStoreOverride =
 /// `main` awaits this and seeds `initialThemeModeProvider` with the result, so
 /// the very first frame already renders in the user's chosen mode. Loading it
 /// asynchronously *after* startup would work too, but a user who picked Light
-/// on a dark phone would watch the app flash dark and then flip — the exact
+/// on a dark device would watch the app flash dark and then flip — the exact
 /// glitch this preference is supposed to remove.
 ///
 /// Defensive by design: a store that throws (a plugin hiccup, unreadable

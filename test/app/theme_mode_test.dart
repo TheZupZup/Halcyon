@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/app/linthra_app.dart';
 import 'package:linthra/core/models/theme_mode_preference.dart';
+import 'package:linthra/core/platform/host_platform.dart';
+import 'package:linthra/data/repositories/host_platform_provider.dart';
 import 'package:linthra/data/repositories/in_memory_theme_mode_store.dart';
 import 'package:linthra/data/repositories/theme_mode_store_provider.dart';
 import 'package:linthra/features/appearance/theme_mode_controller.dart';
@@ -26,6 +28,7 @@ void main() {
     WidgetTester tester, {
     ThemeModePreference? seed,
     InMemoryThemeModeStore? store,
+    HostPlatform? host,
   }) async {
     final ProviderContainer container = ProviderContainer(
       overrides: <Override>[
@@ -33,6 +36,7 @@ void main() {
         playbackControllerProvider.overrideWithValue(FakePlaybackController()),
         if (store != null) themeModeStoreProvider.overrideWithValue(store),
         if (seed != null) initialThemeModeProvider.overrideWithValue(seed),
+        if (host != null) hostPlatformProvider.overrideWithValue(host),
       ],
     );
     addTearDown(container.dispose);
@@ -46,15 +50,15 @@ void main() {
     return container;
   }
 
-  /// Sets the phone's light/dark setting for this test.
-  void setPhoneBrightness(WidgetTester tester, Brightness brightness) {
+  /// Sets the device's light/dark setting for this test.
+  void setDeviceBrightness(WidgetTester tester, Brightness brightness) {
     tester.platformDispatcher.platformBrightnessTestValue = brightness;
     addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
   }
 
-  group('theme mode follows the phone by default', () {
+  group('theme mode follows the device by default', () {
     testWidgets('defaults to ThemeMode.system', (tester) async {
-      setPhoneBrightness(tester, Brightness.dark);
+      setDeviceBrightness(tester, Brightness.dark);
       await pumpApp(tester);
 
       expect(
@@ -63,81 +67,137 @@ void main() {
       );
     });
 
-    testWidgets('renders light on a light phone', (tester) async {
-      setPhoneBrightness(tester, Brightness.light);
+    testWidgets('renders light on a light device', (tester) async {
+      setDeviceBrightness(tester, Brightness.light);
       await pumpApp(tester);
 
       expect(renderedBrightness(tester), Brightness.light);
     });
 
-    testWidgets('renders dark on a dark phone', (tester) async {
-      setPhoneBrightness(tester, Brightness.dark);
+    testWidgets('renders dark on a dark device', (tester) async {
+      setDeviceBrightness(tester, Brightness.dark);
       await pumpApp(tester);
 
       expect(renderedBrightness(tester), Brightness.dark);
     });
 
-    testWidgets('flips live when the phone theme changes while open',
+    testWidgets('flips live when the device theme changes while open',
         (tester) async {
       // The "update immediately" requirement: no relaunch, no navigation, no
       // listener of our own — just the OS setting changing under a running app.
-      setPhoneBrightness(tester, Brightness.light);
+      setDeviceBrightness(tester, Brightness.light);
       await pumpApp(tester);
       expect(renderedBrightness(tester), Brightness.light);
 
-      setPhoneBrightness(tester, Brightness.dark);
+      setDeviceBrightness(tester, Brightness.dark);
       await tester.pumpAndSettle();
       expect(renderedBrightness(tester), Brightness.dark);
 
       // And back again, so this is a live binding rather than a one-way latch.
-      setPhoneBrightness(tester, Brightness.light);
+      setDeviceBrightness(tester, Brightness.light);
       await tester.pumpAndSettle();
       expect(renderedBrightness(tester), Brightness.light);
     });
   });
 
-  group('an explicit choice overrides the phone', () {
-    testWidgets('Light stays light on a dark phone', (tester) async {
-      setPhoneBrightness(tester, Brightness.dark);
+  group('an explicit choice overrides the device', () {
+    testWidgets('Light stays light on a dark device', (tester) async {
+      setDeviceBrightness(tester, Brightness.dark);
       await pumpApp(tester, seed: ThemeModePreference.light);
 
       expect(renderedBrightness(tester), Brightness.light);
     });
 
-    testWidgets('Dark stays dark on a light phone', (tester) async {
-      setPhoneBrightness(tester, Brightness.light);
+    testWidgets('Dark stays dark on a light device', (tester) async {
+      setDeviceBrightness(tester, Brightness.light);
       await pumpApp(tester, seed: ThemeModePreference.dark);
 
       expect(renderedBrightness(tester), Brightness.dark);
     });
 
-    testWidgets('a pinned mode ignores a live phone theme change',
+    testWidgets('a pinned mode ignores a live device theme change',
         (tester) async {
-      setPhoneBrightness(tester, Brightness.light);
+      setDeviceBrightness(tester, Brightness.light);
       await pumpApp(tester, seed: ThemeModePreference.dark);
       expect(renderedBrightness(tester), Brightness.dark);
 
-      setPhoneBrightness(tester, Brightness.dark);
+      setDeviceBrightness(tester, Brightness.dark);
       await tester.pumpAndSettle();
       expect(renderedBrightness(tester), Brightness.dark);
 
-      setPhoneBrightness(tester, Brightness.light);
+      setDeviceBrightness(tester, Brightness.light);
       await tester.pumpAndSettle();
       expect(
         renderedBrightness(tester),
         Brightness.dark,
-        reason: 'pinning Dark must survive the phone flipping to light',
+        reason: 'pinning Dark must survive the device flipping to light',
       );
     });
   });
+
+  // Issue #459: Linthra picks its platform implementations behind seams keyed
+  // by HostPlatform (see docs/linux-desktop.md "How platform selection
+  // works"), and deliberately never through a check like this for theming —
+  // System/Light/Dark resolve through the one shared ThemeModeController on
+  // every platform. This group pins HostPlatform explicitly (rather than
+  // relying on whatever OS happens to run `flutter test`) and re-asserts the
+  // same behaviours above on both Android and Linux, so a future PR that
+  // *did* fork theme resolution by platform would fail here on the Linux
+  // side, and a Linux-only fix could never quietly regress Android.
+  for (final HostPlatform host in <HostPlatform>[
+    HostPlatform.android,
+    HostPlatform.linux,
+  ]) {
+    group('the same shared theme behaviour on ${host.label}', () {
+      testWidgets('System renders light on a light device', (tester) async {
+        setDeviceBrightness(tester, Brightness.light);
+        await pumpApp(tester, host: host);
+
+        expect(renderedBrightness(tester), Brightness.light);
+      });
+
+      testWidgets('System renders dark on a dark device', (tester) async {
+        setDeviceBrightness(tester, Brightness.dark);
+        await pumpApp(tester, host: host);
+
+        expect(renderedBrightness(tester), Brightness.dark);
+      });
+
+      testWidgets('explicit Light ignores a dark device', (tester) async {
+        setDeviceBrightness(tester, Brightness.dark);
+        await pumpApp(tester, host: host, seed: ThemeModePreference.light);
+
+        expect(renderedBrightness(tester), Brightness.light);
+      });
+
+      testWidgets('explicit Dark ignores a light device', (tester) async {
+        setDeviceBrightness(tester, Brightness.light);
+        await pumpApp(tester, host: host, seed: ThemeModePreference.dark);
+
+        expect(renderedBrightness(tester), Brightness.dark);
+      });
+
+      testWidgets(
+          'a runtime device brightness change updates System without a restart',
+          (tester) async {
+        setDeviceBrightness(tester, Brightness.light);
+        await pumpApp(tester, host: host);
+        expect(renderedBrightness(tester), Brightness.light);
+
+        setDeviceBrightness(tester, Brightness.dark);
+        await tester.pumpAndSettle();
+        expect(renderedBrightness(tester), Brightness.dark);
+      });
+    });
+  }
 
   group('the stored choice is applied without a flash', () {
     testWidgets('the seeded preference is live on the very first frame',
         (tester) async {
       // Seeded the way main does: read from storage before runApp. The
       // assertion is that the *first* pump already renders light on a dark
-      // phone — no intermediate dark frame to flash through.
-      setPhoneBrightness(tester, Brightness.dark);
+      // device — no intermediate dark frame to flash through.
+      setDeviceBrightness(tester, Brightness.dark);
       final ProviderContainer container = ProviderContainer(
         overrides: <Override>[
           ...completedOnboardingOverrides(),
@@ -166,7 +226,7 @@ void main() {
     testWidgets('changing the mode at runtime repaints the app',
         (tester) async {
       final InMemoryThemeModeStore store = InMemoryThemeModeStore();
-      setPhoneBrightness(tester, Brightness.dark);
+      setDeviceBrightness(tester, Brightness.dark);
       final ProviderContainer container = await pumpApp(tester, store: store);
       expect(renderedBrightness(tester), Brightness.dark);
 

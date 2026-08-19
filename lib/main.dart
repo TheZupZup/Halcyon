@@ -52,10 +52,10 @@ Future<void> main() async {
 
   // Read the saved theme mode *before* the container exists, so the very first
   // frame already paints in the user's chosen mode. Loading it after startup
-  // would make someone who picked Light on a dark phone watch the app flash
+  // would make someone who picked Light on a dark device watch the app flash
   // dark and then flip. This is the one preference worth blocking startup on,
   // and only barely: it is a single string read, and it fails soft to
-  // "follow the phone" rather than throwing.
+  // "follow the device" rather than throwing.
   final ThemeModePreference storedThemeMode = await readStoredThemeMode();
 
   // One container backs the whole app so the *same* PlaybackController and

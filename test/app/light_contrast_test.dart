@@ -6,7 +6,7 @@ import 'package:linthra/app/theme.dart';
 
 /// Contrast guardrails for the light themes.
 ///
-/// These ratios are now user-visible: Linthra follows the phone's light/dark
+/// These ratios are now user-visible: Linthra follows the device's light/dark
 /// setting by default, and the light themes render for real.
 ///
 /// They did not used to be. The light themes were built alongside the dark ones

@@ -179,6 +179,7 @@ undeclared network access to an isolated `flatpak-builder` build.
 | Area | State | Why |
 | --- | --- | --- |
 | **Audio playback** | Supported | media_kit/libmpv through `LinuxPlaybackController`; local files and resolved Jellyfin, Navidrome/Subsonic, and Plex HTTP(S) streams share one backend. |
+| **Light/Dark/System theme** | Supported | Settings → Appearance's System/Light/Dark choice ([issue #459](https://github.com/TheZupZup/Linthra/issues/459)) is the same shared `ThemeModePreference`/`ThemeModeController` Android uses, mapped onto `MaterialApp`'s own `themeMode`. System follows the desktop's light/dark preference through Flutter's Linux (GTK) embedder and updates live with no restart — no `gsettings`/D-Bus/GNOME/KDE-specific code in Linthra itself, and no separate Linux theme path. See `test/app/theme_mode_test.dart`. |
 | Media session / MPRIS | Unsupported | `audio_service` is Android/iOS only. `PlatformMediaSessionBinding` returns the inert binding on Linux, so `audio_service` is never initialised there. MPRIS is later desktop work. |
 | Android Auto | Android-only, by design | It is an Android platform integration, not a Linthra feature. |
 | Media notification + `POST_NOTIFICATIONS` | Android-only, by design | There is no equivalent gate on Linux; desktop controls arrive with MPRIS. |

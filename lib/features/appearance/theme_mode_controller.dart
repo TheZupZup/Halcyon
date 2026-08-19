@@ -6,7 +6,7 @@ import '../../data/repositories/theme_mode_store_provider.dart';
 
 /// The theme mode the controller starts from on its very first build.
 ///
-/// Defaults to following the phone. `main` overrides it with the value read
+/// Defaults to following the device. `main` overrides it with the value read
 /// from storage *before* `runApp`, so the first frame is already correct and
 /// there is no dark-then-light flash on launch.
 ///
