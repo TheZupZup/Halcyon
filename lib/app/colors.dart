@@ -8,7 +8,7 @@ import 'package:flutter/material.dart';
 /// states and playback progress. Keeping orange scarce is what makes it read as
 /// energy rather than decoration, and it's what separates Linthra from a calm
 /// productivity app. Dark is the signature look, but Linthra follows the
-/// phone's light/dark setting by default, so both modes are first-class: the
+/// device's light/dark setting by default, so both modes are first-class: the
 /// light palette re-tones the same two hues rather than mirroring the dark
 /// tones, which would not survive on pale surfaces.
 abstract final class AppColors {

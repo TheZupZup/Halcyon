@@ -7,14 +7,16 @@
 /// The stored value is a non-secret display preference: no account, server,
 /// library, or playback data is involved.
 enum ThemeModePreference {
-  /// Follow the phone's light/dark setting. The default, and what most people
-  /// expect from an app that offers the choice at all.
+  /// Follow the device's light/dark setting. The default, and what most people
+  /// expect from an app that offers the choice at all. On Android this is the
+  /// OS "dark theme" toggle; on Linux desktop it is the same signal read from
+  /// the desktop's own light/dark preference — see `LinthraApp`.
   system('system'),
 
-  /// Always light, regardless of the phone.
+  /// Always light, regardless of the device.
   light('light'),
 
-  /// Always dark, regardless of the phone. What Linthra did unconditionally
+  /// Always dark, regardless of the device. What Linthra did unconditionally
   /// before this preference existed.
   dark('dark');
 
@@ -26,7 +28,7 @@ enum ThemeModePreference {
 
   /// What an absent, empty, or unrecognised stored value resolves to.
   ///
-  /// Following the phone is the safe landing spot: it is the documented
+  /// Following the device is the safe landing spot: it is the documented
   /// default, and it is what a first-run install gets.
   static const ThemeModePreference fallback = ThemeModePreference.system;
 

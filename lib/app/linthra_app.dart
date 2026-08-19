@@ -28,10 +28,27 @@ final notificationPermissionProvider = Provider<NotificationPermission>((ref) {
   return const PermissionHandlerNotificationPermission();
 });
 
-/// Root widget. Linthra follows the phone's light/dark setting by default; the
+/// Root widget. Linthra follows the device's light/dark setting by default; the
 /// user can pin Light or Dark in Settings → Appearance, and that choice is read
 /// from storage before the first frame (see `readStoredThemeMode`) so launching
 /// never flashes the wrong theme.
+///
+/// System mode is plain `ThemeMode.system`, handed to `MaterialApp` below along
+/// with both `theme` and `darkTheme`: Flutter itself resolves it from the
+/// engine's platform-brightness signal and repaints live whenever that signal
+/// changes, via the same `WidgetsBindingObserver.didChangePlatformBrightness`
+/// path on every platform. Linthra never reads that signal itself and never
+/// shells out to `gsettings`, D-Bus, or a GNOME/KDE-specific command — there is
+/// deliberately no Linux-only theme code; Light, Dark, and System all resolve
+/// through this one shared path on Android and Linux alike.
+///
+/// On Linux, *supplying* that signal is the Flutter engine's job, not
+/// Linthra's: the GTK embedder derives it from the desktop's own light/dark
+/// preference (`flutter/engine`'s `fl_settings.cc`, via the XDG desktop portal
+/// or a GNOME GSettings fallback) and pushes live changes the same way Android
+/// does. That native bridge is outside this app's code and isn't independently
+/// exercised by Linthra's widget tests — see docs/linux-desktop.md's
+/// "Light/Dark/System theme" row for what is and isn't verified.
 class LinthraApp extends ConsumerStatefulWidget {
   const LinthraApp({super.key});
 

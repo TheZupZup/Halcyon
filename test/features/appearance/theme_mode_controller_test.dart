@@ -20,7 +20,7 @@ class _ThrowingThemeModeStore implements ThemeModeStore {
 
 void main() {
   group('ThemeModePreference', () {
-    test('defaults to following the phone', () {
+    test('defaults to following the device', () {
       expect(ThemeModePreference.fallback, ThemeModePreference.system);
     });
 

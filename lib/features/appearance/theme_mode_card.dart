@@ -42,9 +42,9 @@ class ThemeModeCard extends ConsumerWidget {
             const SizedBox(height: AppSpacing.sm),
             Text(
               selected == ThemeModePreference.system
-                  ? 'Linthra follows your phone’s light/dark setting.'
+                  ? 'Linthra follows your device’s light/dark setting.'
                   : 'Linthra always uses the ${selected.label.toLowerCase()} '
-                      'theme, whatever your phone is set to.',
+                      'theme, whatever your device is set to.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
