@@ -107,6 +107,7 @@ SENSITIVE_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(?:schemaVersion|MigrationStrategy|createIndex|alterTable)\b"), "database schema / migration"),
 )
 
+
 def _split_literal(*fragments: str) -> str:
     """Join the fragments of a literal this file must not contain contiguously.
 
@@ -170,6 +171,13 @@ _SAME_TARGET = r"""['\"]?(?P=target)(?=$|[\s'\";&|)<>])"""
 
 _SH_GAP = r"(?:[ \t]|\\\n)"
 
+# One shell argument/fragment that may contain separators only while quoted.
+# This keeps `curl 'https://x?a=1&b=2' | sh` detectable while ensuring an
+# unquoted `;` or `&` ends the curl/wget command instead of letting a later,
+# unrelated pipeline become a false hard block.
+_SHELL_QUOTED = r"""(?:'(?:[^']*)'|"(?:\\.|[^"\\])*")"""
+_SHELL_COMMAND_SEGMENT = rf"(?:{_SHELL_QUOTED}|\\\n|[^\n|;&])*"
+
 _SEP = r"(?:\s|(?s:/\*.*?\*/)|//[^\n]*)*"
 
 _FFI = _split_literal("f", "fi")
@@ -194,10 +202,13 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         #
         # `false` also has to be the entire value. `false || true` and
         # `false == false` both start with it and both evaluate true, so the
-        # exemption ends at a value delimiter.
+        # exemption ends at a value delimiter. Comments are valid whitespace in
+        # Dart, so an explicit false followed only by comments and a delimiter
+        # remains exempt without making expressions that merely start with false
+        # exempt as well.
         re.compile(
             rf"""\b{_split_literal("runIn", "Shell")}['"]?\s*:"""
-            r"""(?!\s*false\s*(?:[,);}\]\n]|$))"""
+            rf"""(?!\s*false{_SEP}(?:[,);}}\]\n]|$))"""
         ),
         "runtime shell execution",
     ),
@@ -220,13 +231,12 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (
         re.compile(
-            # `(?:[^\n|]|\\\n)` lets a backslash continuation cross a line;
-            # `\n?` after the pipe covers a pipe left at end of line. The
-            # `(?:\|[^|\n;&]*)*` run allows intermediate stages — `| tee f | sh`
-            # pipes the same downloaded stream into the interpreter — while
-            # refusing to cross `;` or `&`, which would end the pipeline and
-            # make a later `| sh` a different command.
-            r"(?:curl|wget)(?:[^\n|]|\\\n)*(?:(?<!\|)\|(?!\|)[^|\n;&]*)*"
+            # Quoted arguments may legitimately contain `;`, `&`, or `|`; an
+            # unquoted separator ends the download command. Intermediate pipe
+            # stages use the same quote-aware segment so `| sed 's;a;b;' | sh`
+            # stays detectable without crossing into a later unrelated command.
+            rf"(?:curl|wget){_SHELL_COMMAND_SEGMENT}"
+            rf"(?:(?<!\|)\|(?!\|){_SHELL_COMMAND_SEGMENT})*"
             rf"(?<!\|)\|(?!\|)[ \t]*\n?[ \t]*"
             rf"{_EXEC_WRAPPER}(?:/\S+/)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
             r"|\b(?:sh|bash|zsh)\s+<\(\s*(?:curl|wget)\b"
