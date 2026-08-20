@@ -10,13 +10,17 @@ lives in `scripts/check_pr_security_surface.py`; its tests are
 
 - **Ordinary PRs pass untouched.** UI, tests and docs changes produce
   `sensitive=false` and the gate is a no-op.
-- **Sensitive surfaces need a review.** Changes to CI, automation scripts,
-  dependency manifests, Android permissions, native Linux code, or to
+- **Sensitive surfaces need a review.** Changes to CI, automation trees
+  (`scripts/`, `tool/`, `tools/`), dependency manifests, build toolchain pins
+  (`.flutter-version`, `.java-version`, the Gradle wrapper and its
+  `distributionUrl`), Android permissions, native Linux code, or to
   auth/network/persistence code — and added behaviour such as new network
   clients, filesystem writes or database migrations — require **TheZupZup to
   have approved the exact current HEAD**. Pushing a new commit changes the
   HEAD, so the previous approval no longer applies.
-- **A few additions are rejected outright.** Runtime process/shell execution,
+- **A few additions are rejected outright.** Runtime process execution, shell
+  execution enabled by a flag (an explicit `false` is not a capability and is
+  not blocked),
   FFI and dynamic library loading, the privileged pull-request trigger variant
   (`pull_request` + `_target`), Actions `write-all` permissions, and
   download-and-execute shell patterns are not bypassable by approval. If

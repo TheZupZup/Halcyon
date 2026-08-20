@@ -35,9 +35,19 @@ UNKNOWN_PATH = "<unresolved diff path>"
 
 SENSITIVE_PATH_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^\.github/(workflows|actions)/"), "CI / GitHub Actions"),
-    (re.compile(r"^scripts/"), "repository automation script"),
+    # scripts/, tool/ and tools/ all hold code that CI executes:
+    # tool/version_from_tag.dart gates release versioning and
+    # tools/large_library/ is run by the large-library workflow.
+    (re.compile(r"^(?:scripts|tool|tools)/"), "repository automation script"),
     (re.compile(r"^(pubspec\.ya?ml|pubspec\.lock)$"), "dependency manifest / lockfile"),
     (re.compile(r"^android/.*(AndroidManifest\.xml|\.gradle(?:\.kts)?|gradle\.properties)$"), "Android permissions / build configuration"),
+    # The Gradle wrapper decides which Gradle is downloaded and from where
+    # (distributionUrl), and the wrapper jar is executed by every Android
+    # build. The repository's own toolchain guard covers only the automated
+    # `toolchain/flutter-sdk` branch, by design, so an ordinary PR editing a
+    # pin is unreviewed without this.
+    (re.compile(r"(?:^|/)gradle/wrapper/"), "build toolchain distribution / wrapper"),
+    (re.compile(r"^\.[a-z0-9]+-version$"), "build toolchain pin"),
     (re.compile(r"^linux/.*(CMakeLists\.txt|\.cc|\.cpp|\.c|\.h|\.hpp)$"), "native Linux code / build configuration"),
     (re.compile(r"^lib/.*(?:auth|credential|token|session|secure|secret)", re.I), "authentication / credential handling"),
     (re.compile(r"^lib/.*(?:network|http|client|socket|provider|source)", re.I), "network / provider boundary"),
@@ -98,7 +108,16 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(rf"\bProcess{_SEP}\.{_SEP}(?:run|runSync|start|startSync|killPid)\b"),
         "runtime process execution",
     ),
-    (re.compile(rf"""\b{_split_literal("runIn", "Shell")}\b"""), "runtime shell execution"),
+    # Anything but an explicit `false`: `true` enables a shell, and a variable
+    # or expression cannot be judged from here. `false` genuinely disables it,
+    # and blocking that would be a false positive an approval could not clear.
+    (
+        # The whitespace sits inside the lookahead on purpose: with `\s*` before
+        # it, the engine backtracks to zero width and tests the space instead of
+        # the value, so `false` slips through as "not false".
+        re.compile(rf"""\b{_split_literal("runIn", "Shell")}['"]?\s*:(?!\s*false\b)"""),
+        "runtime shell execution",
+    ),
     (
         re.compile(
             rf"""['"]dart:{_FFI}['"]"""
