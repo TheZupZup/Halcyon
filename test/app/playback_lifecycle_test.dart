@@ -101,6 +101,9 @@ void main() {
     await _foreground(tester);
 
     // No re-load (playTracks) and no extra play(): the engine is left running.
+    // (Linux post-suspend recovery is covered in
+    // linux_suspend_resume_recovery_test.dart; this fake stands in for the
+    // ActivePlaybackController production path.)
     expect(controller.playedTracks, isEmpty);
     expect(controller.playCount, 0);
     expect(controller.pauseCount, 0);

@@ -179,6 +179,7 @@ undeclared network access to an isolated `flatpak-builder` build.
 | Area | State | Why |
 | --- | --- | --- |
 | **Audio playback** | Supported | media_kit/libmpv through `LinuxPlaybackController`; local files and resolved Jellyfin, Navidrome/Subsonic, and Plex HTTP(S) streams share one backend. |
+| **Suspend / resume** | Supported (app side); real device/sink timing varies | Lifecycle `paused`→`resumed` arms a bounded Linux-only reload of an actively playing track after a short backoff ([issue #466](https://github.com/TheZupZup/Linthra/issues/466)). See [Suspend / resume (manual matrix)](#suspend--resume-manual-matrix). |
 | **Light/Dark/System theme** | Supported (app side); the native brightness bridge itself is Flutter's, not independently verified here | Settings → Appearance's System/Light/Dark choice ([issue #459](https://github.com/TheZupZup/Linthra/issues/459)) is the same shared `ThemeModePreference`/`ThemeModeController` Android uses, mapped onto `MaterialApp`'s own `themeMode` — no `gsettings`/D-Bus/GNOME/KDE-specific code in Linthra itself, and no separate Linux theme path (`test/app/theme_mode_test.dart` proves that). *Supplying* System's brightness on Linux is Flutter's GTK embedder (via the XDG desktop portal or a GNOME GSettings fallback); that native bridge is outside Linthra's code and isn't exercised by `flutter test`, which runs on the Dart VM and injects brightness straight into Flutter's test `PlatformDispatcher`. Reproducing the real bridge deterministically in CI would need a running portal daemon or GNOME schemas — exactly the DE-specific setup this app avoids adding — so it stays untested here and is a known gap, not a claimed guarantee. |
 | Media session / MPRIS | Unsupported | `audio_service` is Android/iOS only. `PlatformMediaSessionBinding` returns the inert binding on Linux, so `audio_service` is never initialised there. MPRIS is later desktop work. |
 | Android Auto | Android-only, by design | It is an Android platform integration, not a Linthra feature. |
@@ -245,6 +246,35 @@ widget.
 `unmanaged_files` in `.metadata`, so `flutter migrate` leaves Linthra's edits
 alone. If someone re-runs `flutter create --platforms=linux .` anyway, the
 checker above is what catches the reverted title and the lost SQLite seam.
+
+## Suspend / resume (manual matrix)
+
+System sleep and wake are only partly visible to Flutter: the embedder usually
+delivers `AppLifecycleState.paused` → `resumed`, but audio devices (PulseAudio /
+PipeWire, Bluetooth sinks) and the network often come back later than that
+signal. Linthra therefore:
+
+* arms recovery only on **`paused`** (not brief `inactive` dialogs);
+* on Linux, after resume, waits a short backoff then **re-resolves and reloads
+  the current track on the same engine** when playback was active across
+  suspend — never a second player, so audio cannot duplicate;
+* leaves a **user-paused** track paused;
+* surfaces the existing error + Retry UI when recovery fails;
+* does **not** enable this path on Android (screen-on must never auto-restart).
+
+Automated coverage: `test/core/services/linux_suspend_resume_recovery_test.dart`
+and the ActivePlaybackController lifecycle tests. Re-check on a real machine
+before a Linux milestone release:
+
+| Scenario | While… | Expect after wake |
+| --- | --- | --- |
+| Lid close / Sleep | Playing a **local** file | Same track/queue; audio returns near the prior position; no second stream |
+| Lid close / Sleep | Playing a **remote** (Jellyfin / Navidrome / Plex) stream | Fresh stream URL; same logical track/queue; Reconnecting… then playing, or error + Retry if the server is still down |
+| Lid close / Sleep | **Paused** | Still paused; pressing play resumes the same track |
+| Sleep with **Bluetooth** headphones offline | Playing | Recoverable error or success once the sink returns; never hung forever |
+| Sleep with **network** offline | Playing remote | Bounded recovery; Retry works when connectivity returns |
+| Minimize only (no sleep) | Playing | App stays responsive; no crash; ideally continues without a full reload |
+| Repeat sleep/wake **3×** | Playing | Still one coherent queue/position; no growing listener/service leak; UI stays usable |
 
 ## Release tarball
 
