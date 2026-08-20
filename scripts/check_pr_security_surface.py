@@ -93,7 +93,13 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         "runtime FFI / dynamic library loading",
     ),
     (re.compile(rf"\b{_PR_TARGET_TRIGGER}\b"), f"{_PR_TARGET_TRIGGER} workflow trigger"),
-    (re.compile(r"""\bpermissions\s*:\s*['"]?write-all\b|^\s*['"]?write-all['"]?\s*$"""), "GitHub Actions write-all permissions"),
+    (
+        re.compile(
+            r"""\bpermissions\s*:\s*['"]?write-all\b|^[ \t]*['"]?write-all['"]?[ \t]*$""",
+            re.MULTILINE,
+        ),
+        "GitHub Actions write-all permissions",
+    ),
     (
         re.compile(
             r"(?:curl|wget)[^\n|]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
@@ -267,6 +273,41 @@ def added_lines(base: str, head: str) -> list[tuple[str, str]]:
     return additions
 
 
+_SHELL_LINE_CONTINUATION = re.compile(r"\\\n[ \t]*")
+_SHELL_PIPE_CONTINUATION = re.compile(r"\|[ \t]*\n[ \t]*")
+
+
+def fold_continuations(text: str) -> str:
+    """Rejoin shell line continuations inside a block of added lines.
+
+    A trailing backslash, or a trailing pipe, carries one shell command onto the
+    next line. The download-and-execute rule deliberately refuses to match
+    across a newline — otherwise an unrelated interpreter invocation far below a
+    download would trip it — so a genuine continuation has to be folded away
+    before that rule runs.
+    """
+
+    text = _SHELL_LINE_CONTINUATION.sub(" ", text)
+    return _SHELL_PIPE_CONTINUATION.sub("| ", text)
+
+
+def group_additions(additions: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Collapse a file's added lines into one block of text to scan.
+
+    Rules are applied to the block rather than to each line on its own, because
+    the constructs they describe do not have to sit on one physical line. Dart
+    accepts a newline anywhere between tokens, so `Process` and `.run(...)` can
+    be split across two added lines — and, with `--unified=0`, across two hunks
+    with an untouched blank line or comment between them. Joining every added
+    line of a file leaves nowhere for a blocked construct to hide.
+    """
+
+    blocks: dict[str, list[str]] = {}
+    for path, line in additions:
+        blocks.setdefault(path, []).append(line)
+    return [(path, fold_continuations("\n".join(lines))) for path, lines in blocks.items()]
+
+
 def dedupe(findings: list[Finding]) -> list[Finding]:
     seen: set[tuple[str, str]] = set()
     result: list[Finding] = []
@@ -287,16 +328,16 @@ def classify(files: list[str], additions: list[tuple[str, str]]) -> tuple[list[F
             if pattern.search(path):
                 sensitive.append(Finding(path, reason))
 
-    for path, line in additions:
+    for path, block in group_additions(additions):
         if path == UNKNOWN_PATH:
             sensitive.append(
                 Finding(UNKNOWN_PATH, "diff header could not be decoded; review manually")
             )
         for pattern, reason in SENSITIVE_ADDITION_RULES:
-            if pattern.search(line):
+            if pattern.search(block):
                 sensitive.append(Finding(path, reason))
         for pattern, reason in BLOCKED_ADDITION_RULES:
-            if pattern.search(line):
+            if pattern.search(block):
                 blocked.append(Finding(path, reason))
 
     return dedupe(sensitive), dedupe(blocked)

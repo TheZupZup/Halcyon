@@ -46,12 +46,23 @@ jobs:
         | .state // ""
 
     steps:
-      # NOTE ON SCOPE: for `pull_request` events GitHub evaluates the workflow
-      # file from the PR's merge ref, so a PR can edit this file. That is not
-      # something a workflow can defend against from the inside; the protection
-      # is branch protection requiring "Security surface guard" by name, which a
-      # PR cannot satisfy by deleting or renaming the job. What this workflow
-      # does guarantee is that the *scanner* it runs comes from the trusted base.
+      # NOTE ON SCOPE — read before relying on this as the only gate.
+      #
+      # For `pull_request` events GitHub evaluates the workflow definition from
+      # the PR's merge ref, so a PR can edit this file. A contributor can keep
+      # the workflow and job name while replacing these steps with a no-op, and
+      # a required status check matched only by name would then go green without
+      # the trusted scanner ever running. Requiring "Security surface guard" by
+      # name is therefore NOT sufficient on its own, and no change inside this
+      # file can make it sufficient.
+      #
+      # Closing that hole is a repository setting: a ruleset whose required
+      # workflow is pinned to a trusted ref, so the definition that runs is the
+      # one a PR cannot edit. docs/pr-security-guard.md has the setup.
+      #
+      # What this workflow does guarantee on its own is narrower but real: the
+      # *scanner* it runs is read from the trusted base commit, so a PR cannot
+      # weaken the classifier in the same change it is trying to sneak past it.
       - name: Checkout PR head
         uses: actions/checkout@v7
         with:

