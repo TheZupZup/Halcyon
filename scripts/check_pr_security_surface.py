@@ -48,7 +48,14 @@ SENSITIVE_PATH_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     # pin is unreviewed without this.
     (re.compile(r"(?:^|/)gradle/wrapper/"), "build toolchain distribution / wrapper"),
     (re.compile(r"^\.[a-z0-9]+-version$"), "build toolchain pin"),
-    (re.compile(r"^linux/.*(CMakeLists\.txt|\.cc|\.cpp|\.c|\.h|\.hpp)$"), "native Linux code / build configuration"),
+    # linux/ is the desktop runner; native/ holds the C++ DSP library and the
+    # Rust core, both compiled by CI and the Rust one also executed by it
+    # (`cargo run --locked` in rust-core.yml).
+    (re.compile(r"^(?:linux|native)/.*\.(?:cc|cpp|cxx|c|h|hpp|hxx|rs|cmake)$"), "native code"),
+    (re.compile(r"(?:^|/)CMakeLists\.txt$"), "native build configuration"),
+    # A Cargo dependency may carry a build script, which runs at build time on
+    # the CI machine — the same trust boundary pubspec.yaml crosses.
+    (re.compile(r"(?:^|/)Cargo\.(?:toml|lock)$"), "dependency manifest / lockfile"),
     (re.compile(r"^lib/.*(?:auth|credential|token|session|secure|secret)", re.I), "authentication / credential handling"),
     (re.compile(r"^lib/.*(?:network|http|client|socket|provider|source)", re.I), "network / provider boundary"),
     (re.compile(r"^lib/.*(?:database|repository|store|storage|persistence|cache)", re.I), "persistent storage"),

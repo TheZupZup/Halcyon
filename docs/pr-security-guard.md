@@ -13,7 +13,8 @@ lives in `scripts/check_pr_security_surface.py`; its tests are
 - **Sensitive surfaces need a review.** Changes to CI, automation trees
   (`scripts/`, `tool/`, `tools/`), dependency manifests, build toolchain pins
   (`.flutter-version`, `.java-version`, the Gradle wrapper and its
-  `distributionUrl`), Android permissions, native Linux code, or to
+  `distributionUrl`), Cargo manifests and lockfiles, Android permissions,
+  native code under `linux/` and `native/` with its CMake build files, or to
   auth/network/persistence code — and added behaviour such as new network
   clients, filesystem writes or database migrations — require **TheZupZup to
   have approved the exact current HEAD**. Pushing a new commit changes the

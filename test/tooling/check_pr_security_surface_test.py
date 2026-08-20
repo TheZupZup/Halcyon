@@ -330,6 +330,36 @@ class AutomationAndToolchainPaths(ScannerTestCase):
         self.assertOrdinary(self.build({}, {".gitignore": "build/\n"}))
 
 
+class NativeAndCargoPaths(ScannerTestCase):
+    """CI compiles native/ and runs the Rust core from it."""
+
+    def test_cargo_manifest_and_lockfile(self):
+        """A Cargo dependency may carry a build script that runs during CI."""
+        for path in ("native/linthra_core/Cargo.toml", "native/linthra_core/Cargo.lock"):
+            with self.subTest(path):
+                self.assertSensitive(self.build({path: "a = 1\n"}, {path: "a = 2\n"}))
+
+    def test_native_sources(self):
+        for path in (
+            "native/linthra_audio/src/dsp.cpp",
+            "native/linthra_audio/include/linthra_audio/dsp.hpp",
+            "native/linthra_core/src/lib.rs",
+            "linux/runner/main.cc",
+        ):
+            with self.subTest(path):
+                self.assertSensitive(self.build({}, {path: "// new\n"}))
+
+    def test_cmake_build_files(self):
+        for path in ("native/linthra_audio/CMakeLists.txt", "linux/flutter/generated_plugins.cmake"):
+            with self.subTest(path):
+                self.assertSensitive(self.build({}, {path: "# new\n"}))
+
+    def test_documentation_beside_native_code_stays_ordinary(self):
+        self.assertOrdinary(
+            self.build({}, {"native/linthra_core/README.md": "# notes\n"})
+        )
+
+
 class BlockedAdditions(ScannerTestCase):
     def test_direct_process_run(self):
         self.assertBlocked(
