@@ -1,0 +1,7 @@
+Linthra 0.2.3
+
+- Makes Linux playback recover more reliably from server/network drops and suspend/resume.
+- Restores the Linux queue and position safely after an unexpected restart, without autoplay.
+- Adds the first Audiobookshelf connection, authentication, and library foundation.
+- Improves self-hosted server URLs, including IPv6 literals, and speeds up source re-syncs.
+- Improves Linux defaults, System theme coverage, and player accessibility.
