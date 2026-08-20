@@ -65,9 +65,7 @@ class _Engine extends Fake implements AudioPlayer {
 }
 
 class _Resolver implements PlayableUriResolver {
-  _Resolver({this.reachable = true});
-
-  bool reachable;
+  bool reachable = true;
   final List<String> calls = <String>[];
   int _n = 0;
 
