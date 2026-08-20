@@ -76,7 +76,8 @@ class PersistedPlaybackSession {
       position: position < Duration.zero ? Duration.zero : position,
       shuffleEnabled: shuffleEnabled,
       repeatMode: repeatMode,
-      originalOrder: originalOrder == null ? null : List<Track>.of(originalOrder),
+      originalOrder:
+          originalOrder == null ? null : List<Track>.of(originalOrder),
     );
   }
 
@@ -147,7 +148,8 @@ class PersistedPlaybackSession {
     }
 
     final Object? rawPosition = json['p'];
-    final int positionMs = rawPosition is int && rawPosition >= 0 ? rawPosition : 0;
+    final int positionMs =
+        rawPosition is int && rawPosition >= 0 ? rawPosition : 0;
 
     final bool shuffleEnabled = json['s'] == true;
     final RepeatMode repeatMode = _repeatModeFromName(json['r']);
@@ -223,9 +225,7 @@ bool isLogicalTrackUri(String uri) {
   final String? bareId = MusicProviders.bareRemoteIdForTrackUri(trimmed);
   if (bareId != null) {
     // Remote: must be exactly `scheme:<non-empty id>` with no path/query noise.
-    return bareId.isNotEmpty &&
-        !bareId.contains('/') &&
-        !bareId.contains('?');
+    return bareId.isNotEmpty && !bareId.contains('/') && !bareId.contains('?');
   }
 
   // Local: anything non-HTTP that isn't a remote scheme is treated as a path /
@@ -246,8 +246,7 @@ Map<String, dynamic> logicalTrackToJson(Track track) {
     if (track.albumArtistName != null) 'albumArtist': track.albumArtistName,
     'durationMs': track.duration.inMilliseconds,
     if (track.trackNumber != null) 'trackNumber': track.trackNumber,
-    if (track.artworkUri != null &&
-        isPersistableArtworkUri(track.artworkUri!))
+    if (track.artworkUri != null && isPersistableArtworkUri(track.artworkUri!))
       'artwork': track.artworkUri.toString(),
   };
 }

@@ -54,7 +54,8 @@ class PlaybackSessionPersistence {
       final PersistedPlaybackSession? raw = await _store.load();
       if (raw == null) return;
 
-      final PersistedPlaybackSession? session = PersistedPlaybackSession.fromJson(
+      final PersistedPlaybackSession? session =
+          PersistedPlaybackSession.fromJson(
         raw.toJson(),
         isTrackRestorable: _isTrackRestorable,
       );

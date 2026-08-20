@@ -193,8 +193,7 @@ void main() {
 
       final Track? roundTrip = logicalTrackFromJson(<String, dynamic>{
         ...logicalTrackToJson(jellyfin),
-        'artwork':
-            'https://server/Items/101/Images/Primary?api_key=secret',
+        'artwork': 'https://server/Items/101/Images/Primary?api_key=secret',
       });
       expect(roundTrip!.artworkUri, isNull);
     });

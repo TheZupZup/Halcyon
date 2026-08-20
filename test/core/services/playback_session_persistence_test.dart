@@ -60,7 +60,8 @@ void main() {
       expect(saved!.current!.uri, remote.uri);
       expect(saved.position, const Duration(seconds: 33));
 
-      final FakePlaybackController restoredController = FakePlaybackController();
+      final FakePlaybackController restoredController =
+          FakePlaybackController();
       final PlaybackSessionPersistence restorer = PlaybackSessionPersistence(
         store: store,
         controller: restoredController,
@@ -71,7 +72,8 @@ void main() {
 
       expect(restoredController.restoreSessionCount, 1);
       expect(restoredController.lastRestoreAutoplay, isFalse);
-      expect(restoredController.lastRestorePosition, const Duration(seconds: 33));
+      expect(
+          restoredController.lastRestorePosition, const Duration(seconds: 33));
       expect(restoredController.state.status, PlaybackStatus.paused);
       expect(restoredController.state.currentTrack?.uri, remote.uri);
       expect(restoredController.state.isPlaying, isFalse);
@@ -171,7 +173,8 @@ void main() {
           currentIndex: 0,
         ),
       );
-      final _ThrowingRestoreController controller = _ThrowingRestoreController();
+      final _ThrowingRestoreController controller =
+          _ThrowingRestoreController();
       final PlaybackSessionPersistence persistence = PlaybackSessionPersistence(
         store: store,
         controller: controller,
