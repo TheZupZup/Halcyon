@@ -25,6 +25,11 @@ lives in `scripts/check_pr_security_surface.py`; its tests are
 - **The scanner comes from the trusted base.** The workflow reads
   `scripts/check_pr_security_surface.py` out of the PR's base commit, so a PR
   cannot weaken the classifier in the same change it is trying to pass.
+- **It reads post-change source, not just `+` lines.** Rules run against each
+  changed file's content at the PR head, and a match is reported only when it
+  overlaps a line the PR added. A construct assembled partly from tokens that
+  were already in the file is therefore caught, while code the PR never touched
+  is left alone.
 - **It fails closed.** A missing base commit, an undecodable diff header, a
   scanner crash, or a scan that ends without a verdict all fail the job.
 
@@ -80,11 +85,12 @@ python3 test/tooling/check_pr_security_surface_test.py
 
 They build synthetic git repositories for every classification and blocked
 pattern, cover the diff-rendering tricks that would otherwise hide an added
-line (quoted pathnames, `.gitattributes` `-diff`, renames, constructs split
-across lines and hunks), and execute the workflow's own trusted-scanner loader
-and review-decision filter straight out of the YAML.
+line (quoted pathnames, `.gitattributes` `-diff`, renames, comments wedged between
+tokens, and constructs split across lines, across hunks, or completed from
+untouched context), and execute the workflow's own trusted-scanner loader and
+review-decision filter straight out of the YAML.
 
-One constraint is easy to trip over: the guard scans every added line of every
+One constraint is easy to trip over: the guard scans the content of every
 changed file, **including its own sources**. A blocked pattern written out in
 full in the scanner, the workflow, or the tests would make the guard reject any
 PR that touches the guard. `_split_literal()` in the scanner and `blocked()` in

@@ -13,6 +13,7 @@ it exits non-zero rather than reporting an ordinary-risk diff.
 from __future__ import annotations
 
 import argparse
+import bisect
 import re
 import subprocess
 import sys
@@ -117,7 +118,9 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (
         re.compile(
-            r"(?:curl|wget)[^\n|]*\|\s*(?:sudo\s+)?(?:/\S+/)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
+            # `(?:[^\n|]|\\\n)` lets a backslash continuation cross a line;
+            # `\n?` after the pipe covers a pipe left at end of line.
+            r"(?:curl|wget)(?:[^\n|]|\\\n)*\|[ \t]*\n?[ \t]*(?:sudo\s+)?(?:/\S+/)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
             r"|\b(?:sh|bash|zsh)\s+<\(\s*(?:curl|wget)\b"
             r"|\b(?:sh|bash|zsh)\s+-c\s+['\"]?\$\(\s*(?:curl|wget)\b"
             r"|\beval\s+.*\$\(\s*(?:curl|wget)\b"
@@ -131,11 +134,13 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(
             r"(?:curl|wget)[^\n]*?"
             r"(?:\s-o\s+|\s--output[= ]|\s-O\s+|\s*>\s*)"
-            r"(?P<target>['\"]?[^\s'\";&|<>]+['\"]?)"
+            # Quotes live outside the capture so `-o /tmp/i` and `sh "/tmp/i"`
+            # compare equal.
+            r"['\"]?(?P<target>[^\s'\";&|<>]+)['\"]?"
             r"[\s\S]{0,2000}?"
             r"(?:[\s;&|(](?:sudo\s+)?(?:/\S+/)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\s+"
             r"|[\s;&|(]chmod\s+\+x\s+)"
-            r"(?P=target)"
+            r"['\"]?(?P=target)\b"
         ),
         "download-then-execute shell pattern",
     ),
@@ -264,7 +269,26 @@ def _header_path(rest: str) -> str | None:
     return None
 
 
-def added_lines(base: str, head: str) -> list[tuple[str, str]]:
+@dataclass(frozen=True)
+class ChangedSource:
+    """A changed file's post-change text plus the lines this PR added to it."""
+
+    path: str
+    text: str
+    added_lines: frozenset[int]
+
+
+_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+def added_line_numbers(base: str, head: str) -> dict[str, set[int]]:
+    """Map each changed path to the 1-based line numbers it gained.
+
+    Only hunk headers are read. The added text itself is taken from the file's
+    post-change blob instead, which is why `--text` matters here: without it a
+    `.gitattributes` `-diff` entry would suppress the hunk headers too.
+    """
+
     diff = run_git(
         *GIT_CONFIG_FLAGS,
         "diff",
@@ -274,68 +298,95 @@ def added_lines(base: str, head: str) -> list[tuple[str, str]]:
         "--",
     )
 
+    added: dict[str, set[int]] = {}
     current_path: str | None = None
-    in_hunk = False
-    additions: list[tuple[str, str]] = []
+    seen_header = False
 
-    # Split on "\n" only. `str.splitlines()` also breaks on \x0b, \x0c and
-    # \u2028, which Dart accepts as whitespace *inside* an expression, so a
-    # contributor could otherwise split a blocked pattern across two "lines"
-    # that neither half matches.
     for line in diff.split("\n"):
         if line.startswith("diff --git "):
             current_path = None
-            in_hunk = False
+            seen_header = False
             continue
-        if line.startswith("@@"):
-            # Everything after the first hunk header belongs to file content,
-            # so an added line that itself begins with "++ " is never mistaken
-            # for a `+++ ` file header.
-            in_hunk = True
+        if line.startswith("+++ ") and not seen_header:
+            current_path = _header_path(line[4:])
+            seen_header = True
             continue
-        if not in_hunk:
-            if line.startswith("+++ "):
-                current_path = _header_path(line[4:])
+        match = _HUNK.match(line)
+        if not match:
             continue
-        if line.startswith("+"):
-            additions.append((current_path or UNKNOWN_PATH, line[1:]))
+        seen_header = True
+        start = int(match.group(1))
+        count = 1 if match.group(2) is None else int(match.group(2))
+        if count == 0:
+            continue
+        path = current_path or UNKNOWN_PATH
+        added.setdefault(path, set()).update(range(start, start + count))
 
-    return additions
+    return added
 
 
-_SHELL_LINE_CONTINUATION = re.compile(r"\\\n[ \t]*")
-_SHELL_PIPE_CONTINUATION = re.compile(r"\|[ \t]*\n[ \t]*")
+def file_text(head: str, path: str) -> str | None:
+    """Post-change content of `path`, or None if the PR deleted it.
 
-
-def fold_continuations(text: str) -> str:
-    """Rejoin shell line continuations inside a block of added lines.
-
-    A trailing backslash, or a trailing pipe, carries one shell command onto the
-    next line. The download-and-execute rule deliberately refuses to match
-    across a newline — otherwise an unrelated interpreter invocation far below a
-    download would trip it — so a genuine continuation has to be folded away
-    before that rule runs.
+    Read as a blob rather than out of the diff: blob output is not affected by
+    any `.gitattributes` the PR ships, and it carries the untouched context that
+    a blocked construct may have been completed from.
     """
 
-    text = _SHELL_LINE_CONTINUATION.sub(" ", text)
-    return _SHELL_PIPE_CONTINUATION.sub("| ", text)
+    try:
+        return run_git(*GIT_CONFIG_FLAGS, "show", f"{head}:{path}")
+    except ScannerError:
+        return None
 
 
-def group_additions(additions: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    """Collapse a file's added lines into one block of text to scan.
+def changed_sources(base: str, head: str) -> tuple[list[ChangedSource], bool]:
+    """Post-change text for every file this PR added lines to.
 
-    Rules are applied to the block rather than to each line on its own, because
-    the constructs they describe do not have to sit on one physical line. Dart
-    accepts a newline anywhere between tokens, so `Process` and `.run(...)` can
-    be split across two added lines — and, with `--unified=0`, across two hunks
-    with an untouched blank line or comment between them. Joining every added
-    line of a file leaves nowhere for a blocked construct to hide.
+    Returns the sources and whether any hunk could not be attributed to a path.
     """
 
-    blocks: dict[str, list[str]] = {}
-    for path, line in additions:
-        blocks.setdefault(path, []).append(line)
-    return [(path, fold_continuations("\n".join(lines))) for path, lines in blocks.items()]
+    sources: list[ChangedSource] = []
+    unresolved = False
+
+    for path, lines in added_line_numbers(base, head).items():
+        if path == UNKNOWN_PATH:
+            unresolved = True
+            continue
+        text = file_text(head, path)
+        if text is None:
+            # Added lines but no blob at head: the path was renamed away or
+            # removed by a later commit in the range. Nothing left to scan.
+            continue
+        sources.append(ChangedSource(path, text, frozenset(lines)))
+
+    return sources, unresolved
+
+
+def _line_index(text: str) -> list[int]:
+    """Offset at which each 1-based line starts."""
+
+    offsets = [0]
+    for index, char in enumerate(text):
+        if char == "\n":
+            offsets.append(index + 1)
+    return offsets
+
+
+def touches_added_lines(
+    offsets: list[int], added: frozenset[int], start: int, end: int
+) -> bool:
+    """Does a match spanning [start, end) overlap a line this PR added?
+
+    This is what lets the scanner read whole post-change files without
+    punishing code the PR never touched: a construct already present in an
+    untouched region matches, but does not count. It also catches the reverse
+    case, where a PR completes a blocked construct out of existing tokens — the
+    match then spans the added fragment and is reported.
+    """
+
+    first = bisect.bisect_right(offsets, start)
+    last = bisect.bisect_right(offsets, max(start, end - 1))
+    return any(line in added for line in range(first, last + 1))
 
 
 def dedupe(findings: list[Finding]) -> list[Finding]:
@@ -349,7 +400,11 @@ def dedupe(findings: list[Finding]) -> list[Finding]:
     return result
 
 
-def classify(files: list[str], additions: list[tuple[str, str]]) -> tuple[list[Finding], list[Finding]]:
+def classify(
+    files: list[str],
+    sources: list[ChangedSource],
+    unresolved_paths: bool = False,
+) -> tuple[list[Finding], list[Finding]]:
     sensitive: list[Finding] = []
     blocked: list[Finding] = []
 
@@ -358,17 +413,24 @@ def classify(files: list[str], additions: list[tuple[str, str]]) -> tuple[list[F
             if pattern.search(path):
                 sensitive.append(Finding(path, reason))
 
-    for path, block in group_additions(additions):
-        if path == UNKNOWN_PATH:
-            sensitive.append(
-                Finding(UNKNOWN_PATH, "diff header could not be decoded; review manually")
-            )
-        for pattern, reason in SENSITIVE_ADDITION_RULES:
-            if pattern.search(block):
-                sensitive.append(Finding(path, reason))
-        for pattern, reason in BLOCKED_ADDITION_RULES:
-            if pattern.search(block):
-                blocked.append(Finding(path, reason))
+    if unresolved_paths:
+        sensitive.append(
+            Finding(UNKNOWN_PATH, "diff header could not be decoded; review manually")
+        )
+
+    for source in sources:
+        offsets = _line_index(source.text)
+        for rules, sink in (
+            (SENSITIVE_ADDITION_RULES, sensitive),
+            (BLOCKED_ADDITION_RULES, blocked),
+        ):
+            for pattern, reason in rules:
+                for match in pattern.finditer(source.text):
+                    if touches_added_lines(
+                        offsets, source.added_lines, match.start(), match.end()
+                    ):
+                        sink.append(Finding(source.path, reason))
+                        break
 
     return dedupe(sensitive), dedupe(blocked)
 
@@ -401,12 +463,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         files = changed_files(args.base, args.head)
-        additions = added_lines(args.base, args.head)
+        sources, unresolved_paths = changed_sources(args.base, args.head)
     except ScannerError as error:
         print(f"::error::PR security surface scan could not inspect the diff: {error}", file=sys.stderr)
         return 2
 
-    sensitive, blocked = classify(files, additions)
+    sensitive, blocked = classify(files, sources, unresolved_paths)
 
     write_report(Path(args.report), files, sensitive, blocked)
 

