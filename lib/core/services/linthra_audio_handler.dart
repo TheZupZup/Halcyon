@@ -470,6 +470,7 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
     switch (status) {
       case PlaybackStatus.playing:
       case PlaybackStatus.buffering:
+      case PlaybackStatus.reconnecting:
       case PlaybackStatus.loading:
         return true;
       case PlaybackStatus.idle:
@@ -525,6 +526,7 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
       case PlaybackStatus.loading:
         return audio.AudioProcessingState.loading;
       case PlaybackStatus.buffering:
+      case PlaybackStatus.reconnecting:
         return audio.AudioProcessingState.buffering;
       case PlaybackStatus.playing:
       case PlaybackStatus.paused:

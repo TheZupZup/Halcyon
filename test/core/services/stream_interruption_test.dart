@@ -88,6 +88,7 @@ void main() {
       expect(result.message, isNot(contains('music.example.com')));
       // It is still classified as a recoverable network drop.
       expect(result.retryable, isTrue);
+      expect(result.message, isNot(contains('Reconnecting')));
     });
   });
 }

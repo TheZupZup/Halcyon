@@ -242,6 +242,7 @@ class _ChromecastSessionHandle implements CastSessionHandle {
     switch (playbackStatus) {
       case PlaybackStatus.playing:
       case PlaybackStatus.buffering:
+      case PlaybackStatus.reconnecting:
       case PlaybackStatus.loading:
         _startPolling();
       case PlaybackStatus.paused:

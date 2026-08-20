@@ -126,6 +126,11 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   /// recovers without ever looping forever on a real outage/expiry.
   static const int _maxStreamRetries = 1;
 
+  /// Pause before the bounded mid-stream retry so a brief glitch can clear and
+  /// we never hammer the server on every drop. Zero in tests.
+  static const Duration _defaultStreamRetryBackoff =
+      Duration(milliseconds: 500);
+
   /// How long a mid-stream re-buffer may persist before it is treated as a dead
   /// stream. Prevents an unreachable server from leaving the UI stuck on
   /// "Buffering…" when the engine never surfaces an error. Set shorter in tests.
@@ -263,6 +268,11 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   /// runs. Never changed in production; tests set this to keep runs fast.
   @visibleForTesting
   Duration midStreamBufferingTimeout = _defaultMidStreamBufferingTimeout;
+
+  /// Delay before the single mid-stream retry. Never changed in production;
+  /// tests set this to [Duration.zero] so recovery stays deterministic.
+  @visibleForTesting
+  Duration streamRetryBackoff = _defaultStreamRetryBackoff;
 
   // Guards against overlapping playback transitions. Every action that changes
   // what's playing — skip to next/previous, jump within the queue or history,
@@ -668,6 +678,13 @@ class JustAudioPlaybackController implements LocalPlaybackController {
     // map to a still-`playing` session) and a real pause/completion/error is
     // unaffected.
     if (status == PlaybackStatus.idle) return;
+    // While a bounded reconnect owns the UI, ignore engine buffering/loading
+    // noise that would replace "Reconnecting…" with plain "Buffering…".
+    if (_state.status == PlaybackStatus.reconnecting &&
+        (status == PlaybackStatus.buffering ||
+            status == PlaybackStatus.loading)) {
+      return;
+    }
     // Playback is healthy again: give a later, independent drop a fresh retry.
     // Do not reset while a mid-stream recovery is still loading — a stale
     // ready/playing event from setUrl must not refill the retry budget mid-attempt.
@@ -701,7 +718,8 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   void _onEngineError(Object error, StackTrace _) {
     if (_suspended) return;
     if (_state.status != PlaybackStatus.playing &&
-        _state.status != PlaybackStatus.buffering) {
+        _state.status != PlaybackStatus.buffering &&
+        _state.status != PlaybackStatus.reconnecting) {
       return;
     }
     _handleStreamFailure(classifyEngineError(error));
@@ -733,16 +751,26 @@ class JustAudioPlaybackController implements LocalPlaybackController {
     try {
       if (interruption.retryable && _retriesForCurrent < _maxStreamRetries) {
         _retriesForCurrent++;
+        // Surface reconnecting before the backoff so the UI is never left on
+        // "playing" while we wait, and never looks like a permanent error.
+        _emit(_state.copyWith(status: PlaybackStatus.reconnecting));
+        _armBufferingWatchdog();
+        final Duration backoff = streamRetryBackoff;
+        if (backoff > Duration.zero) {
+          await Future<void>.delayed(backoff);
+        }
+        // A skip/stop during the backoff owns playback now — don't reload.
+        if (_queue.current?.uri != track.uri) return;
         await _playCurrent(startAt: _state.position, isRetry: true);
         return;
       }
       await _tryRemainingCandidatesOrError(track, interruption.message);
     } finally {
       _streamRecoveryInFlight = false;
-      // Recovery may finish while the UI is still on buffering (setUrl/play
-      // issued, engine quiet). Re-arm so that hang cannot outlive the bound;
-      // [_streamRecoveryInFlight] is clear, so a later timeout can run. No-ops
-      // when we already left buffering (playing / error / loading).
+      // Recovery may finish while the UI is still on buffering/reconnecting
+      // (setUrl/play issued, engine quiet). Re-arm so that hang cannot outlive
+      // the bound; [_streamRecoveryInFlight] is clear, so a later timeout can
+      // run. No-ops when we already left that busy state.
       _armBufferingWatchdogIfBuffering();
     }
   }
@@ -755,9 +783,12 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   }
 
   /// Arms the buffering watchdog only when status is already mid-stream
-  /// buffering — never for initial [PlaybackStatus.loading].
+  /// buffering or reconnecting — never for initial [PlaybackStatus.loading].
   void _armBufferingWatchdogIfBuffering() {
-    if (_state.status != PlaybackStatus.buffering) return;
+    if (_state.status != PlaybackStatus.buffering &&
+        _state.status != PlaybackStatus.reconnecting) {
+      return;
+    }
     _armBufferingWatchdog();
   }
 
@@ -769,7 +800,10 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   void _onBufferingTimeout() {
     _bufferingWatchdog = null;
     if (_suspended) return;
-    if (_state.status != PlaybackStatus.buffering) return;
+    if (_state.status != PlaybackStatus.buffering &&
+        _state.status != PlaybackStatus.reconnecting) {
+      return;
+    }
     if (_queue.current == null) return;
     _handleStreamFailure(
       const StreamInterruption(
@@ -854,6 +888,13 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   /// Drives [_onBufferingTimeout] from a test without waiting on a timer.
   @visibleForTesting
   void onBufferingTimeoutForTesting() => _onBufferingTimeout();
+
+  /// Seeds [PlaybackState.position] so mid-stream recovery tests can assert the
+  /// preserved seek target without driving the engine position stream.
+  @visibleForTesting
+  void setPositionForTesting(Duration position) {
+    _emit(_state.copyWith(position: position));
+  }
 
   /// Maps the engine's (playing, processingState) pair to a [PlaybackStatus].
   ///
@@ -1162,10 +1203,11 @@ class JustAudioPlaybackController implements LocalPlaybackController {
 
     if (isRetry) {
       // Recovering from a mid-stream drop: keep the current track and position
-      // visible and show a calm buffering state, rather than blanking to a fresh
-      // load (which would look like the track jumped back to the start).
-      _emit(_state.copyWith(status: PlaybackStatus.buffering));
-      // Bound this recovery buffering: playing→buffering is not observed here.
+      // visible and show reconnecting, rather than blanking to a fresh load
+      // (which would look like the track jumped back to the start) or a
+      // permanent error.
+      _emit(_state.copyWith(status: PlaybackStatus.reconnecting));
+      // Bound this recovery: playing→buffering is not observed here.
       _armBufferingWatchdog();
     } else {
       // Reset position/duration up front so the UI doesn't show the previous

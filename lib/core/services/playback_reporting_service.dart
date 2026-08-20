@@ -163,8 +163,9 @@ class PlaybackReportingService {
         }
       case PlaybackStatus.loading:
       case PlaybackStatus.buffering:
-        // Indeterminate: keep the last reported phase. A re-buffer stays
-        // "playing"; a fresh load reports nothing until it actually plays.
+      case PlaybackStatus.reconnecting:
+        // Indeterminate: keep the last reported phase. A re-buffer / reconnect
+        // stays "playing"; a fresh load reports nothing until it actually plays.
         break;
     }
   }

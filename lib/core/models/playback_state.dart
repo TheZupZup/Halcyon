@@ -8,13 +8,16 @@ import 'track.dart';
 ///
 /// [loading] is the initial *preparing* state (resolving + opening a source);
 /// [buffering] is a distinct mid-playback re-buffer (the engine wants to play but
-/// is waiting for more data over the network). Keeping them apart lets the UI
-/// show a calm "Buffering…" hint instead of a fresh-load spinner, and keeps the
-/// mini-player from looking frozen during a brief network stall.
+/// is waiting for more data over the network). [reconnecting] is a bounded
+/// mid-stream recovery after a network drop (re-resolving a fresh stream URL),
+/// shown separately from plain buffering and from a permanent [error]. Keeping
+/// them apart lets the UI show "Buffering…" / "Reconnecting…" / Retry instead of
+/// a frozen player or a misleading permanent-failure look.
 enum PlaybackStatus {
   idle,
   loading,
   buffering,
+  reconnecting,
   playing,
   paused,
   completed,
@@ -88,14 +91,22 @@ class PlaybackState {
   bool get hasTrack => currentTrack != null;
   bool get hasNext => upNext.isNotEmpty;
 
-  /// Whether a mid-playback re-buffer is in progress (engine waiting on data).
-  bool get isBuffering => status == PlaybackStatus.buffering;
+  /// Whether a mid-playback re-buffer is in progress (engine waiting on data),
+  /// including a bounded network reconnect attempt.
+  bool get isBuffering =>
+      status == PlaybackStatus.buffering ||
+      status == PlaybackStatus.reconnecting;
 
-  /// Whether the player is preparing or re-buffering — i.e. working, not idle and
-  /// not steadily playing. The mini-player shows a spinner for this so it never
-  /// looks frozen during a network stall.
+  /// Whether a temporary network drop is being recovered (fresh URL resolve).
+  bool get isReconnecting => status == PlaybackStatus.reconnecting;
+
+  /// Whether the player is preparing, re-buffering, or reconnecting — i.e.
+  /// working, not idle and not steadily playing. The mini-player shows a
+  /// spinner for this so it never looks frozen during a network stall.
   bool get isBusy =>
-      status == PlaybackStatus.loading || status == PlaybackStatus.buffering;
+      status == PlaybackStatus.loading ||
+      status == PlaybackStatus.buffering ||
+      status == PlaybackStatus.reconnecting;
 
   PlaybackState copyWith({
     PlaybackStatus? status,
