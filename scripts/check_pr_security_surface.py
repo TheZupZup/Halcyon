@@ -82,6 +82,12 @@ SENSITIVE_PATH_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?:^|/)analysis_options\.ya?ml$"), "static analysis configuration"),
     (re.compile(r"(?:^|/)(?:LICENSE|COPYING|NOTICE)(?:$|\.)"), "licensing"),
     (re.compile(r"(?:^|/)key\.properties$|\.(?:jks|keystore)$"), "release signing material"),
+    # metadata/*.yml is the F-Droid build recipe: its Builds entries carry
+    # sudo/prebuild/build commands, and docs/fdroid-submission.md has the
+    # maintainer copy it into fdroiddata and run a full build from it. The
+    # fastlane changelog and description text beside it really is just text,
+    # and stays ordinary.
+    (re.compile(r"^metadata/.*\.ya?ml$"), "F-Droid build recipe"),
     (re.compile(r"^lib/.*(?:auth|credential|token|session|secure|secret)", re.I), "authentication / credential handling"),
     (re.compile(r"^lib/.*(?:network|http|client|socket|provider|source)", re.I), "network / provider boundary"),
     (re.compile(r"^lib/.*(?:database|repository|store|storage|persistence|cache)", re.I), "persistent storage"),
@@ -609,6 +615,7 @@ def classify(
 
     for source in sources:
         offsets = _line_index(source.text)
+        is_prose = bool(_PROSE_PATH.search(source.path))
         for rules, sink in (
             (SENSITIVE_ADDITION_RULES, sensitive),
             (BLOCKED_ADDITION_RULES, blocked),
@@ -617,12 +624,24 @@ def classify(
                 skip = ADDITION_RULE_SKIP_PATHS.get(reason)
                 if skip is not None and skip.search(source.path):
                     continue
+
+                # A capability rule matching a documentation or plain-text file
+                # has found the name of a capability, not the capability: a page
+                # explaining which APIs are forbidden necessarily writes them
+                # down. Downgrade rather than drop, because a README telling a
+                # reader to pipe a download into a shell is still worth an
+                # owner's eyes — it just must not be an unclearable block.
+                if rules is BLOCKED_ADDITION_RULES and is_prose:
+                    hit_sink, hit_reason = sensitive, f"textual reference to {reason}"
+                else:
+                    hit_sink, hit_reason = sink, reason
+
                 elsewhere = False
                 for match in pattern.finditer(source.text):
                     if touches_added_lines(
                         offsets, source.added_lines, match.start(), match.end()
                     ):
-                        sink.append(Finding(source.path, reason))
+                        hit_sink.append(Finding(source.path, hit_reason))
                         break
                     elsewhere = True
                 else:
@@ -637,13 +656,13 @@ def classify(
                     # maintainer. Eight files in this repository qualify.
                     if not elsewhere:
                         continue
-                    if sink is blocked:
+                    if hit_sink is blocked:
                         # Only eight files in the repository hold one of these,
                         # so any change to one can afford to ask.
                         sensitive.append(
                             Finding(
                                 source.path,
-                                f"change to a file containing existing {reason}",
+                                f"change to a file containing existing {hit_reason}",
                             )
                         )
                     elif source.suppression_removed:
@@ -658,7 +677,7 @@ def classify(
                         sensitive.append(
                             Finding(
                                 source.path,
-                                f"removed suppression may activate existing {reason}",
+                                f"removed suppression may activate existing {hit_reason}",
                             )
                         )
 

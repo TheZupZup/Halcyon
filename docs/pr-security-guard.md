@@ -18,12 +18,20 @@ lives in `scripts/check_pr_security_surface.py`; its tests are
   (`.flutter-version`, `.java-version`, the Gradle wrapper and its
   `distributionUrl`), Cargo manifests and lockfiles, Android permissions, the
   `res/xml/` security and privacy policy and the Kotlin shipped in the APK,
-  the analyzer configuration, licence text and release signing material,
+  the analyzer configuration, licence text, release signing material and the
+  F-Droid build recipe under `metadata/`,
   native code under `linux/` and `native/` with its CMake build files, or to
   auth/network/persistence code — and added behaviour such as new network
   clients, filesystem writes or database migrations — require **TheZupZup to
   have approved the exact current HEAD**. Pushing a new commit changes the
   HEAD, so the previous approval no longer applies.
+- **Naming a blocked capability in prose is not using it.** In a documentation
+  or plain-text file, a blocked pattern is downgraded to a review rather than a
+  rejection — a page listing forbidden APIs has to spell them out. It is
+  downgraded, not ignored: a README telling a reader to pipe a download into a
+  shell still gets an owner's attention. Inside source files the block stands,
+  whatever the surrounding comment or string context, because deciding that
+  needs a lexer and a wrong answer there is a bypass.
 - **A few additions are rejected outright.** Runtime process execution, shell
   execution enabled by a flag (an explicit `false` is not a capability and is
   not blocked),

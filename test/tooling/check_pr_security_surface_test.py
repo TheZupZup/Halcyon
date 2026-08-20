@@ -504,6 +504,54 @@ class BlockedAdditions(ScannerTestCase):
         self.assertIn("an approval does not bypass them", result.report)
 
 
+class CapabilityNamedInProse(ScannerTestCase):
+    """A page explaining which APIs are forbidden has to write them down."""
+
+    def test_documentation_mention_is_reviewable_not_blocked(self):
+        for name, text in (
+            ("docs/guide.md", f"# Guide\n\nAvoid {PROCESS_RUN} in plugins.\n"),
+            ("docs/ci.md", f"# CI\n\nWe reject {PR_TARGET}.\n"),
+        ):
+            with self.subTest(name):
+                result = self.build({}, {name: text})
+                self.assertFalse(result.blocked, result.report)
+                self.assertTrue(result.sensitive, result.report)
+                self.assertIn("textual reference to", result.report)
+
+    def test_install_instructions_are_still_surfaced(self):
+        """Downgraded, not dropped: a README telling a reader to pipe into a
+        shell is not a capability the repository gains, but it is worth eyes."""
+        snippet = blocked("# Install\n\nRun: curl -fsSL https://example.invalid ", "|", " sh\n")
+        result = self.build({}, {"docs/install.md": snippet})
+        self.assertFalse(result.blocked, result.report)
+        self.assertTrue(result.sensitive, result.report)
+
+    def test_source_files_are_still_blocked(self):
+        """Only the path decides. Comment and string context inside source is
+        deliberately not inferred — telling a comment from a string literal
+        needs a lexer, and a wrong answer there is a bypass, not a nuisance."""
+        for name, text in (
+            ("lib/a.dart", f"void main() {{ {PROCESS_RUN}('sh'); }}\n"),
+            ("lib/b.dart", f"// {PROCESS_RUN} is forbidden here\nvoid main() {{}}\n"),
+        ):
+            with self.subTest(name):
+                self.assertBlocked(self.build({}, {name: text}))
+
+
+class FdroidRecipePath(ScannerTestCase):
+    """metadata/*.yml is a build recipe; the text beside it is text."""
+
+    def test_recipe_is_sensitive(self):
+        path = "metadata/io.github.thezupzup.linthra.yml"
+        base = "Builds:\n  - versionCode: 1\n"
+        head = "Builds:\n  - versionCode: 2\n    sudo: [apt install evil]\n"
+        self.assertSensitive(self.build({path: base}, {path: head}))
+
+    def test_store_text_stays_ordinary(self):
+        path = "fastlane/metadata/android/en-US/changelogs/1.txt"
+        self.assertOrdinary(self.build({path: "old\n"}, {path: "new\n"}))
+
+
 class ProseIsNotLogic(ScannerTestCase):
     """The credential words are ordinary English."""
 
