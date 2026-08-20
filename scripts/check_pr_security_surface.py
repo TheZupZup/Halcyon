@@ -50,6 +50,12 @@ SENSITIVE_PATH_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     # config decides HTTPS trust anchors and cleartext, and the backup and
     # data-extraction rules decide what app data leaves the device.
     (re.compile(r"^android/.*/res/xml/"), "Android security / privacy policy"),
+    # Kotlin/Java under android/ implements the platform channels, the SAF
+    # scanner, sharing and the artwork FileProvider, and is compiled into every
+    # release APK by android-release-build.yml. The other trees do not exist
+    # today; naming them keeps a future `flutter create --platforms=` from
+    # landing unclassified privileged code.
+    (re.compile(r"^(?:android|ios|macos|windows)/.*\.(?:kt|java|swift|m|mm)$"), "platform / native app code"),
     (re.compile(r"(?:^|/)gradle/wrapper/"), "build toolchain distribution / wrapper"),
     (re.compile(r"^\.[a-z0-9]+-version$"), "build toolchain pin"),
     # linux/ is the desktop runner; native/ holds the C++ DSP library and the
@@ -105,6 +111,12 @@ def _split_literal(*fragments: str) -> str:
 # string would make the stripper swallow the real code that follows it. Widening
 # the gap between two tokens cannot hide anything, because the separator only
 # ever matches whitespace and comments — never code.
+# Shell whitespace, including a backslash continuation. A command may be broken
+# across lines at any point where a space is legal, so every gap in the download
+# rules has to accept one — the flag, its value and the interpreter's argument
+# alike, not just the first of them.
+_SH_GAP = r"(?:[ \t]|\\\n)"
+
 _SEP = r"(?:\s|(?s:/\*.*?\*/)|//[^\n]*)*"
 
 _FFI = _split_literal("f", "fi")
@@ -162,20 +174,23 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         # keeps this precise: fetching a data file and separately running an
         # unrelated local script does not match.
         re.compile(
-            r"(?:curl|wget)[^\n]*?"
+            rf"(?:curl|wget)(?:[^\n]|\\\n)*?"
             # Short options bundle and may carry the value attached:
-            # `-o f`, `-o f`, `-qO f`, `-sLo f`, `-of`. Long forms cover curl's
+            # `-o f`, `-qO f`, `-sLo f`, `-of`. Long forms cover curl's
             # --output and wget's --output-document.
-            r"(?:\s-[A-Za-z]*[oO]\s*|\s--output(?:-document)?[=\s]\s*|\s*>\s*)"
+            rf"(?:{_SH_GAP}+-[A-Za-z]*[oO]{_SH_GAP}*"
+            rf"|{_SH_GAP}+--output(?:-document)?(?:=|{_SH_GAP}){_SH_GAP}*"
+            rf"|{_SH_GAP}*>{_SH_GAP}*)"
             # Quotes live outside the capture so `-o /tmp/i` and `sh "/tmp/i"`
             # compare equal.
-            r"['\"]?(?P<target>[^\s'\";&|<>]+)['\"]?"
-            r"[\s\S]{0,2000}?"
-            r"(?:[\s;&|(](?:sudo\s+)?(?:/\S+/)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\s+"
-            r"|[\s;&|(]chmod\s+\+x\s+)"
+            rf"['\"]?(?P<target>[^\s'\";&|<>]+)['\"]?"
+            rf"[\s\S]{{0,2000}}?"
+            rf"(?:[\s;&|(](?:sudo{_SH_GAP}+)?(?:/\S+/)?"
+            rf"(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node){_SH_GAP}+"
+            rf"|[\s;&|(]chmod{_SH_GAP}+\+x{_SH_GAP}+)"
             # An argument boundary, not \b: `/tmp/data` must not match inside
             # `/tmp/data-cleanup.sh`, which is a different file.
-            r"['\"]?(?P=target)(?=$|[\s'\";&|)<>])"
+            rf"['\"]?(?P=target)(?=$|[\s'\";&|)<>])"
         ),
         "download-then-execute shell pattern",
     ),

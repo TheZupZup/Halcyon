@@ -347,6 +347,23 @@ class AndroidSecurityPolicyPaths(ScannerTestCase):
                 self.assertSensitive(self.build({path: "<a/>\n"}, {path: "<b/>\n"}))
 
 
+class PlatformSourcePaths(ScannerTestCase):
+    """Kotlin under android/ ships in every release APK."""
+
+    KOTLIN = "android/app/src/main/kotlin/io/github/thezupzup/linthra/"
+
+    def test_android_kotlin_is_sensitive(self):
+        for name in ("MediaArtworkFileProvider.kt", "SafDocumentScanner.kt", "ShareChannel.kt"):
+            with self.subTest(name):
+                path = self.KOTLIN + name
+                self.assertSensitive(self.build({path: "class A\n"}, {path: "class B\n"}))
+
+    def test_android_resources_stay_ordinary(self):
+        """Only source and policy files, not every android/ asset."""
+        path = "android/app/src/main/res/drawable/ic_launcher.xml"
+        self.assertOrdinary(self.build({}, {path: "<vector/>\n"}))
+
+
 class NativeAndCargoPaths(ScannerTestCase):
     """CI compiles native/ and runs the Rust core from it."""
 
@@ -658,6 +675,22 @@ class DownloadThenExecute(ScannerTestCase):
     def test_download_without_execution_is_not_blocked(self):
         script = f"#!/bin/sh\nwget -q {self.URL}/archive.tar.gz\ntar xf archive.tar.gz\n"
         self.assertOrdinary(self.build({}, {"packaging/bf.sh": script}))
+
+    def test_backslash_continuation_at_every_position(self):
+        """A command may break at any point where a space is legal."""
+        cases = {
+            "before the flag": f"curl -fsSL {self.URL} \\\n  -o /tmp/i && ",
+            "between flag and target": f"curl -fsSL {self.URL} -o \\\n  /tmp/i && ",
+            "before the interpreter": f"curl -fsSL {self.URL} -o /tmp/i && \\\n  ",
+        }
+        for name, prefix in cases.items():
+            with self.subTest(name):
+                script = blocked("#!/bin/sh\n" + prefix, "sh", " /tmp/i\n")
+                self.assertBlocked(self.build({}, {"packaging/k.sh": script}))
+
+    def test_continuation_between_interpreter_and_its_argument(self):
+        script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/i && ", "sh", " \\\n  /tmp/i\n")
+        self.assertBlocked(self.build({}, {"packaging/l.sh": script}))
 
     def test_executed_file_only_sharing_a_prefix_is_not_blocked(self):
         """`/tmp/data` and `/tmp/data-cleanup.sh` are different files."""

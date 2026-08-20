@@ -13,9 +13,10 @@ lives in `scripts/check_pr_security_surface.py`; its tests are
 - **Sensitive surfaces need a review.** Changes to CI, automation trees
   (`scripts/`, `tool/`, `tools/`), dependency manifests, build toolchain pins
   (`.flutter-version`, `.java-version`, the Gradle wrapper and its
-  `distributionUrl`), Cargo manifests and lockfiles, Android permissions and
-  the `res/xml/` security and privacy policy, native code under `linux/` and
-  `native/` with its CMake build files, or to auth/network/persistence code — and added behaviour such as new network
+  `distributionUrl`), Cargo manifests and lockfiles, Android permissions, the
+  `res/xml/` security and privacy policy and the Kotlin shipped in the APK,
+  native code under `linux/` and `native/` with its CMake build files, or to
+  auth/network/persistence code — and added behaviour such as new network
   clients, filesystem writes or database migrations — require **TheZupZup to
   have approved the exact current HEAD**. Pushing a new commit changes the
   HEAD, so the previous approval no longer applies.
