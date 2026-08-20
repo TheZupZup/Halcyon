@@ -1,3 +1,5 @@
+import '../models/repeat_mode.dart';
+import '../models/track.dart';
 import 'playback_controller.dart';
 
 /// A [PlaybackController] that owns an on-device audio engine and can be
@@ -21,6 +23,19 @@ abstract interface class LocalPlaybackController implements PlaybackController {
   /// starts playing or stays paused per [play] (paused by default, so ending a
   /// cast session never auto-starts the phone). Clears the suspended flag.
   Future<void> resume({Duration at = Duration.zero, bool play = false});
+
+  /// Restores a previously persisted queue as a **paused** session: sets modes,
+  /// installs [tracks] at [startIndex], seeks to [position], and loads the
+  /// current track through the normal resolver **without autoplay**. Used after
+  /// an unexpected process restart so the user can resume deliberately.
+  Future<void> restoreSession({
+    required List<Track> tracks,
+    int startIndex = 0,
+    Duration position = Duration.zero,
+    bool shuffleEnabled = false,
+    RepeatMode repeatMode = RepeatMode.off,
+    List<Track>? originalOrder,
+  });
 
   /// Wraps the queue back to its first track and (re)loads it. Used to honour
   /// repeat-all when a cast track finishes at the end of the queue.

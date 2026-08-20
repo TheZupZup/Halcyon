@@ -158,6 +158,21 @@ class UnsupportedPlaybackController implements LocalPlaybackController {
   Future<void> resume({Duration at = Duration.zero, bool play = false}) async {}
 
   @override
+  Future<void> restoreSession({
+    required List<Track> tracks,
+    int startIndex = 0,
+    Duration position = Duration.zero,
+    bool shuffleEnabled = false,
+    RepeatMode repeatMode = RepeatMode.off,
+    List<Track>? originalOrder,
+  }) async {
+    // No engine to load into; refuse with the same clear error as playTracks so
+    // a persisted session on an unsupported host never pretends to restore.
+    final bool inRange = startIndex >= 0 && startIndex < tracks.length;
+    _refuse(inRange ? tracks[startIndex] : null);
+  }
+
+  @override
   Future<void> restartQueue() async {}
 
   @override

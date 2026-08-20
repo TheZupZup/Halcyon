@@ -201,6 +201,49 @@ class FakePlaybackController implements LocalPlaybackController {
     foregroundedCount++;
   }
 
+  int restoreSessionCount = 0;
+  Duration? lastRestorePosition;
+  bool? lastRestoreAutoplay;
+
+  @override
+  Future<void> restoreSession({
+    required List<Track> tracks,
+    int startIndex = 0,
+    Duration position = Duration.zero,
+    bool shuffleEnabled = false,
+    RepeatMode repeatMode = RepeatMode.off,
+    List<Track>? originalOrder,
+  }) async {
+    if (tracks.isEmpty) return;
+    restoreSessionCount++;
+    lastRestorePosition = position;
+    lastRestoreAutoplay = false;
+    _suspended = false;
+    _shuffleEnabled = shuffleEnabled;
+    _repeatMode = repeatMode;
+    final int index = startIndex.clamp(0, tracks.length - 1);
+    _queue = PlaybackQueue(
+      tracks: List<Track>.of(tracks),
+      currentIndex: index,
+      originalOrder:
+          originalOrder == null ? null : List<Track>.of(originalOrder),
+    );
+    // Mirror production: load the current track paused at [position], never
+    // autoplay after a crash restore.
+    playedTracks.add(_queue.current!);
+    emit(PlaybackState(
+      status: PlaybackStatus.paused,
+      currentTrack: _queue.current,
+      upNext: _queue.upNext,
+      previous: _queue.history,
+      hasPrevious: _queue.hasPrevious,
+      position: position,
+      duration: _queue.current?.duration ?? Duration.zero,
+      shuffleEnabled: _shuffleEnabled,
+      repeatMode: _repeatMode,
+    ));
+  }
+
   /// Test seam mirroring the production controller's completion handling: drives
   /// what plays when the current track finishes, honouring the repeat mode.
   void completeCurrent() {
