@@ -1,0 +1,43 @@
+name: PR security guard tests
+
+# The guard in pr-security-review.yml decides whether an external contribution
+# needs a maintainer security review, so a regression in it is a security
+# regression. These tests run the scanner against synthetic diffs — including
+# the diff-rendering tricks that would otherwise hide a blocked pattern — and
+# execute the workflow's own trusted-scanner loader and review-decision filter.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pr-security-review.yml"
+      - ".github/workflows/pr-security-review-tests.yml"
+      - "scripts/check_pr_security_surface.py"
+      - "test/tooling/check_pr_security_surface_test.py"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/pr-security-review.yml"
+      - ".github/workflows/pr-security-review-tests.yml"
+      - "scripts/check_pr_security_surface.py"
+      - "test/tooling/check_pr_security_surface_test.py"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: PR security guard tooling
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: python3 -m pip install --quiet PyYAML
+
+      - name: Run tests
+        run: python3 test/tooling/check_pr_security_surface_test.py

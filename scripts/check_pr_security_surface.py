@@ -4,14 +4,18 @@
 This is intentionally conservative: ordinary UI/tests/docs PRs should pass
 without maintainer involvement, while changes that touch trust boundaries are
 surfaced for an explicit second review.
+
+Every ambiguity is resolved in the fail-closed direction. If git metadata is
+missing, if a diff header cannot be parsed, or if the scanner cannot complete,
+it exits non-zero rather than reporting an ordinary-risk diff.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +24,12 @@ from pathlib import Path
 class Finding:
     path: str
     reason: str
+
+
+# Attributed to added lines whose file header could not be decoded. Scanning
+# still happens; the unresolved path itself is reported as sensitive so that a
+# parser failure can never downgrade a diff to "ordinary risk".
+UNKNOWN_PATH = "<unresolved diff path>"
 
 
 SENSITIVE_PATH_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -31,6 +41,11 @@ SENSITIVE_PATH_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^lib/.*(?:auth|credential|token|session|secure|secret)", re.I), "authentication / credential handling"),
     (re.compile(r"^lib/.*(?:network|http|client|socket|provider|source)", re.I), "network / provider boundary"),
     (re.compile(r"^lib/.*(?:database|repository|store|storage|persistence|cache)", re.I), "persistent storage"),
+    # `.gitattributes` can change how git renders a diff (for example marking a
+    # path `-diff`), which is a direct attack on this scanner's input.
+    (re.compile(r"(?:^|/)\.gitattributes$"), "git diff / attribute behavior"),
+    (re.compile(r"(?:^|/)CODEOWNERS$"), "code ownership / review routing"),
+    (re.compile(r"^(?:\.gitmodules|\.github/dependabot\.ya?ml)$"), "supply-chain configuration"),
 )
 
 SENSITIVE_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -42,42 +57,213 @@ SENSITIVE_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(?:schemaVersion|MigrationStrategy|createIndex|alterTable)\b"), "database schema / migration"),
 )
 
+
+def _split_literal(*fragments: str) -> str:
+    """Join the fragments of a literal this file must not contain contiguously.
+
+    Blocked rules are matched against every added line of every changed file —
+    including the lines of this file and of its tests. Spelling a blocked
+    literal out here would make the guard reject any PR that edits its own
+    source, so the handful that would otherwise self-match are assembled at
+    import time. The compiled pattern is exactly the intended literal;
+    `check_pr_security_surface_test.py` asserts both that the assembly is
+    complete and that the guard's own sources stay clean.
+    """
+
+    return "".join(fragments)
+
+
+_FFI = _split_literal("f", "fi")
+_PR_TARGET_TRIGGER = _split_literal("pull_request", "_target")
+
+# These are matched as *references*, not only as direct call syntax: binding one
+# of these APIs to a local and calling it through that name grants exactly the
+# same runtime capability as calling it inline, so requiring a following `(`
+# would leave a trivial bypass.
 BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"\bProcess\.(?:run|runSync|start|startSync)\s*\("), "runtime process execution"),
-    (re.compile(r"\brunInShell\s*:\s*true\b"), "runtime shell execution"),
-    (re.compile(r"(?:import\s+['\"]dart:ffi['\"]|\bDynamicLibrary\.open\s*\()"), "runtime FFI / dynamic library loading"),
-    (re.compile(r"\bpull_request_target\s*:"), "pull_request_target workflow trigger"),
-    (re.compile(r"\bpermissions\s*:\s*write-all\b"), "GitHub Actions write-all permissions"),
-    (re.compile(r"(?:curl|wget)[^\n|]*\|\s*(?:sh|bash)\b|\bbash\s+<\(\s*curl\b|\beval\s+.*\$\(\s*(?:curl|wget)\b"), "download-and-execute shell pattern"),
+    (re.compile(r"\bProcess\s*\.\s*(?:run|runSync|start|startSync|killPid)\b"), "runtime process execution"),
+    (re.compile(rf"""\b{_split_literal("runIn", "Shell")}\b"""), "runtime shell execution"),
+    (
+        re.compile(
+            rf"""['"]dart:{_FFI}['"]"""
+            rf"""|package:{_FFI}/"""
+            rf"""|\b{_split_literal("Dynamic", "Library")}\b"""
+            rf"""|\b{_split_literal("Native", "Api")}\b"""
+        ),
+        "runtime FFI / dynamic library loading",
+    ),
+    (re.compile(rf"\b{_PR_TARGET_TRIGGER}\b"), f"{_PR_TARGET_TRIGGER} workflow trigger"),
+    (re.compile(r"""\bpermissions\s*:\s*['"]?write-all\b|^\s*['"]?write-all['"]?\s*$"""), "GitHub Actions write-all permissions"),
+    (
+        re.compile(
+            r"(?:curl|wget)[^\n|]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
+            r"|\b(?:sh|bash|zsh)\s+<\(\s*(?:curl|wget)\b"
+            r"|\b(?:sh|bash|zsh)\s+-c\s+['\"]?\$\(\s*(?:curl|wget)\b"
+            r"|\beval\s+.*\$\(\s*(?:curl|wget)\b"
+        ),
+        "download-and-execute shell pattern",
+    ),
 )
 
 
+class ScannerError(RuntimeError):
+    """Raised when the diff cannot be inspected and the scan must fail closed."""
+
+
 def run_git(*args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            check=True,
+            # `--text` renders binary blobs inline, so git's output is not
+            # guaranteed to be valid UTF-8. Replace undecodable bytes instead of
+            # raising: an added image must not crash the scan.
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError as error:  # pragma: no cover - environment failure
+        raise ScannerError("git executable is not available") from error
+    except subprocess.CalledProcessError as error:
+        raise ScannerError(
+            f"git {' '.join(args)} failed ({error.returncode}): {error.stderr.strip()}"
+        ) from error
     return result.stdout
 
 
+# `git diff` renders the *content* of a diff according to the checked-out
+# `.gitattributes`, and quotes unusual pathnames. Both are contributor
+# controlled, so pin the rendering explicitly:
+#   core.quotePath=false  keep non-ASCII paths literal
+#   --text                a `-diff` attribute cannot hide added lines
+#   --no-textconv         no attribute-selected content transformation
+#   --no-ext-diff         no external diff driver
+#   --no-renames          a rename shows both paths and re-adds the content
+#   --src-prefix/--dst-prefix   header prefixes are never config dependent
+DIFF_FLAGS: tuple[str, ...] = (
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-renames",
+    "--text",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+)
+
+GIT_CONFIG_FLAGS: tuple[str, ...] = ("-c", "core.quotePath=false")
+
+
+_C_ESCAPES = {
+    "a": "\a",
+    "b": "\b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+    '"': '"',
+    "\\": "\\",
+}
+
+
+def unquote_git_path(value: str) -> str:
+    """Decode a C-quoted pathname as emitted by git.
+
+    `core.quotePath=false` stops git escaping non-ASCII bytes, but a path that
+    contains a quote, backslash, tab or other control character is still
+    wrapped and escaped. Decoding it is what keeps an anchored path rule such
+    as `^scripts/` from silently failing to match.
+    """
+
+    if len(value) < 2 or not value.startswith('"') or not value.endswith('"'):
+        return value
+
+    body = value[1:-1]
+    decoded = bytearray()
+    index = 0
+    while index < len(body):
+        char = body[index]
+        if char != "\\":
+            decoded.extend(char.encode("utf-8"))
+            index += 1
+            continue
+        index += 1
+        if index >= len(body):
+            break
+        escape = body[index]
+        if escape in _C_ESCAPES:
+            decoded.extend(_C_ESCAPES[escape].encode("utf-8"))
+            index += 1
+        elif escape in "01234567" and len(body) - index >= 3:
+            decoded.append(int(body[index : index + 3], 8) & 0xFF)
+            index += 3
+        else:
+            decoded.extend(escape.encode("utf-8"))
+            index += 1
+    return decoded.decode("utf-8", "replace")
+
+
 def changed_files(base: str, head: str) -> list[str]:
-    output = run_git("diff", "--name-only", f"{base}...{head}", "--")
-    return [line for line in output.splitlines() if line]
+    output = run_git(
+        *GIT_CONFIG_FLAGS,
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        f"{base}...{head}",
+        "--",
+    )
+    # -z keeps pathnames raw, so no unquoting is needed here.
+    return [path for path in output.split("\0") if path]
+
+
+def _header_path(rest: str) -> str | None:
+    """Resolve the destination path from a `+++ ` diff header."""
+
+    path = unquote_git_path(rest.strip())
+    if path == "/dev/null":
+        return None
+    if path.startswith("b/"):
+        return path[2:]
+    return None
 
 
 def added_lines(base: str, head: str) -> list[tuple[str, str]]:
-    diff = run_git("diff", "--unified=0", "--no-ext-diff", f"{base}...{head}", "--")
-    current_path = ""
+    diff = run_git(
+        *GIT_CONFIG_FLAGS,
+        "diff",
+        "--unified=0",
+        *DIFF_FLAGS,
+        f"{base}...{head}",
+        "--",
+    )
+
+    current_path: str | None = None
+    in_hunk = False
     additions: list[tuple[str, str]] = []
-    for line in diff.splitlines():
-        if line.startswith("+++ b/"):
-            current_path = line[6:]
+
+    # Split on "\n" only. `str.splitlines()` also breaks on \x0b, \x0c and
+    # \u2028, which Dart accepts as whitespace *inside* an expression, so a
+    # contributor could otherwise split a blocked pattern across two "lines"
+    # that neither half matches.
+    for line in diff.split("\n"):
+        if line.startswith("diff --git "):
+            current_path = None
+            in_hunk = False
             continue
-        if line.startswith("+") and not line.startswith("+++") and current_path:
-            additions.append((current_path, line[1:]))
+        if line.startswith("@@"):
+            # Everything after the first hunk header belongs to file content,
+            # so an added line that itself begins with "++ " is never mistaken
+            # for a `+++ ` file header.
+            in_hunk = True
+            continue
+        if not in_hunk:
+            if line.startswith("+++ "):
+                current_path = _header_path(line[4:])
+            continue
+        if line.startswith("+"):
+            additions.append((current_path or UNKNOWN_PATH, line[1:]))
+
     return additions
 
 
@@ -92,17 +278,7 @@ def dedupe(findings: list[Finding]) -> list[Finding]:
     return result
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--base", required=True)
-    parser.add_argument("--head", required=True)
-    parser.add_argument("--report", required=True)
-    parser.add_argument("--github-output")
-    args = parser.parse_args()
-
-    files = changed_files(args.base, args.head)
-    additions = added_lines(args.base, args.head)
-
+def classify(files: list[str], additions: list[tuple[str, str]]) -> tuple[list[Finding], list[Finding]]:
     sensitive: list[Finding] = []
     blocked: list[Finding] = []
 
@@ -112,6 +288,10 @@ def main() -> int:
                 sensitive.append(Finding(path, reason))
 
     for path, line in additions:
+        if path == UNKNOWN_PATH:
+            sensitive.append(
+                Finding(UNKNOWN_PATH, "diff header could not be decoded; review manually")
+            )
         for pattern, reason in SENSITIVE_ADDITION_RULES:
             if pattern.search(line):
                 sensitive.append(Finding(path, reason))
@@ -119,10 +299,10 @@ def main() -> int:
             if pattern.search(line):
                 blocked.append(Finding(path, reason))
 
-    sensitive = dedupe(sensitive)
-    blocked = dedupe(blocked)
+    return dedupe(sensitive), dedupe(blocked)
 
-    report_path = Path(args.report)
+
+def write_report(report_path: Path, files: list[str], sensitive: list[Finding], blocked: list[Finding]) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with report_path.open("w", encoding="utf-8") as report:
         report.write("## PR security surface scan\n\n")
@@ -138,6 +318,26 @@ def main() -> int:
                 report.write(f"- `{finding.path}` — {finding.reason}\n")
         else:
             report.write("No security-sensitive trust boundary was detected in this diff.\n")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--base", required=True)
+    parser.add_argument("--head", required=True)
+    parser.add_argument("--report", required=True)
+    parser.add_argument("--github-output")
+    args = parser.parse_args(argv)
+
+    try:
+        files = changed_files(args.base, args.head)
+        additions = added_lines(args.base, args.head)
+    except ScannerError as error:
+        print(f"::error::PR security surface scan could not inspect the diff: {error}", file=sys.stderr)
+        return 2
+
+    sensitive, blocked = classify(files, additions)
+
+    write_report(Path(args.report), files, sensitive, blocked)
 
     if args.github_output:
         with open(args.github_output, "a", encoding="utf-8") as output:

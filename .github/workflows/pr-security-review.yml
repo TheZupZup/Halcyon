@@ -22,32 +22,70 @@ jobs:
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+      HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
       REPO_OWNER: ${{ github.repository_owner }}
       GH_TOKEN: ${{ github.token }}
+      SCANNER_PATH: scripts/check_pr_security_surface.py
+      # Which owner review decides the gate for the current HEAD.
+      #
+      # Only decision-bearing states are considered. A COMMENTED review carries
+      # no decision, so follow-up discussion on an already approved commit must
+      # not silently revoke that approval. CHANGES_REQUESTED and DISMISSED do
+      # revoke it: after a dismissal the owner has to approve the HEAD again.
+      #
+      # Kept in this env block on purpose: test/tooling/check_pr_security_surface_test.py
+      # reads this exact filter out of the workflow and exercises it with jq.
+      REVIEW_DECISION_JQ: |
+        [ .[]
+          | select(.user.login == $owner)
+          | select(.commit_id == $head)
+          | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+        ]
+        | sort_by(.submitted_at, .id)
+        | last
+        | .state // ""
 
     steps:
+      # NOTE ON SCOPE: for `pull_request` events GitHub evaluates the workflow
+      # file from the PR's merge ref, so a PR can edit this file. That is not
+      # something a workflow can defend against from the inside; the protection
+      # is branch protection requiring "Security surface guard" by name, which a
+      # PR cannot satisfy by deleting or renaming the job. What this workflow
+      # does guarantee is that the *scanner* it runs comes from the trusted base.
       - name: Checkout PR head
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       # Normal operation always executes the scanner from the trusted PR base,
       # never from an untrusted contributor's HEAD. The one exception is the
       # initial bootstrap PR that introduces this scanner: if the base does not
-      # contain it yet, only a PR authored by the repository owner may use the
-      # HEAD copy. Once this lands on main, external PRs can never take this path.
+      # contain it yet, only a same-repository PR authored by the repository
+      # owner may use the HEAD copy. Once this lands on main, external PRs can
+      # never take this path.
       - name: Load trusted scanner
         shell: bash
         run: |
           set -euo pipefail
           scanner="$RUNNER_TEMP/check_pr_security_surface.py"
 
-          if git cat-file -e "$BASE_SHA:scripts/check_pr_security_surface.py" 2>/dev/null; then
-            git show "$BASE_SHA:scripts/check_pr_security_surface.py" > "$scanner"
+          # Fail closed rather than silently misclassifying: without the base
+          # commit we can neither read the trusted scanner nor diff against it.
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --quiet origin "$BASE_SHA" 2>/dev/null || true
+          fi
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::Base commit $BASE_SHA is unavailable; refusing to evaluate the security gate on incomplete history."
+            exit 1
+          fi
+
+          if git cat-file -e "$BASE_SHA:$SCANNER_PATH" 2>/dev/null; then
+            git show "$BASE_SHA:$SCANNER_PATH" > "$scanner"
             echo "Loaded security scanner from trusted PR base."
-          elif [ "$PR_AUTHOR" = "$REPO_OWNER" ]; then
-            cp scripts/check_pr_security_surface.py "$scanner"
+          elif [ "$PR_AUTHOR" = "$REPO_OWNER" ] && [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then
+            cp "$SCANNER_PATH" "$scanner"
             echo "Bootstrap: trusted scanner does not exist on base yet; using repository-owner HEAD copy."
           else
             echo "::error::Trusted security scanner is missing from the PR base. Refusing to execute the contributor-supplied scanner."
@@ -57,7 +95,9 @@ jobs:
       - name: Scan changed security surfaces
         id: scan
         continue-on-error: true
+        shell: bash
         run: |
+          set -euo pipefail
           python3 "$RUNNER_TEMP/check_pr_security_surface.py" \
             --base "$BASE_SHA" \
             --head "$HEAD_SHA" \
@@ -66,46 +106,69 @@ jobs:
 
       - name: Publish security surface report
         if: ${{ always() }}
+        shell: bash
         run: |
           if [ -f "$RUNNER_TEMP/security-surface.md" ]; then
             cat "$RUNNER_TEMP/security-surface.md" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # A maintainer approval is deliberately NOT an escape hatch for these.
-      # They introduce unusually powerful execution/CI primitives and must be
-      # redesigned or landed as a separate maintainer-controlled change.
-      - name: Reject blocked high-risk additions
+      # A maintainer approval is deliberately NOT an escape hatch for blocked
+      # patterns. They introduce unusually powerful execution/CI primitives and
+      # must be redesigned or landed as a separate maintainer-controlled change.
+      # A scanner that could not complete lands here too, so a crash fails the
+      # PR instead of quietly reporting an ordinary-risk diff.
+      - name: Reject blocked additions or an incomplete scan
         if: ${{ steps.scan.outcome == 'failure' }}
+        shell: bash
         run: |
-          echo "::error::The PR contains a blocked high-risk security pattern. See the job summary."
+          echo "::error::The PR contains a blocked high-risk security pattern, or the security scan could not complete. See the job summary and the scan step log."
           exit 1
+
+      # Belt and braces: a scanner that exits 0 must have emitted a verdict.
+      # Without this, a missing step output would skip the approval gate.
+      - name: Verify the scan produced a verdict
+        if: ${{ steps.scan.outcome == 'success' }}
+        shell: bash
+        env:
+          SCAN_SENSITIVE: ${{ steps.scan.outputs.sensitive }}
+          SCAN_BLOCKED: ${{ steps.scan.outputs.blocked }}
+        run: |
+          set -euo pipefail
+          case "${SCAN_SENSITIVE}:${SCAN_BLOCKED}" in
+            true:false|false:false) ;;
+            *)
+              echo "::error::The security scanner exited successfully without a usable verdict (sensitive='${SCAN_SENSITIVE}', blocked='${SCAN_BLOCKED}'). Failing closed."
+              exit 1
+              ;;
+          esac
 
       # Ordinary PRs need no extra ceremony. Sensitive external PRs do: the
       # repository owner must approve the exact current HEAD. If the contributor
-      # pushes another commit, the old approval becomes stale and this check
-      # fails again until the new HEAD is reviewed.
+      # pushes another commit, HEAD_SHA changes, the old approval no longer
+      # matches, and this check fails again until the new HEAD is reviewed.
       - name: Require owner approval for sensitive external PR
         if: >-
-          ${{ steps.scan.outputs.sensitive == 'true'
+          ${{ steps.scan.outcome == 'success'
+          && steps.scan.outputs.sensitive == 'true'
           && env.PR_AUTHOR != env.REPO_OWNER }}
         shell: bash
         run: |
           set -euo pipefail
 
-          reviews="$(gh api \
-            "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100")"
+          # --paginate: a PR with more than one page of reviews must not let an
+          # in-page approval outrank a later decision on a page we never read.
+          reviews="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100" \
+            | jq -s 'add // []')"
 
           latest_state="$(jq -r \
             --arg owner "$REPO_OWNER" \
             --arg head "$HEAD_SHA" \
-            '[.[]
-              | select(.user.login == $owner and .commit_id == $head)]
-             | sort_by(.submitted_at)
-             | last
-             | .state // ""' <<<"$reviews")"
+            "$REVIEW_DECISION_JQ" <<<"$reviews")"
 
           if [ "$latest_state" != "APPROVED" ]; then
             echo "::error::This PR touches a security-sensitive trust boundary. $REPO_OWNER must approve the current HEAD ($HEAD_SHA) after a focused security review."
+            echo "Latest owner decision for this HEAD: ${latest_state:-none}"
             echo "Sensitive surfaces are listed in the job summary."
             exit 1
           fi
