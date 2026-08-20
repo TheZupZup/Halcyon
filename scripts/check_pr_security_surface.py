@@ -75,6 +75,13 @@ SENSITIVE_PATH_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     # A Cargo dependency may carry a build script, which runs at build time on
     # the CI machine — the same trust boundary pubspec.yaml crosses.
     (re.compile(r"(?:^|/)Cargo\.(?:toml|lock)$"), "dependency manifest / lockfile"),
+    # flutter-ci-fixer.yml keeps its own list of paths its agent may not touch.
+    # Cross-checking against it turned up these, beyond the analyzer config that
+    # was reported: `flutter analyze` is a required check on every PR, licence
+    # text is a legal boundary, and signing material is the release identity.
+    (re.compile(r"(?:^|/)analysis_options\.ya?ml$"), "static analysis configuration"),
+    (re.compile(r"(?:^|/)(?:LICENSE|COPYING|NOTICE)(?:$|\.)"), "licensing"),
+    (re.compile(r"(?:^|/)key\.properties$|\.(?:jks|keystore)$"), "release signing material"),
     (re.compile(r"^lib/.*(?:auth|credential|token|session|secure|secret)", re.I), "authentication / credential handling"),
     (re.compile(r"^lib/.*(?:network|http|client|socket|provider|source)", re.I), "network / provider boundary"),
     (re.compile(r"^lib/.*(?:database|repository|store|storage|persistence|cache)", re.I), "persistent storage"),
@@ -93,7 +100,6 @@ SENSITIVE_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(?:authorization|bearer|access[_-]?token|api[_-]?key|password|credential)\b", re.I), "credential-sensitive logic"),
     (re.compile(r"\b(?:schemaVersion|MigrationStrategy|createIndex|alterTable)\b"), "database schema / migration"),
 )
-
 
 def _split_literal(*fragments: str) -> str:
     """Join the fragments of a literal this file must not contain contiguously.
@@ -131,6 +137,30 @@ _EXEC_WRAPPER = (
     r"(?:(?:sudo|env|command|exec|nohup|nice|stdbuf|setsid|ionice|timeout)\s+"
     r"(?:[-\w=./]+\s+)*)*"
 )
+
+# The download half of the download-then-execute rules, shared by the blocked
+# tier (the file is run) and the sensitive tier (it is only made runnable).
+#
+#   `;`, `|` and `&&` end the download command, so the output flag has to be
+#   found before one; a single `&` is kept, being ordinary inside a quoted
+#   query string. Short options bundle and may carry the value attached
+#   (`-o f`, `-qO f`, `-of`); the long forms cover curl's --output and wget's
+#   --output-document. Quotes live outside the capture so `-o /tmp/i` and
+#   `sh "/tmp/i"` compare equal.
+def _download_to_file(gap: str) -> str:
+    return (
+        rf"(?:curl|wget)(?:[^\n;|&]|&(?!&)|\\\n)*?"
+        rf"(?:{gap}+-[A-Za-z]*[oO]{gap}*"
+        rf"|{gap}+--output(?:-document)?(?:=|{gap}){gap}*"
+        rf"|{gap}*>{gap}*)"
+        rf"['\"]?(?P<target>[^\s'\";&|<>]+)['\"]?"
+        rf"[\s\S]{{0,2000}}?"
+    )
+
+
+# The same file again, ending at a real argument boundary rather than \b, so
+# `/tmp/data` does not match inside `/tmp/data-cleanup.sh`.
+_SAME_TARGET = r"""['\"]?(?P=target)(?=$|[\s'\";&|)<>])"""
 
 _SH_GAP = r"(?:[ \t]|\\\n)"
 
@@ -204,33 +234,54 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         # keeps this precise: fetching a data file and separately running an
         # unrelated local script does not match.
         re.compile(
-            # `;`, `|` and `&&` end the download command, so the output flag
-            # has to be found before one. A single `&` is kept, because it is
-            # ordinary inside a quoted query string.
-            rf"(?:curl|wget)(?:[^\n;|&]|&(?!&)|\\\n)*?"
-            # Short options bundle and may carry the value attached:
-            # `-o f`, `-qO f`, `-sLo f`, `-of`. Long forms cover curl's
-            # --output and wget's --output-document.
-            rf"(?:{_SH_GAP}+-[A-Za-z]*[oO]{_SH_GAP}*"
-            rf"|{_SH_GAP}+--output(?:-document)?(?:=|{_SH_GAP}){_SH_GAP}*"
-            rf"|{_SH_GAP}*>{_SH_GAP}*)"
-            # Quotes live outside the capture so `-o /tmp/i` and `sh "/tmp/i"`
-            # compare equal.
-            rf"['\"]?(?P<target>[^\s'\";&|<>]+)['\"]?"
-            rf"[\s\S]{{0,2000}}?"
-            rf"(?:[\s;&|(]{_EXEC_WRAPPER}(?:/\S+/)?"
+            _download_to_file(_SH_GAP)
+            + rf"(?:[\s;&|(]{_EXEC_WRAPPER}(?:/\S+/)?"
             rf"(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node){_SH_GAP}+"
             # `. f` and `source f` execute the file in the current shell, which
             # is the same capability by a different spelling.
-            rf"|(?:^|[\n;&|(]){_SH_GAP}*(?:\.|source){_SH_GAP}+"
-            rf"|[\s;&|(]chmod{_SH_GAP}+\+x{_SH_GAP}+)"
-            # An argument boundary, not \b: `/tmp/data` must not match inside
-            # `/tmp/data-cleanup.sh`, which is a different file.
-            rf"['\"]?(?P=target)(?=$|[\s'\";&|)<>])"
+            rf"|(?:^|[\n;&|(]){_SH_GAP}*(?:\.|source){_SH_GAP}+)"
+            + _SAME_TARGET
+        ),
+        "download-then-execute shell pattern",
+    ),
+    (
+        re.compile(
+            _download_to_file(_SH_GAP)
+            + rf"[\s;&|(]chmod{_SH_GAP}+\+x{_SH_GAP}+"
+            + _SAME_TARGET
+            + rf"[\s\S]{{0,2000}}?(?:^|[\n;&|(]){_SH_GAP}*"
+            + _SAME_TARGET
         ),
         "download-then-execute shell pattern",
     ),
 )
+
+
+# Downloaded, then marked runnable, but not invoked here. Fetching a tool and
+# installing it is a normal packaging step, so this is not the unconditional
+# block that running it is — an approval must remain possible. It is still a
+# supply-chain event an owner should see.
+SENSITIVE_ADDITION_RULES = SENSITIVE_ADDITION_RULES + (
+    (
+        re.compile(
+            _download_to_file(_SH_GAP)
+            + rf"[\s;&|(]chmod{_SH_GAP}+\+x{_SH_GAP}+"
+            + _SAME_TARGET
+        ),
+        "downloaded file made executable",
+    ),
+)
+
+
+# Addition rules that must not fire on prose. The credential words are ordinary
+# English, so matching them in documentation would put every docs PR through
+# owner review — exactly the ceremony this guard promises ordinary PRs will not
+# face. Code keeps the rule; a sentence explaining how to sign in does not.
+_PROSE_PATH = re.compile(r"\.(?:md|markdown|txt|rst|html?|example)$", re.I)
+
+ADDITION_RULE_SKIP_PATHS: dict[str, re.Pattern[str]] = {
+    "credential-sensitive logic": _PROSE_PATH,
+}
 
 
 class ScannerError(RuntimeError):
@@ -563,6 +614,9 @@ def classify(
             (BLOCKED_ADDITION_RULES, blocked),
         ):
             for pattern, reason in rules:
+                skip = ADDITION_RULE_SKIP_PATHS.get(reason)
+                if skip is not None and skip.search(source.path):
+                    continue
                 elsewhere = False
                 for match in pattern.finditer(source.text):
                     if touches_added_lines(

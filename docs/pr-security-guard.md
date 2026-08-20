@@ -18,6 +18,7 @@ lives in `scripts/check_pr_security_surface.py`; its tests are
   (`.flutter-version`, `.java-version`, the Gradle wrapper and its
   `distributionUrl`), Cargo manifests and lockfiles, Android permissions, the
   `res/xml/` security and privacy policy and the Kotlin shipped in the APK,
+  the analyzer configuration, licence text and release signing material,
   native code under `linux/` and `native/` with its CMake build files, or to
   auth/network/persistence code — and added behaviour such as new network
   clients, filesystem writes or database migrations — require **TheZupZup to
