@@ -12,6 +12,7 @@ on:
       - ".github/workflows/pr-security-review-tests.yml"
       - "scripts/check_pr_security_surface.py"
       - "test/tooling/check_pr_security_surface_test.py"
+      - "test/tooling/check_pr_security_surface_edge_regression_test.py"
   push:
     branches: [main]
     paths:
@@ -19,6 +20,7 @@ on:
       - ".github/workflows/pr-security-review-tests.yml"
       - "scripts/check_pr_security_surface.py"
       - "test/tooling/check_pr_security_surface_test.py"
+      - "test/tooling/check_pr_security_surface_edge_regression_test.py"
 
 permissions:
   contents: read
@@ -40,4 +42,6 @@ jobs:
         run: python3 -m pip install --quiet PyYAML
 
       - name: Run tests
-        run: python3 test/tooling/check_pr_security_surface_test.py
+        run: |
+          python3 test/tooling/check_pr_security_surface_test.py
+          python3 test/tooling/check_pr_security_surface_edge_regression_test.py
