@@ -1456,6 +1456,31 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   }
 
   @override
+  Future<void> restoreSession({
+    required List<Track> tracks,
+    int startIndex = 0,
+    Duration position = Duration.zero,
+    bool shuffleEnabled = false,
+    RepeatMode repeatMode = RepeatMode.off,
+    List<Track>? originalOrder,
+  }) async {
+    if (tracks.isEmpty) return;
+    // Crash restore must never surprise-start audio, even if a cast handoff
+    // left the engine suspended — clear that flag and load paused.
+    _suspended = false;
+    _shuffleEnabled = shuffleEnabled;
+    _repeatMode = repeatMode;
+    final int index = startIndex.clamp(0, tracks.length - 1);
+    _queue = PlaybackQueue(
+      tracks: List<Track>.of(tracks),
+      currentIndex: index,
+      originalOrder:
+          originalOrder == null ? null : List<Track>.of(originalOrder),
+    );
+    await _playCurrent(startAt: position, autoplay: false);
+  }
+
+  @override
   Future<void> restartQueue() async {
     _queue = _queue.restarted();
     await _playCurrent();

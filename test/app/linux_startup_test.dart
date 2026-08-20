@@ -7,6 +7,7 @@ import 'package:linthra/data/repositories/download_repository_provider.dart';
 import 'package:linthra/data/repositories/favorites_repository_provider.dart';
 import 'package:linthra/data/repositories/host_platform_provider.dart';
 import 'package:linthra/data/repositories/music_library_repository_provider.dart';
+import 'package:linthra/data/repositories/playback_session_store_provider.dart';
 import 'package:linthra/data/repositories/playlist_repository_provider.dart';
 import 'package:linthra/data/repositories/remote_cache_index_provider.dart';
 import 'package:linthra/features/library/library_providers.dart';
@@ -58,7 +59,10 @@ void main() {
       container.read(remoteControlServiceProvider);
       container.read(remoteControlActivatorProvider);
       container.read(localPlaybackControllerProvider);
+      // Linux crash-safe session restore (null on non-Linux).
+      container.read(playbackSessionPersistenceProvider);
     }, returnsNormally);
+    expect(container.read(playbackSessionPersistenceProvider), isNotNull);
   });
 
   test('the library and lyrics seams build on Linux too', () {

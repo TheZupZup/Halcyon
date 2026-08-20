@@ -7,8 +7,10 @@ import 'app/linthra_app.dart';
 import 'core/models/plex_session.dart';
 import 'core/models/subsonic_session.dart';
 import 'core/models/theme_mode_preference.dart';
+import 'core/platform/host_platform.dart';
 import 'core/services/artwork_disk_cache.dart';
 import 'core/services/media_session_binding.dart';
+import 'core/services/playback_session_persistence.dart';
 import 'core/sources/plex/plex_artwork.dart';
 import 'core/sources/subsonic/subsonic_artwork.dart';
 import 'data/repositories/app_icon_variant_store_provider.dart';
@@ -22,6 +24,7 @@ import 'data/repositories/library_added_store_provider.dart';
 import 'data/repositories/music_library_repository_provider.dart';
 import 'data/repositories/play_history_repository_provider.dart';
 import 'data/repositories/playback_preferences_provider.dart';
+import 'data/repositories/playback_session_store_provider.dart';
 import 'data/repositories/playback_source_strategy_store_provider.dart';
 import 'data/repositories/playlist_repository_provider.dart';
 import 'data/repositories/plex_session_store_provider.dart';
@@ -90,6 +93,10 @@ Future<void> main() async {
       sharedPreferencesDownloadStoreOverride,
       sharedPreferencesDownloadPreferencesOverride,
       sharedPreferencesPlaybackPreferencesOverride,
+      // Linux only: persist logical queue/position so an unexpected restart can
+      // restore a paused session without ever writing stream URLs or tokens.
+      if (HostPlatform.current == HostPlatform.linux)
+        sharedPreferencesPlaybackSessionStoreOverride,
       fileSystemOfflineFileStoreOverride,
       remoteTrackDownloaderOverride,
       // Let playback fall back to another copy of the same song when the
@@ -314,6 +321,20 @@ Future<void> main() async {
   // so synced playlists appear on the Playlists tab from the first frame.
   // Best-effort and offline-tolerant.
   unawaited(container.read(playlistRepositoryProvider).refreshFromRemote());
+
+  // Linux crash-safe restore: after sessions are warm, rehydrate any persisted
+  // logical queue as a paused/resumable state. Remote tracks re-resolve through
+  // the normal provider path when the user presses play — never autoplay, and
+  // never block launch on a bad record.
+  final PlaybackSessionPersistence? sessionPersistence =
+      container.read(playbackSessionPersistenceProvider);
+  if (sessionPersistence != null) {
+    try {
+      await sessionPersistence.restore();
+    } catch (_) {
+      // Ignore: a failed restore must never stop the app from launching.
+    }
+  }
 
   runApp(
     UncontrolledProviderScope(

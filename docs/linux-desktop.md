@@ -246,6 +246,21 @@ widget.
 alone. If someone re-runs `flutter create --platforms=linux .` anyway, the
 checker above is what catches the reverted title and the lost SQLite seam.
 
+## Crash-safe playback restore
+
+On Linux, Linthra persists a small **logical** playback session while a track is
+queued — provider-namespaced track ids (`jellyfin:…`), local paths, shuffle/
+repeat modes, and position. It never writes authenticated stream URLs or
+provider tokens. After an unexpected process exit, the next launch restores that
+queue as **paused** (never autoplay); pressing play re-resolves remote tracks
+through the normal signed-in provider path. Missing local files, signed-out
+providers, and wrong-version/corrupt records drop only the invalid rows (or the
+whole session) and never block startup.
+
+Automated coverage: `test/core/models/persisted_playback_session_test.dart`,
+`test/data/repositories/shared_preferences_playback_session_store_test.dart`,
+`test/core/services/playback_session_persistence_test.dart`.
+
 ## Release tarball
 
 Every official release gets `Linthra-<tag>-linux-x64.tar.gz` attached to its

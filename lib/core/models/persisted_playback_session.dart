@@ -1,0 +1,321 @@
+import 'package:flutter/foundation.dart';
+
+import '../sources/music_provider.dart';
+import 'repeat_mode.dart';
+import 'track.dart';
+
+/// Crash-safe snapshot of non-secret playback state that can survive a process
+/// restart.
+///
+/// Carries only **logical** track identity (provider-namespaced uris like
+/// `jellyfin:101`, local paths), queue order/modes, and a seek position — never
+/// an authenticated stream URL, provider token, or raw resolver output. Remote
+/// playback always re-resolves through the normal provider/session path after
+/// restore.
+@immutable
+class PersistedPlaybackSession {
+  const PersistedPlaybackSession({
+    required this.tracks,
+    required this.currentIndex,
+    this.position = Duration.zero,
+    this.shuffleEnabled = false,
+    this.repeatMode = RepeatMode.off,
+    this.originalOrder,
+    this.schemaVersion = currentSchemaVersion,
+  });
+
+  /// Bump when the on-disk shape changes in a way older readers cannot ignore.
+  /// Unknown/future versions are dropped wholesale on load (fail safe).
+  static const int currentSchemaVersion = 1;
+
+  /// Effective play order at the time of the snapshot (already shuffled when
+  /// [shuffleEnabled] is true).
+  final List<Track> tracks;
+
+  /// Index of the current track within [tracks].
+  final int currentIndex;
+
+  /// Seek position within the current track. Clamped on restore when duration
+  /// is known.
+  final Duration position;
+
+  final bool shuffleEnabled;
+  final RepeatMode repeatMode;
+
+  /// Pre-shuffle order when [shuffleEnabled], otherwise null. Same logical
+  /// track identity rules as [tracks].
+  final List<Track>? originalOrder;
+
+  final int schemaVersion;
+
+  bool get isEmpty => tracks.isEmpty;
+
+  Track? get current {
+    if (currentIndex < 0 || currentIndex >= tracks.length) return null;
+    return tracks[currentIndex];
+  }
+
+  /// Builds a session from live playback, or `null` when there is nothing
+  /// useful / safe to persist (no current track, or any identity that is not
+  /// logical).
+  static PersistedPlaybackSession? fromPlayback({
+    required List<Track> previous,
+    required Track current,
+    required List<Track> upNext,
+    required Duration position,
+    required bool shuffleEnabled,
+    required RepeatMode repeatMode,
+    List<Track>? originalOrder,
+  }) {
+    final List<Track> tracks = <Track>[...previous, current, ...upNext];
+    if (!_allLogical(tracks)) return null;
+    if (originalOrder != null && !_allLogical(originalOrder)) return null;
+    return PersistedPlaybackSession(
+      tracks: tracks,
+      currentIndex: previous.length,
+      position: position < Duration.zero ? Duration.zero : position,
+      shuffleEnabled: shuffleEnabled,
+      repeatMode: repeatMode,
+      originalOrder: originalOrder == null ? null : List<Track>.of(originalOrder),
+    );
+  }
+
+  /// Serializes to a JSON-compatible map. Never includes stream URLs or tokens.
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'v': schemaVersion,
+      'i': currentIndex,
+      'p': position.inMilliseconds,
+      's': shuffleEnabled,
+      'r': repeatMode.name,
+      't': <Map<String, dynamic>>[
+        for (final Track track in tracks) logicalTrackToJson(track),
+      ],
+      if (originalOrder != null)
+        'o': <Map<String, dynamic>>[
+          for (final Track track in originalOrder!) logicalTrackToJson(track),
+        ],
+    };
+  }
+
+  /// Rebuilds a session from [toJson] output, or `null` if the record is
+  /// unusable (wrong version, corrupt shape, no restorable tracks).
+  ///
+  /// Invalid individual tracks are dropped; [currentIndex] is remapped onto the
+  /// surviving list. A wholly empty result yields `null` so callers clear the
+  /// store rather than restoring nothing useful.
+  static PersistedPlaybackSession? fromJson(
+    Map<String, dynamic> json, {
+    bool Function(Track track)? isTrackRestorable,
+  }) {
+    final Object? version = json['v'];
+    if (version is! int || version != currentSchemaVersion) return null;
+
+    final Object? rawTracks = json['t'];
+    if (rawTracks is! List) return null;
+
+    final Object? rawIndex = json['i'];
+    final int requestedIndex = rawIndex is int ? rawIndex : 0;
+    String? preferredCurrentUri;
+    if (requestedIndex >= 0 && requestedIndex < rawTracks.length) {
+      final Object? preferred = rawTracks[requestedIndex];
+      if (preferred is Map) {
+        final Object? uri = preferred['uri'];
+        if (uri is String && uri.isNotEmpty) preferredCurrentUri = uri;
+      }
+    }
+
+    final List<Track> parsed = <Track>[];
+    for (final Object? entry in rawTracks) {
+      if (entry is! Map) continue;
+      final Track? track =
+          logicalTrackFromJson(Map<String, dynamic>.from(entry));
+      if (track == null) continue;
+      if (isTrackRestorable != null && !isTrackRestorable(track)) continue;
+      parsed.add(track);
+    }
+    if (parsed.isEmpty) return null;
+
+    // Prefer the originally current identity when it survived filtering;
+    // otherwise land on the first surviving track so restore never points past
+    // the end or at a dropped remote/local row.
+    int currentIndex = 0;
+    if (preferredCurrentUri != null) {
+      final int found =
+          parsed.indexWhere((Track t) => t.uri == preferredCurrentUri);
+      if (found >= 0) currentIndex = found;
+    }
+
+    final Object? rawPosition = json['p'];
+    final int positionMs = rawPosition is int && rawPosition >= 0 ? rawPosition : 0;
+
+    final bool shuffleEnabled = json['s'] == true;
+    final RepeatMode repeatMode = _repeatModeFromName(json['r']);
+
+    List<Track>? originalOrder;
+    final Object? rawOriginal = json['o'];
+    if (shuffleEnabled && rawOriginal is List) {
+      final List<Track> order = <Track>[];
+      for (final Object? entry in rawOriginal) {
+        if (entry is! Map) continue;
+        final Track? track =
+            logicalTrackFromJson(Map<String, dynamic>.from(entry));
+        if (track == null) continue;
+        if (isTrackRestorable != null && !isTrackRestorable(track)) continue;
+        order.add(track);
+      }
+      if (order.isNotEmpty) originalOrder = order;
+    }
+
+    final Track current = parsed[currentIndex];
+    final Duration position = _clampPosition(
+      Duration(milliseconds: positionMs),
+      current.duration,
+    );
+
+    return PersistedPlaybackSession(
+      tracks: parsed,
+      currentIndex: currentIndex,
+      position: position,
+      shuffleEnabled: shuffleEnabled,
+      repeatMode: repeatMode,
+      originalOrder: shuffleEnabled ? originalOrder : null,
+    );
+  }
+
+  static bool _allLogical(List<Track> tracks) {
+    for (final Track track in tracks) {
+      if (!isLogicalTrackUri(track.uri)) return false;
+    }
+    return true;
+  }
+
+  static RepeatMode _repeatModeFromName(Object? name) {
+    if (name is! String) return RepeatMode.off;
+    for (final RepeatMode mode in RepeatMode.values) {
+      if (mode.name == name) return mode;
+    }
+    return RepeatMode.off;
+  }
+
+  static Duration _clampPosition(Duration position, Duration duration) {
+    if (position < Duration.zero) return Duration.zero;
+    if (duration > Duration.zero && position > duration) return duration;
+    return position;
+  }
+}
+
+/// Whether [uri] is a persistable logical track identity.
+///
+/// Accepts provider-namespaced remote ids (`jellyfin:…`, `subsonic:…`,
+/// `plex:…`) and non-HTTP local paths. Rejects authenticated stream URLs,
+/// token-bearing query strings, and blank values so a bad write can never put a
+/// secret on disk.
+bool isLogicalTrackUri(String uri) {
+  final String trimmed = uri.trim();
+  if (trimmed.isEmpty) return false;
+  final String lower = trimmed.toLowerCase();
+  if (lower.startsWith('http://') || lower.startsWith('https://')) {
+    return false;
+  }
+  if (_looksTokenBearing(lower)) return false;
+
+  final String? bareId = MusicProviders.bareRemoteIdForTrackUri(trimmed);
+  if (bareId != null) {
+    // Remote: must be exactly `scheme:<non-empty id>` with no path/query noise.
+    return bareId.isNotEmpty &&
+        !bareId.contains('/') &&
+        !bareId.contains('?');
+  }
+
+  // Local: anything non-HTTP that isn't a remote scheme is treated as a path /
+  // content uri identity. Still reject token-looking query fragments.
+  return true;
+}
+
+/// JSON shape for one logical [Track]. Deliberately omits ReplayGain (optional
+/// loudness metadata) — restore never needs it to re-resolve playback.
+Map<String, dynamic> logicalTrackToJson(Track track) {
+  return <String, dynamic>{
+    'id': track.id,
+    'title': track.title,
+    'uri': track.uri,
+    if (track.artistName != null) 'artist': track.artistName,
+    if (track.albumName != null) 'album': track.albumName,
+    if (track.albumId != null) 'albumId': track.albumId,
+    if (track.albumArtistName != null) 'albumArtist': track.albumArtistName,
+    'durationMs': track.duration.inMilliseconds,
+    if (track.trackNumber != null) 'trackNumber': track.trackNumber,
+    if (track.artworkUri != null &&
+        isPersistableArtworkUri(track.artworkUri!))
+      'artwork': track.artworkUri.toString(),
+  };
+}
+
+/// Rebuilds a [Track] from [logicalTrackToJson] output, or `null` when the
+/// identity is missing/unsafe.
+Track? logicalTrackFromJson(Map<String, dynamic> json) {
+  final Object? id = json['id'];
+  final Object? title = json['title'];
+  final Object? uri = json['uri'];
+  if (id is! String || id.isEmpty) return null;
+  if (title is! String || title.isEmpty) return null;
+  if (uri is! String || !isLogicalTrackUri(uri)) return null;
+
+  final Object? durationMs = json['durationMs'];
+  final Duration duration = durationMs is int && durationMs >= 0
+      ? Duration(milliseconds: durationMs)
+      : Duration.zero;
+
+  final Object? trackNumber = json['trackNumber'];
+  final Object? artwork = json['artwork'];
+  Uri? artworkUri;
+  if (artwork is String && artwork.isNotEmpty) {
+    final Uri? parsed = Uri.tryParse(artwork);
+    if (parsed != null && isPersistableArtworkUri(parsed)) {
+      artworkUri = parsed;
+    }
+  }
+
+  return Track(
+    id: id,
+    title: title,
+    uri: uri,
+    artistName: json['artist'] as String?,
+    albumName: json['album'] as String?,
+    albumId: json['albumId'] as String?,
+    albumArtistName: json['albumArtist'] as String?,
+    duration: duration,
+    trackNumber: trackNumber is int ? trackNumber : null,
+    artworkUri: artworkUri,
+  );
+}
+
+/// Artwork is safe to persist when it is a credential-free reference (Jellyfin
+/// primary-image URL without a token, `subsonic-cover:…`, `plex-thumb:…`, or a
+/// local path). Token-bearing query strings are rejected.
+bool isPersistableArtworkUri(Uri uri) {
+  final String raw = uri.toString().toLowerCase();
+  if (_looksTokenBearing(raw)) return false;
+  return true;
+}
+
+bool _looksTokenBearing(String value) {
+  // Common provider token query keys and auth header-ish fragments that must
+  // never reach the playback-session document.
+  const List<String> markers = <String>[
+    'api_key=',
+    'apikey=',
+    'access_token=',
+    'accesstoken=',
+    'x-plex-token=',
+    'x_plex_token=',
+    'authorization=',
+    'bearer ',
+    'jwt=',
+  ];
+  for (final String marker in markers) {
+    if (value.contains(marker)) return true;
+  }
+  return false;
+}
