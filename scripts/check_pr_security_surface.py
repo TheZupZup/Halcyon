@@ -133,7 +133,10 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         # unrelated local script does not match.
         re.compile(
             r"(?:curl|wget)[^\n]*?"
-            r"(?:\s-o\s+|\s--output[= ]|\s-O\s+|\s*>\s*)"
+            # Short options bundle and may carry the value attached:
+            # `-o f`, `-o f`, `-qO f`, `-sLo f`, `-of`. Long forms cover curl's
+            # --output and wget's --output-document.
+            r"(?:\s-[A-Za-z]*[oO]\s*|\s--output(?:-document)?[=\s]\s*|\s*>\s*)"
             # Quotes live outside the capture so `-o /tmp/i` and `sh "/tmp/i"`
             # compare equal.
             r"['\"]?(?P<target>[^\s'\";&|<>]+)['\"]?"

