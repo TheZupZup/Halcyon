@@ -144,6 +144,40 @@ class ScannerTestCase(unittest.TestCase):
 
         return self.scan(repo, base_sha, head_sha)
 
+    def build_raw(
+        self, base: dict[bytes, bytes], head: dict[bytes, bytes]
+    ) -> ScanResult:
+        """Like build(), but pathnames are raw bytes rather than str.
+
+        Needed to construct a pathname that is not valid UTF-8, which is not
+        expressible through the str-keyed helper.
+        """
+
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = tmp / "repo"
+        repo.mkdir()
+
+        _git(repo, "init", "-q", "-b", "main", ".")
+        _git(repo, "config", "user.email", "test@example.invalid")
+        _git(repo, "config", "user.name", "Test")
+
+        def write(paths: dict[bytes, bytes]) -> None:
+            for raw, content in paths.items():
+                target = os.path.join(os.fsencode(repo), raw)
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with open(target, "wb") as handle:
+                    handle.write(content)
+
+        _write(repo, "README.md", "# fixture\n")
+        write(base)
+        base_sha = _commit(repo, "base")
+
+        write(head)
+        head_sha = _commit(repo, "head")
+
+        return self.scan(repo, base_sha, head_sha)
+
     def scan(self, repo: Path, base_sha: str, head_sha: str) -> ScanResult:
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp, True)
@@ -875,6 +909,50 @@ class TrustedScannerLoader(unittest.TestCase):
         self.assertEqual(code, 1, log)
         self.assertIn("unavailable", log)
         self.assertEqual(loaded, "")
+
+
+class DeletionActivation(ScannerTestCase):
+    """Removing lines can make untouched code live without retyping it."""
+
+    INERT = "class A {\n/*\n  void g() { %s('sh', const []); }\n*/\n}\n"
+    LIVE = "class A {\n  void g() { %s('sh', const []); }\n}\n"
+
+    def test_uncommenting_an_existing_call_requires_review(self):
+        result = self.build(
+            {"lib/ui/a.dart": self.INERT % PROCESS_RUN},
+            {"lib/ui/a.dart": self.LIVE % PROCESS_RUN},
+        )
+        self.assertSensitive(result)
+        self.assertIn(
+            "deletion may activate existing runtime process execution",
+            result.report,
+        )
+
+    def test_deletion_in_a_file_without_blocked_code_is_ordinary(self):
+        self.assertOrdinary(
+            self.build({"lib/p.dart": "a\nb\nc\nd\n"}, {"lib/p.dart": "a\nd\n"})
+        )
+
+    def test_one_for_one_edit_is_not_treated_as_a_deletion(self):
+        """A modified line is an added line; it must not take the deletion path."""
+        base = f"void t() {{\n  {PROCESS_RUN}('x');\n}}\n// tail\n"
+        head = f"void t() {{\n  {PROCESS_RUN}('x');\n}}\n// tail edited\n"
+        self.assertOrdinary(self.build({"lib/t.dart": base}, {"lib/t.dart": head}))
+
+
+class UndecodablePathnames(ScannerTestCase):
+    """A pathname byte that is not valid UTF-8 must not drop a file."""
+
+    def test_invalid_utf8_pathname_is_still_scanned(self):
+        result = self.build_raw(
+            {},
+            {b"lib/evil\xff.dart": f"void main() {{ {PROCESS_RUN}(1); }}\n".encode()},
+        )
+        self.assertBlocked(result)
+
+    def test_pathname_bytes_round_trip_through_unquoting(self):
+        decoded = scanner.unquote_git_path(r'"lib/evil\377.dart"')
+        self.assertEqual(decoded.encode("utf-8", "surrogateescape"), b"lib/evil\xff.dart")
 
 
 class GuardSelfSafety(unittest.TestCase):

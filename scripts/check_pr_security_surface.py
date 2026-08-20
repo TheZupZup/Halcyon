@@ -160,10 +160,13 @@ def run_git(*args: str) -> str:
             ["git", *args],
             check=True,
             # `--text` renders binary blobs inline, so git's output is not
-            # guaranteed to be valid UTF-8. Replace undecodable bytes instead of
-            # raising: an added image must not crash the scan.
+            # guaranteed to be valid UTF-8, and a pathname may hold any byte at
+            # all. surrogateescape keeps those bytes intact and reversible:
+            # decoding must not crash on an added image, and must not corrupt a
+            # pathname that then has to be handed back to `git show`. "replace"
+            # would do exactly that, turning the path into one git cannot find.
             encoding="utf-8",
-            errors="replace",
+            errors="surrogateescape",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -244,7 +247,7 @@ def unquote_git_path(value: str) -> str:
         else:
             decoded.extend(escape.encode("utf-8"))
             index += 1
-    return decoded.decode("utf-8", "replace")
+    return decoded.decode("utf-8", "surrogateescape")
 
 
 def changed_files(base: str, head: str) -> list[str]:
@@ -279,13 +282,14 @@ class ChangedSource:
     path: str
     text: str
     added_lines: frozenset[int]
+    has_deletions: bool
 
 
-_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+_HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
-def added_line_numbers(base: str, head: str) -> dict[str, set[int]]:
-    """Map each changed path to the 1-based line numbers it gained.
+def added_line_numbers(base: str, head: str) -> dict[str, tuple[set[int], bool]]:
+    """Map each changed path to the lines it gained and whether it lost any.
 
     Only hunk headers are read. The added text itself is taken from the file's
     post-change blob instead, which is why `--text` matters here: without it a
@@ -301,7 +305,7 @@ def added_line_numbers(base: str, head: str) -> dict[str, set[int]]:
         "--",
     )
 
-    added: dict[str, set[int]] = {}
+    added: dict[str, tuple[set[int], bool]] = {}
     current_path: str | None = None
     seen_header = False
 
@@ -318,12 +322,21 @@ def added_line_numbers(base: str, head: str) -> dict[str, set[int]]:
         if not match:
             continue
         seen_header = True
-        start = int(match.group(1))
-        count = 1 if match.group(2) is None else int(match.group(2))
-        if count == 0:
-            continue
+        removed = 1 if match.group(1) is None else int(match.group(1))
+        start = int(match.group(2))
+        count = 1 if match.group(3) is None else int(match.group(3))
+
         path = current_path or UNKNOWN_PATH
-        added.setdefault(path, set()).update(range(start, start + count))
+        lines, deletions = added.setdefault(path, (set(), False))
+        # A net loss of lines is what can activate code the PR never retyped:
+        # dropping a `/*` or an `if (false)` wrapper leaves the guarded call
+        # untouched but live. A one-for-one edit is not that — its new text is
+        # an added line and gets scanned as one.
+        if removed > count:
+            deletions = True
+        if count:
+            lines.update(range(start, start + count))
+        added[path] = (lines, deletions)
 
     return added
 
@@ -351,16 +364,21 @@ def changed_sources(base: str, head: str) -> tuple[list[ChangedSource], bool]:
     sources: list[ChangedSource] = []
     unresolved = False
 
-    for path, lines in added_line_numbers(base, head).items():
+    for path, (lines, deletions) in added_line_numbers(base, head).items():
         if path == UNKNOWN_PATH:
             unresolved = True
             continue
+        if not lines and not deletions:
+            continue
         text = file_text(head, path)
         if text is None:
-            # Added lines but no blob at head: the path was renamed away or
-            # removed by a later commit in the range. Nothing left to scan.
-            continue
-        sources.append(ChangedSource(path, text, frozenset(lines)))
+            # This path changed, so its post-change blob must exist. If it
+            # cannot be read then the diff and the tree disagree, and skipping
+            # the file would silently drop it from the scan.
+            raise ScannerError(
+                f"{path!r} changed but has no readable content at {head}"
+            )
+        sources.append(ChangedSource(path, text, frozenset(lines), deletions))
 
     return sources, unresolved
 
@@ -428,19 +446,38 @@ def classify(
             (BLOCKED_ADDITION_RULES, blocked),
         ):
             for pattern, reason in rules:
+                elsewhere = False
                 for match in pattern.finditer(source.text):
                     if touches_added_lines(
                         offsets, source.added_lines, match.start(), match.end()
                     ):
                         sink.append(Finding(source.path, reason))
                         break
+                    elsewhere = True
+                else:
+                    # The construct is in the file but on lines this PR left
+                    # alone. Normally that is grandfathered code and no concern.
+                    # It stops being grandfathered when the PR removes lines:
+                    # deleting a comment opener or a disabled branch can make an
+                    # untouched call live without ever retyping it. Deciding
+                    # that from a regex would need a real Dart parser, so this
+                    # asks for a maintainer rather than guessing.
+                    if elsewhere and source.has_deletions and sink is blocked:
+                        sensitive.append(
+                            Finding(
+                                source.path,
+                                f"deletion may activate existing {reason}",
+                            )
+                        )
 
     return dedupe(sensitive), dedupe(blocked)
 
 
 def write_report(report_path: Path, files: list[str], sensitive: list[Finding], blocked: list[Finding]) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    with report_path.open("w", encoding="utf-8") as report:
+    # backslashreplace: a pathname byte that is not valid UTF-8 survives as a
+    # surrogate in `path`, and must render readably here rather than raising.
+    with report_path.open("w", encoding="utf-8", errors="backslashreplace") as report:
         report.write("## PR security surface scan\n\n")
         report.write(f"Changed files: **{len(files)}**\n\n")
         if blocked:
@@ -464,6 +501,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--github-output")
     args = parser.parse_args(argv)
 
+    # Findings may carry a pathname that is not valid UTF-8; print it rather
+    # than dying on it.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(errors="backslashreplace")
+
     try:
         files = changed_files(args.base, args.head)
         sources, unresolved_paths = changed_sources(args.base, args.head)
@@ -476,7 +518,7 @@ def main(argv: list[str] | None = None) -> int:
     write_report(Path(args.report), files, sensitive, blocked)
 
     if args.github_output:
-        with open(args.github_output, "a", encoding="utf-8") as output:
+        with open(args.github_output, "a", encoding="utf-8", errors="backslashreplace") as output:
             output.write(f"sensitive={'true' if sensitive else 'false'}\n")
             output.write(f"blocked={'true' if blocked else 'false'}\n")
 

@@ -30,6 +30,14 @@ lives in `scripts/check_pr_security_surface.py`; its tests are
   overlaps a line the PR added. A construct assembled partly from tokens that
   were already in the file is therefore caught, while code the PR never touched
   is left alone.
+- **A net deletion is treated as a change too.** Removing a comment opener or a
+  disabled branch can make an untouched call live without retyping it. When a
+  PR removes lines from a file that holds a blocked construct on lines it did
+  not touch, that file is marked sensitive and a maintainer is asked to look.
+  Deciding whether the construct actually became reachable would need a real
+  Dart parser, so the guard asks rather than guesses. Eight files in the
+  repository currently carry such a construct, seven of them under
+  `test/tooling/`.
 - **It fails closed.** A missing base commit, an undecodable diff header, a
   scanner crash, or a scan that ends without a verdict all fail the job.
 
@@ -67,6 +75,21 @@ copy of the workflow.
 Changes to the guard's own files are classified sensitive, so an external PR
 touching them needs a maintainer security review regardless.
 
+## What it does not do
+
+The blocked list is a backstop against careless or opportunistic additions, not
+a decision procedure against a determined attacker. It matches patterns; it does
+not parse Dart or shell. A capability assembled through intermediate variables
+across statements, or a download separated from its execution by more than the
+rule's window, can still get past it.
+
+What actually bounds the risk is structural, and is described above: the scanner
+is loaded from the trusted base, sensitive surfaces need an owner approval tied
+to the exact HEAD, and — once configured — the required-workflow ruleset means a
+PR cannot replace the gate that judges it. Treat a gap in the pattern list as a
+bug worth fixing, not as the thing standing between the repository and a
+motivated contributor.
+
 ## Bootstrap
 
 The first PR to introduce the scanner cannot load it from a base that does not
@@ -85,10 +108,11 @@ python3 test/tooling/check_pr_security_surface_test.py
 
 They build synthetic git repositories for every classification and blocked
 pattern, cover the diff-rendering tricks that would otherwise hide an added
-line (quoted pathnames, `.gitattributes` `-diff`, renames, comments wedged between
-tokens, and constructs split across lines, across hunks, or completed from
-untouched context), and execute the workflow's own trusted-scanner loader and
-review-decision filter straight out of the YAML.
+line (quoted pathnames, pathname bytes that are not valid UTF-8,
+`.gitattributes` `-diff`, renames, comments wedged between tokens, and
+constructs split across lines, across hunks, completed from untouched context,
+or activated by deletion), and execute the workflow's own trusted-scanner
+loader and review-decision filter straight out of the YAML.
 
 One constraint is easy to trip over: the guard scans the content of every
 changed file, **including its own sources**. A blocked pattern written out in
