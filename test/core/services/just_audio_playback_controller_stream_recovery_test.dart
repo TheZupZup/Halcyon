@@ -21,6 +21,7 @@ class _ControllablePlayer extends Fake implements AudioPlayer {
       StreamController<PlaybackEvent>.broadcast();
 
   final List<String> setUrlCalls = <String>[];
+  final List<Duration?> seekCalls = <Duration?>[];
   int playCalls = 0;
 
   /// URIs whose [setUrl] should throw.
@@ -73,7 +74,10 @@ class _ControllablePlayer extends Fake implements AudioPlayer {
   @override
   Future<void> stop() async {}
   @override
-  Future<void> seek(Duration? position, {int? index}) async {}
+  Future<void> seek(Duration? position, {int? index}) async {
+    seekCalls.add(position);
+  }
+
   @override
   Future<void> dispose() async {
     await _playerStateController.close();
@@ -138,7 +142,9 @@ void main() {
       player: player,
       resolver: resolver,
       candidates: MapPlaybackCandidateSource(() => candidates),
-    )..midStreamBufferingTimeout = Duration.zero;
+    )
+      ..midStreamBufferingTimeout = Duration.zero
+      ..streamRetryBackoff = Duration.zero;
     addTearDown(controller.dispose);
     return controller;
   }
@@ -222,7 +228,7 @@ void main() {
       await controller.handleStreamFailureForTestingAsync(
         const StreamInterruption(
           StreamInterruptionKind.networkDropped,
-          'The connection dropped while streaming. Reconnecting…',
+          'The connection dropped while streaming. Check your connection and try again.',
           retryable: true,
         ),
       );
@@ -371,13 +377,13 @@ void main() {
       await controller.handleStreamFailureForTestingAsync(
         const StreamInterruption(
           StreamInterruptionKind.networkDropped,
-          'The connection dropped while streaming. Reconnecting…',
+          'The connection dropped while streaming. Check your connection and try again.',
           retryable: true,
         ),
       );
       // Retry loaded (second resolve) but we never emit playing.
       expect(resolver.calls, <String>['jellyfin:j', 'jellyfin:j']);
-      expect(controller.state.status, PlaybackStatus.buffering);
+      expect(controller.state.status, PlaybackStatus.reconnecting);
 
       // Same escape the re-armed watchdog uses: budget already spent → error.
       controller.onBufferingTimeoutForTesting();
@@ -490,6 +496,103 @@ void main() {
         resolver.calls.where((String u) => u == 'subsonic:s').length,
         greaterThanOrEqualTo(1),
       );
+    });
+  });
+
+  group('fake-network reconnect during remote playback', () {
+    const StreamInterruption networkDrop = StreamInterruption(
+      StreamInterruptionKind.networkDropped,
+      'The connection dropped while streaming. Check your connection and try again.',
+      retryable: true,
+    );
+
+    for (final String scheme in <String>['jellyfin', 'subsonic', 'plex']) {
+      test('$scheme-shaped short loss recovers with a fresh URL and position',
+          () async {
+        final Track remote = _track('r', '$scheme:r');
+        final player = _ControllablePlayer();
+        final resolver = _FlappingResolver(reachable: <String>{remote.uri});
+        final controller = build(player: player, resolver: resolver);
+
+        await controller.playTracks(<Track>[remote]);
+        controller.handleEngineState(PlayerState(true, ProcessingState.ready));
+        expect(player.setUrlCalls, hasLength(1));
+        final String firstUrl = player.setUrlCalls.single;
+
+        const Duration preserved = Duration(minutes: 1, seconds: 12);
+        controller.setPositionForTesting(preserved);
+
+        final List<PlaybackStatus> statuses = <PlaybackStatus>[];
+        final sub = controller.stateStream.listen((PlaybackState s) {
+          statuses.add(s.status);
+        });
+        addTearDown(sub.cancel);
+
+        await controller.handleStreamFailureForTestingAsync(networkDrop);
+
+        expect(statuses, contains(PlaybackStatus.reconnecting));
+        expect(controller.state.status, isNot(PlaybackStatus.error));
+        expect(controller.state.currentTrack?.uri, remote.uri);
+        expect(resolver.calls, <String>[remote.uri, remote.uri]);
+        expect(player.setUrlCalls, hasLength(2));
+        // Fresh authenticated URL — never replay the first tokenized stream.
+        expect(player.setUrlCalls.last, isNot(firstUrl));
+        expect(player.setUrlCalls.last, contains('?n=2'));
+        expect(player.seekCalls, contains(preserved));
+        // No secret-bearing URL surfaces on the public playback state.
+        expect(controller.state.errorMessage, isNull);
+      });
+    }
+
+    test('permanent network loss surfaces error, not Reconnecting…', () async {
+      final player = _ControllablePlayer();
+      final resolver = _FlappingResolver(reachable: <String>{'jellyfin:j'});
+      final controller = build(
+        player: player,
+        resolver: resolver,
+        candidates: const <String, List<Track>>{},
+      );
+
+      await controller.playTracks(<Track>[jelly, next]);
+      controller.handleEngineState(PlayerState(true, ProcessingState.ready));
+
+      resolver.reachable.remove('jellyfin:j');
+      await controller.handleStreamFailureForTestingAsync(networkDrop);
+      // Budget spent; a second failure (watchdog or engine) ends permanently.
+      await controller.handleStreamFailureForTestingAsync(networkDrop);
+
+      final PlaybackState s = controller.state;
+      expect(s.status, PlaybackStatus.error);
+      expect(s.status, isNot(PlaybackStatus.reconnecting));
+      expect(s.errorMessage, isNot(contains('Reconnecting')));
+      expect(s.errorMessage, isNot(contains('http')));
+      expect(s.errorMessage, isNot(contains('api_key')));
+      expect(s.currentTrack?.uri, 'jellyfin:j');
+      expect(s.upNext.map((Track t) => t.uri).toList(), <String>['jellyfin:n']);
+      // Bounded: initial play + one retry resolve attempt, no infinite hammer.
+      expect(resolver.calls.length, lessThanOrEqualTo(3));
+    });
+
+    test('retry backoff is observed before the fresh resolve', () async {
+      final player = _ControllablePlayer();
+      final resolver = _FlappingResolver(reachable: <String>{'jellyfin:j'});
+      final controller = build(player: player, resolver: resolver);
+      controller.streamRetryBackoff = const Duration(milliseconds: 40);
+
+      await controller.playTracks(<Track>[jelly]);
+      controller.handleEngineState(PlayerState(true, ProcessingState.ready));
+      expect(resolver.calls, <String>['jellyfin:j']);
+
+      final Future<void> recovery =
+          controller.handleStreamFailureForTestingAsync(networkDrop);
+      // Immediately after kickoff — still in reconnecting, resolve not yet.
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.state.status, PlaybackStatus.reconnecting);
+      expect(resolver.calls, <String>['jellyfin:j']);
+
+      await recovery;
+      expect(resolver.calls, <String>['jellyfin:j', 'jellyfin:j']);
+      expect(controller.state.status, isNot(PlaybackStatus.error));
     });
   });
 }

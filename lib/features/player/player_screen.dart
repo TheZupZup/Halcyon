@@ -441,6 +441,11 @@ class _SourceOrError extends ConsumerWidget {
         ],
       );
     }
+    // A mid-stream network reconnect: distinct from plain "Buffering…" and from
+    // a permanent error + Retry, so the listener knows recovery is in flight.
+    if (state.status == PlaybackStatus.reconnecting) {
+      return const _ReconnectingIndicator();
+    }
     // A mid-stream re-buffer: a calm "Buffering…" hint rather than the source
     // badge, so it's clear the stream is catching up (not stalled).
     if (state.status == PlaybackStatus.buffering) {
@@ -464,6 +469,29 @@ class _BufferingIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return const _BusyStatusIndicator(label: 'Buffering…');
+  }
+}
+
+/// Shown while a bounded mid-stream network recovery re-resolves a fresh URL.
+/// Deliberately distinct from [_BufferingIndicator] and from the permanent
+/// error + Retry row.
+class _ReconnectingIndicator extends StatelessWidget {
+  const _ReconnectingIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    return const _BusyStatusIndicator(label: 'Reconnecting…');
+  }
+}
+
+class _BusyStatusIndicator extends StatelessWidget {
+  const _BusyStatusIndicator({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -478,7 +506,7 @@ class _BufferingIndicator extends StatelessWidget {
         ),
         const SizedBox(width: AppSpacing.xs),
         Text(
-          'Buffering…',
+          label,
           style: theme.textTheme.labelLarge?.copyWith(
             color: theme.colorScheme.onSurfaceVariant,
             letterSpacing: 0.3,

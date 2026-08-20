@@ -94,7 +94,10 @@ StreamInterruption classifyEngineError(Object error) {
   ])) {
     return const StreamInterruption(
       StreamInterruptionKind.networkDropped,
-      'The connection dropped while streaming. Reconnecting…',
+      // Terminal-safe wording: the Now Playing UI shows "Reconnecting…" while
+      // [PlaybackStatus.reconnecting] is active; this message is for a
+      // permanent failure after the bounded retry is spent.
+      'The connection dropped while streaming. Check your connection and try again.',
       retryable: true,
     );
   }

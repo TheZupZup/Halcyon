@@ -138,4 +138,39 @@ void main() {
 
     expect(controller.playCount, 1);
   });
+
+  testWidgets('reconnecting is distinct from buffering and from error', (
+    tester,
+  ) async {
+    final controller = _streamingController();
+    await _pumpPlayer(tester, controller);
+
+    controller.emit(
+      const PlaybackState(
+        status: PlaybackStatus.reconnecting,
+        currentTrack: _track,
+        duration: Duration(minutes: 4),
+        position: Duration(minutes: 1),
+      ),
+    );
+    await _pumpStreamUpdate(tester);
+
+    expect(find.text('Reconnecting…'), findsOneWidget);
+    expect(find.text('Buffering…'), findsNothing);
+    expect(find.text('Retry'), findsNothing);
+
+    controller.emit(
+      const PlaybackState(
+        status: PlaybackStatus.buffering,
+        currentTrack: _track,
+        duration: Duration(minutes: 4),
+        position: Duration(minutes: 1),
+      ),
+    );
+    await _pumpStreamUpdate(tester);
+
+    expect(find.text('Buffering…'), findsOneWidget);
+    expect(find.text('Reconnecting…'), findsNothing);
+    expect(find.text('Retry'), findsNothing);
+  });
 }
