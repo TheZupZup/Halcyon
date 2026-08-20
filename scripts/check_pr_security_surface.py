@@ -46,6 +46,10 @@ SENSITIVE_PATH_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     # build. The repository's own toolchain guard covers only the automated
     # `toolchain/flutter-sdk` branch, by design, so an ordinary PR editing a
     # pin is unreviewed without this.
+    # res/xml holds the app's security and privacy policy: the network security
+    # config decides HTTPS trust anchors and cleartext, and the backup and
+    # data-extraction rules decide what app data leaves the device.
+    (re.compile(r"^android/.*/res/xml/"), "Android security / privacy policy"),
     (re.compile(r"(?:^|/)gradle/wrapper/"), "build toolchain distribution / wrapper"),
     (re.compile(r"^\.[a-z0-9]+-version$"), "build toolchain pin"),
     # linux/ is the desktop runner; native/ holds the C++ DSP library and the
@@ -169,7 +173,9 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
             r"[\s\S]{0,2000}?"
             r"(?:[\s;&|(](?:sudo\s+)?(?:/\S+/)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\s+"
             r"|[\s;&|(]chmod\s+\+x\s+)"
-            r"['\"]?(?P=target)\b"
+            # An argument boundary, not \b: `/tmp/data` must not match inside
+            # `/tmp/data-cleanup.sh`, which is a different file.
+            r"['\"]?(?P=target)(?=$|[\s'\";&|)<>])"
         ),
         "download-then-execute shell pattern",
     ),
@@ -314,13 +320,14 @@ class ChangedSource:
     path: str
     text: str
     added_lines: frozenset[int]
+    has_deletions: bool
 
 
 _HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
-def added_line_numbers(base: str, head: str) -> dict[str, set[int]]:
-    """Map each path still present at head to the 1-based lines it gained.
+def added_line_numbers(base: str, head: str) -> dict[str, tuple[set[int], bool]]:
+    """Map each path still at head to the lines it gained and whether it lost any.
 
     Only hunk headers are read. The added text itself is taken from the file's
     post-change blob instead, which is why `--text` matters here: without it a
@@ -336,7 +343,7 @@ def added_line_numbers(base: str, head: str) -> dict[str, set[int]]:
         "--",
     )
 
-    added: dict[str, set[int]] = {}
+    added: dict[str, tuple[set[int], bool]] = {}
     current_path: str | None = None
     seen_header = False
 
@@ -363,9 +370,12 @@ def added_line_numbers(base: str, head: str) -> dict[str, set[int]]:
             continue
 
         path = current_path or UNKNOWN_PATH
-        lines = added.setdefault(path, set())
+        lines, deletions = added.setdefault(path, (set(), False))
+        if removed > count:
+            deletions = True
         if count:
             lines.update(range(start, start + count))
+        added[path] = (lines, deletions)
 
     return added
 
@@ -393,7 +403,7 @@ def changed_sources(base: str, head: str) -> tuple[list[ChangedSource], bool]:
     sources: list[ChangedSource] = []
     unresolved = False
 
-    for path, lines in added_line_numbers(base, head).items():
+    for path, (lines, deletions) in added_line_numbers(base, head).items():
         if path == UNKNOWN_PATH:
             unresolved = True
             continue
@@ -405,7 +415,7 @@ def changed_sources(base: str, head: str) -> tuple[list[ChangedSource], bool]:
             raise ScannerError(
                 f"{path!r} changed but has no readable content at {head}"
             )
-        sources.append(ChangedSource(path, text, frozenset(lines)))
+        sources.append(ChangedSource(path, text, frozenset(lines), deletions))
 
     return sources, unresolved
 
@@ -491,11 +501,30 @@ def classify(
                     # ways (a regex cannot decide reachability), any change to a
                     # file that still holds a blocked construct asks for a
                     # maintainer. Eight files in this repository qualify.
-                    if elsewhere and sink is blocked:
+                    if not elsewhere:
+                        continue
+                    if sink is blocked:
+                        # Only eight files in the repository hold one of these,
+                        # so any change to one can afford to ask.
                         sensitive.append(
                             Finding(
                                 source.path,
                                 f"change to a file containing existing {reason}",
+                            )
+                        )
+                    elif source.has_deletions:
+                        # The sensitive patterns are far broader — 356 files
+                        # carry one. Asking on every edit to any of them would
+                        # make the ordinary UI/tests/docs PR a reviewed PR,
+                        # which is the one thing this guard must not do. Removed
+                        # lines are the narrower signal: uncommenting existing
+                        # code deletes the delimiters. An edit that activates
+                        # without removing anything is not caught here, and is
+                        # accepted — this tier gates review, not merge.
+                        sensitive.append(
+                            Finding(
+                                source.path,
+                                f"deletion may activate existing {reason}",
                             )
                         )
 

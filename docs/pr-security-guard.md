@@ -13,9 +13,9 @@ lives in `scripts/check_pr_security_surface.py`; its tests are
 - **Sensitive surfaces need a review.** Changes to CI, automation trees
   (`scripts/`, `tool/`, `tools/`), dependency manifests, build toolchain pins
   (`.flutter-version`, `.java-version`, the Gradle wrapper and its
-  `distributionUrl`), Cargo manifests and lockfiles, Android permissions,
-  native code under `linux/` and `native/` with its CMake build files, or to
-  auth/network/persistence code — and added behaviour such as new network
+  `distributionUrl`), Cargo manifests and lockfiles, Android permissions and
+  the `res/xml/` security and privacy policy, native code under `linux/` and
+  `native/` with its CMake build files, or to auth/network/persistence code — and added behaviour such as new network
   clients, filesystem writes or database migrations — require **TheZupZup to
   have approved the exact current HEAD**. Pushing a new commit changes the
   HEAD, so the previous approval no longer applies.
@@ -42,6 +42,12 @@ lives in `scripts/check_pr_security_surface.py`; its tests are
   deciding reachability, which a regex cannot do, so any change to such a file
   is marked sensitive and a maintainer is asked to look. Eight files in the
   repository currently qualify, seven of them under `test/tooling/`.
+
+  The sensitive patterns get a narrower version of the same treatment: they
+  match in 356 files, so asking on every edit near one would make the ordinary
+  PR a reviewed PR. There, only a PR that *removes* lines from such a file is
+  asked about — enough to catch uncommenting existing code, which is what
+  deleting delimiters does.
 - **It fails closed.** A missing base commit, an undecodable diff header, a
   scanner crash, or a scan that ends without a verdict all fail the job.
 

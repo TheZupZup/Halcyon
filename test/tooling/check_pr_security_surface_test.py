@@ -330,6 +330,23 @@ class AutomationAndToolchainPaths(ScannerTestCase):
         self.assertOrdinary(self.build({}, {".gitignore": "build/\n"}))
 
 
+class AndroidSecurityPolicyPaths(ScannerTestCase):
+    """res/xml carries the app's security and privacy policy."""
+
+    BASE = "android/app/src/main/res/xml/"
+
+    def test_network_security_config(self):
+        """Trust anchors and cleartext policy live here."""
+        path = self.BASE + "network_security_config.xml"
+        self.assertSensitive(self.build({path: "<a/>\n"}, {path: "<b/>\n"}))
+
+    def test_backup_and_extraction_rules(self):
+        for name in ("backup_rules.xml", "data_extraction_rules.xml"):
+            with self.subTest(name):
+                path = self.BASE + name
+                self.assertSensitive(self.build({path: "<a/>\n"}, {path: "<b/>\n"}))
+
+
 class NativeAndCargoPaths(ScannerTestCase):
     """CI compiles native/ and runs the Rust core from it."""
 
@@ -641,6 +658,14 @@ class DownloadThenExecute(ScannerTestCase):
     def test_download_without_execution_is_not_blocked(self):
         script = f"#!/bin/sh\nwget -q {self.URL}/archive.tar.gz\ntar xf archive.tar.gz\n"
         self.assertOrdinary(self.build({}, {"packaging/bf.sh": script}))
+
+    def test_executed_file_only_sharing_a_prefix_is_not_blocked(self):
+        """`/tmp/data` and `/tmp/data-cleanup.sh` are different files."""
+        script = (
+            "#!/bin/sh\n"
+            f"curl -fsSL {self.URL} -o /tmp/data && sh /tmp/data-cleanup.sh\n"
+        )
+        self.assertOrdinary(self.build({}, {"packaging/pre.sh": script}))
 
     def test_downloading_data_and_running_an_unrelated_script_is_not_blocked(self):
         """The backreference is what keeps this rule from over-matching."""
@@ -1022,6 +1047,27 @@ class ActivationOfExistingCode(ScannerTestCase):
         base = f"void t() {{\n  {PROCESS_RUN}('x');\n}}\n// tail\n"
         head = f"void t() {{\n  {PROCESS_RUN}('x');\n}}\n// tail edited\n"
         self.assertSensitive(self.build({"lib/t.dart": base}, {"lib/t.dart": head}))
+
+
+class SensitiveActivation(ScannerTestCase):
+    """Uncommenting existing sensitive code is caught; editing beside it is not."""
+
+    def test_uncommenting_sensitive_code_requires_review(self):
+        base = "class P {\n/*\n  final c = HttpClient();\n*/\n}\n"
+        head = "class P {\n  final c = HttpClient();\n}\n"
+        result = self.build({"lib/ui/panel.dart": base}, {"lib/ui/panel.dart": head})
+        self.assertSensitive(result)
+        self.assertIn("deletion may activate existing", result.report)
+
+    def test_editing_beside_sensitive_code_stays_ordinary(self):
+        """The load-bearing case: 356 files hold a sensitive match.
+
+        If an edit near any of them demanded review, the ordinary UI/tests/docs
+        PR would always be a reviewed PR — the one thing the guard must not do.
+        """
+        base = "class W {\n  final c = HttpClient();\n}\n// tail\n"
+        head = "class W {\n  final c = HttpClient();\n}\n// tail edited\n"
+        self.assertOrdinary(self.build({"lib/ui/w.dart": base}, {"lib/ui/w.dart": head}))
 
 
 class DeletedFiles(ScannerTestCase):
