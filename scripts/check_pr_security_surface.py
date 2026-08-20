@@ -151,9 +151,9 @@ _EXEC_WRAPPER = (
 #   `;`, `|` and `&&` end the download command, so the output flag has to be
 #   found before one; a single `&` is kept, being ordinary inside a quoted
 #   query string. Short options bundle and may carry the value attached
-#   (`-o f`, `-qO f`, `-of`); the long forms cover curl's --output and wget's
-#   --output-document. Quotes live outside the capture so `-o /tmp/i` and
-#   `sh "/tmp/i"` compare equal.
+#   (`-o f`, `-qO f`, `-of`); the long forms cover both clients' output options.
+#   Quotes live outside the capture so quoted and unquoted target paths compare
+#   equal when the same downloaded file is later executed.
 def _download_to_file(gap: str) -> str:
     return (
         rf"(?:curl|wget)(?:[^\n;|&]|&(?!&)|\\\n)*?"
@@ -172,9 +172,9 @@ _SAME_TARGET = r"""['\"]?(?P=target)(?=$|[\s'\";&|)<>])"""
 _SH_GAP = r"(?:[ \t]|\\\n)"
 
 # One shell argument/fragment that may contain separators only while quoted.
-# This keeps `curl 'https://x?a=1&b=2' | sh` detectable while ensuring an
-# unquoted `;` or `&` ends the curl/wget command instead of letting a later,
-# unrelated pipeline become a false hard block.
+# A quoted URL may legitimately contain `&` or `;`; it must still be recognized
+# when its download stream is piped into an interpreter. Unquoted separators end
+# that command so a later unrelated local pipeline cannot become a hard block.
 _SHELL_QUOTED = r"""(?:'(?:[^']*)'|"(?:\\.|[^"\\])*")"""
 _SHELL_COMMAND_SEGMENT = rf"(?:{_SHELL_QUOTED}|\\\n|[^\n|;&])*"
 
@@ -233,8 +233,9 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(
             # Quoted arguments may legitimately contain `;`, `&`, or `|`; an
             # unquoted separator ends the download command. Intermediate pipe
-            # stages use the same quote-aware segment so `| sed 's;a;b;' | sh`
-            # stays detectable without crossing into a later unrelated command.
+            # stages use the same quote-aware segment so quoted transformation
+            # expressions remain part of that pipeline without crossing into a
+            # later unrelated command.
             rf"(?:curl|wget){_SHELL_COMMAND_SEGMENT}"
             rf"(?:(?<!\|)\|(?!\|){_SHELL_COMMAND_SEGMENT})*"
             rf"(?<!\|)\|(?!\|)[ \t]*\n?[ \t]*"
