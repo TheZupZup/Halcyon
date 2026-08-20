@@ -264,12 +264,18 @@ def changed_files(base: str, head: str) -> list[str]:
     return [path for path in output.split("\0") if path]
 
 
+# Destination of a `+++ /dev/null` header: the file is gone at head. Distinct
+# from None, which means the header could not be parsed at all — one is an
+# ordinary deletion, the other is a reason to stop and ask for a human.
+DELETED = "\0deleted"
+
+
 def _header_path(rest: str) -> str | None:
     """Resolve the destination path from a `+++ ` diff header."""
 
     path = unquote_git_path(rest.strip())
     if path == "/dev/null":
-        return None
+        return DELETED
     if path.startswith("b/"):
         return path[2:]
     return None
@@ -282,14 +288,13 @@ class ChangedSource:
     path: str
     text: str
     added_lines: frozenset[int]
-    has_deletions: bool
 
 
 _HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
-def added_line_numbers(base: str, head: str) -> dict[str, tuple[set[int], bool]]:
-    """Map each changed path to the lines it gained and whether it lost any.
+def added_line_numbers(base: str, head: str) -> dict[str, set[int]]:
+    """Map each path still present at head to the 1-based lines it gained.
 
     Only hunk headers are read. The added text itself is taken from the file's
     post-change blob instead, which is why `--text` matters here: without it a
@@ -305,7 +310,7 @@ def added_line_numbers(base: str, head: str) -> dict[str, tuple[set[int], bool]]
         "--",
     )
 
-    added: dict[str, tuple[set[int], bool]] = {}
+    added: dict[str, set[int]] = {}
     current_path: str | None = None
     seen_header = False
 
@@ -326,17 +331,15 @@ def added_line_numbers(base: str, head: str) -> dict[str, tuple[set[int], bool]]
         start = int(match.group(2))
         count = 1 if match.group(3) is None else int(match.group(3))
 
+        if current_path == DELETED:
+            # The whole file is gone at head. There is no post-change content to
+            # scan, and changed_files() still classifies the path it had.
+            continue
+
         path = current_path or UNKNOWN_PATH
-        lines, deletions = added.setdefault(path, (set(), False))
-        # A net loss of lines is what can activate code the PR never retyped:
-        # dropping a `/*` or an `if (false)` wrapper leaves the guarded call
-        # untouched but live. A one-for-one edit is not that — its new text is
-        # an added line and gets scanned as one.
-        if removed > count:
-            deletions = True
+        lines = added.setdefault(path, set())
         if count:
             lines.update(range(start, start + count))
-        added[path] = (lines, deletions)
 
     return added
 
@@ -364,11 +367,9 @@ def changed_sources(base: str, head: str) -> tuple[list[ChangedSource], bool]:
     sources: list[ChangedSource] = []
     unresolved = False
 
-    for path, (lines, deletions) in added_line_numbers(base, head).items():
+    for path, lines in added_line_numbers(base, head).items():
         if path == UNKNOWN_PATH:
             unresolved = True
-            continue
-        if not lines and not deletions:
             continue
         text = file_text(head, path)
         if text is None:
@@ -378,7 +379,7 @@ def changed_sources(base: str, head: str) -> tuple[list[ChangedSource], bool]:
             raise ScannerError(
                 f"{path!r} changed but has no readable content at {head}"
             )
-        sources.append(ChangedSource(path, text, frozenset(lines), deletions))
+        sources.append(ChangedSource(path, text, frozenset(lines)))
 
     return sources, unresolved
 
@@ -455,18 +456,20 @@ def classify(
                         break
                     elsewhere = True
                 else:
-                    # The construct is in the file but on lines this PR left
-                    # alone. Normally that is grandfathered code and no concern.
-                    # It stops being grandfathered when the PR removes lines:
-                    # deleting a comment opener or a disabled branch can make an
-                    # untouched call live without ever retyping it. Deciding
-                    # that from a regex would need a real Dart parser, so this
-                    # asks for a maintainer rather than guessing.
-                    if elsewhere and source.has_deletions and sink is blocked:
+                    # The construct is in the file, but on lines this PR left
+                    # alone. That is usually grandfathered code and no concern —
+                    # except that a change elsewhere in the file can make it
+                    # live without retyping it. Deleting a comment opener does
+                    # that; so does flipping `if (false)` to `if (true)`, which
+                    # loses no lines at all. Rather than trying to enumerate the
+                    # ways (a regex cannot decide reachability), any change to a
+                    # file that still holds a blocked construct asks for a
+                    # maintainer. Eight files in this repository qualify.
+                    if elsewhere and sink is blocked:
                         sensitive.append(
                             Finding(
                                 source.path,
-                                f"deletion may activate existing {reason}",
+                                f"change to a file containing existing {reason}",
                             )
                         )
 

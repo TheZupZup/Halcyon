@@ -617,11 +617,16 @@ class ConstructCompletedFromContext(ScannerTestCase):
         self.assertBlocked(result)
         self.assertIn("lib/r.dart", result.reported_paths())
 
-    def test_grandfathered_construct_on_an_untouched_line_is_not_reported(self):
-        """Editing elsewhere in a file that already contains a blocked call."""
+    def test_grandfathered_construct_is_reviewed_but_never_blocked(self):
+        """Editing elsewhere in a file that already contains a blocked call.
+
+        The construct was not introduced here, so it must not hard-block the
+        PR — an approval has to remain possible. It is still surfaced, because
+        an edit elsewhere in the file can be what made it reachable.
+        """
         base = f"void t() {{\n  {PROCESS_RUN}('x');\n}}\n// tail\n"
         head = f"void t() {{\n  {PROCESS_RUN}('x');\n}}\n// tail edited\n"
-        self.assertOrdinary(self.build({"lib/t.dart": base}, {"lib/t.dart": head}))
+        self.assertSensitive(self.build({"lib/t.dart": base}, {"lib/t.dart": head}))
 
     def test_touching_the_grandfathered_line_itself_is_reported(self):
         base = f"void t() {{\n  {PROCESS_RUN}('x');\n}}\n"
@@ -911,8 +916,8 @@ class TrustedScannerLoader(unittest.TestCase):
         self.assertEqual(loaded, "")
 
 
-class DeletionActivation(ScannerTestCase):
-    """Removing lines can make untouched code live without retyping it."""
+class ActivationOfExistingCode(ScannerTestCase):
+    """A change elsewhere can make untouched code live without retyping it."""
 
     INERT = "class A {\n/*\n  void g() { %s('sh', const []); }\n*/\n}\n"
     LIVE = "class A {\n  void g() { %s('sh', const []); }\n}\n"
@@ -924,7 +929,7 @@ class DeletionActivation(ScannerTestCase):
         )
         self.assertSensitive(result)
         self.assertIn(
-            "deletion may activate existing runtime process execution",
+            "change to a file containing existing runtime process execution",
             result.report,
         )
 
@@ -933,11 +938,37 @@ class DeletionActivation(ScannerTestCase):
             self.build({"lib/p.dart": "a\nb\nc\nd\n"}, {"lib/p.dart": "a\nd\n"})
         )
 
-    def test_one_for_one_edit_is_not_treated_as_a_deletion(self):
-        """A modified line is an added line; it must not take the deletion path."""
+    def test_flipping_a_guard_condition_requires_review(self):
+        """`if (false)` to `if (true)` loses no lines at all."""
+        shape = "class A {\n  void g() {\n    if (%s) {\n      %s('sh');\n    }\n  }\n}\n"
+        result = self.build(
+            {"lib/ui/a.dart": shape % ("false", PROCESS_RUN)},
+            {"lib/ui/a.dart": shape % ("true", PROCESS_RUN)},
+        )
+        self.assertSensitive(result)
+
+    def test_editing_a_file_near_grandfathered_code_requires_review(self):
         base = f"void t() {{\n  {PROCESS_RUN}('x');\n}}\n// tail\n"
         head = f"void t() {{\n  {PROCESS_RUN}('x');\n}}\n// tail edited\n"
-        self.assertOrdinary(self.build({"lib/t.dart": base}, {"lib/t.dart": head}))
+        self.assertSensitive(self.build({"lib/t.dart": base}, {"lib/t.dart": head}))
+
+
+class DeletedFiles(ScannerTestCase):
+    """`+++ /dev/null` is an ordinary deletion, not an unparseable header."""
+
+    def test_deleting_an_ordinary_file_is_ordinary(self):
+        self.assertOrdinary(
+            self.build({"lib/ui.dart": "class U {}\n"}, {"lib/ui.dart": None})
+        )
+
+    def test_deleting_a_sensitive_file_is_still_sensitive(self):
+        self.assertSensitive(
+            self.build({"scripts/x.sh": "echo hi\n"}, {"scripts/x.sh": None})
+        )
+
+    def test_deleted_file_does_not_report_an_unresolved_path(self):
+        result = self.build({"lib/ui.dart": "class U {}\n"}, {"lib/ui.dart": None})
+        self.assertNotIn(scanner.UNKNOWN_PATH, result.report)
 
 
 class UndecodablePathnames(ScannerTestCase):

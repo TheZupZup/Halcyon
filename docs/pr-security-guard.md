@@ -30,14 +30,13 @@ lives in `scripts/check_pr_security_surface.py`; its tests are
   overlaps a line the PR added. A construct assembled partly from tokens that
   were already in the file is therefore caught, while code the PR never touched
   is left alone.
-- **A net deletion is treated as a change too.** Removing a comment opener or a
-  disabled branch can make an untouched call live without retyping it. When a
-  PR removes lines from a file that holds a blocked construct on lines it did
-  not touch, that file is marked sensitive and a maintainer is asked to look.
-  Deciding whether the construct actually became reachable would need a real
-  Dart parser, so the guard asks rather than guesses. Eight files in the
-  repository currently carry such a construct, seven of them under
-  `test/tooling/`.
+- **Touching a file that already holds a blocked construct needs review.** A
+  change elsewhere in a file can make untouched code live without retyping it —
+  deleting a comment opener does it, and so does flipping `if (false)` to
+  `if (true)`, which loses no lines at all. Enumerating the ways would mean
+  deciding reachability, which a regex cannot do, so any change to such a file
+  is marked sensitive and a maintainer is asked to look. Eight files in the
+  repository currently qualify, seven of them under `test/tooling/`.
 - **It fails closed.** A missing base commit, an undecodable diff header, a
   scanner crash, or a scan that ends without a verdict all fail the job.
 
@@ -111,7 +110,8 @@ pattern, cover the diff-rendering tricks that would otherwise hide an added
 line (quoted pathnames, pathname bytes that are not valid UTF-8,
 `.gitattributes` `-diff`, renames, comments wedged between tokens, and
 constructs split across lines, across hunks, completed from untouched context,
-or activated by deletion), and execute the workflow's own trusted-scanner
+or activated by an edit elsewhere in the file), and execute the workflow's
+own trusted-scanner
 loader and review-decision filter straight out of the YAML.
 
 One constraint is easy to trip over: the guard scans the content of every
