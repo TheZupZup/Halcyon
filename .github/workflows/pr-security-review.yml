@@ -32,11 +32,20 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
+      # Never execute the scanner supplied by an untrusted PR. Read the scanner
+      # from the PR's base commit so a contributor cannot weaken the guard in the
+      # same diff that is being inspected.
+      - name: Load trusted scanner from PR base
+        run: |
+          set -euo pipefail
+          git show "$BASE_SHA:scripts/check_pr_security_surface.py" \
+            > "$RUNNER_TEMP/check_pr_security_surface.py"
+
       - name: Scan changed security surfaces
         id: scan
         continue-on-error: true
         run: |
-          python3 scripts/check_pr_security_surface.py \
+          python3 "$RUNNER_TEMP/check_pr_security_surface.py" \
             --base "$BASE_SHA" \
             --head "$HEAD_SHA" \
             --report "$RUNNER_TEMP/security-surface.md" \
