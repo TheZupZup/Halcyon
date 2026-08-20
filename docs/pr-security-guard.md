@@ -46,9 +46,11 @@ lives in `scripts/check_pr_security_surface.py`; its tests are
 
   The sensitive patterns get a narrower version of the same treatment: they
   match in 356 files, so asking on every edit near one would make the ordinary
-  PR a reviewed PR. There, only a PR that *removes* lines from such a file is
-  asked about — enough to catch uncommenting existing code, which is what
-  deleting delimiters does.
+  PR a reviewed PR. There, the trigger is specific — the PR removed a line that
+  had been *suppressing* code: a block or markup comment delimiter, a disabled
+  preprocessor branch, an `if (false)` guard. That catches uncommenting however
+  it is spelled, including replacing the delimiters with blank lines, while an
+  ordinary edit or deletion beside such code stays ordinary.
 - **It fails closed.** A missing base commit, an undecodable diff header, a
   scanner crash, or a scan that ends without a verdict all fail the job.
 

