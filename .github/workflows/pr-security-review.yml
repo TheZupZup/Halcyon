@@ -32,14 +32,27 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      # Never execute the scanner supplied by an untrusted PR. Read the scanner
-      # from the PR's base commit so a contributor cannot weaken the guard in the
-      # same diff that is being inspected.
-      - name: Load trusted scanner from PR base
+      # Normal operation always executes the scanner from the trusted PR base,
+      # never from an untrusted contributor's HEAD. The one exception is the
+      # initial bootstrap PR that introduces this scanner: if the base does not
+      # contain it yet, only a PR authored by the repository owner may use the
+      # HEAD copy. Once this lands on main, external PRs can never take this path.
+      - name: Load trusted scanner
+        shell: bash
         run: |
           set -euo pipefail
-          git show "$BASE_SHA:scripts/check_pr_security_surface.py" \
-            > "$RUNNER_TEMP/check_pr_security_surface.py"
+          scanner="$RUNNER_TEMP/check_pr_security_surface.py"
+
+          if git cat-file -e "$BASE_SHA:scripts/check_pr_security_surface.py" 2>/dev/null; then
+            git show "$BASE_SHA:scripts/check_pr_security_surface.py" > "$scanner"
+            echo "Loaded security scanner from trusted PR base."
+          elif [ "$PR_AUTHOR" = "$REPO_OWNER" ]; then
+            cp scripts/check_pr_security_surface.py "$scanner"
+            echo "Bootstrap: trusted scanner does not exist on base yet; using repository-owner HEAD copy."
+          else
+            echo "::error::Trusted security scanner is missing from the PR base. Refusing to execute the contributor-supplied scanner."
+            exit 1
+          fi
 
       - name: Scan changed security surfaces
         id: scan
