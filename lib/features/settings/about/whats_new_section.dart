@@ -20,9 +20,10 @@ class WhatsNewSection extends StatelessWidget {
   /// handful of concise bullets and updated when cutting a new build; exposed so
   /// the widget test can assert each line renders without duplicating the copy.
   static const List<String> releaseNotes = <String>[
-    'Now Playing has a smoother wavy seek bar and a redesigned synced-lyrics experience.',
-    'Remote artwork is cached on disk so covers can survive restarts without being downloaded again.',
-    'Automatic song precaching can now be disabled while normal streaming and manual downloads keep working.',
+    'Linux playback now recovers more reliably from network/server drops and suspend/resume.',
+    'Linux can restore the previous queue and position safely after an unexpected restart, without autoplay.',
+    'Audiobookshelf connection, authentication, and library support has started with the first integration milestone.',
+    'Self-hosted server URLs, IPv6 handling, source re-sync performance, and desktop defaults are improved.',
   ];
 
   @override
