@@ -307,6 +307,25 @@ class SensitiveSurfaces(ScannerTestCase):
         self.assertSensitive(result)
 
 
+class GithubDirectoryPaths(ScannerTestCase):
+    """`.github/` is automation by default; only community metadata is exempt."""
+
+    def test_agent_prompt_is_sensitive(self):
+        """flutter-ci-fixer.yml feeds this to an agent with workspace-write."""
+        path = ".github/codex/prompts/fix-flutter-ci.md"
+        self.assertSensitive(self.build({path: "old\n"}, {path: "new\n"}))
+
+    def test_workflows_and_actions_still_sensitive(self):
+        for path in (".github/workflows/ci.yml", ".github/actions/setup-flutter/action.yml"):
+            with self.subTest(path):
+                self.assertSensitive(self.build({path: "a: 1\n"}, {path: "a: 2\n"}))
+
+    def test_community_metadata_stays_ordinary(self):
+        for path in (".github/ISSUE_TEMPLATE/bug_report.yml", ".github/FUNDING.yml"):
+            with self.subTest(path):
+                self.assertOrdinary(self.build({path: "a: 1\n"}, {path: "a: 2\n"}))
+
+
 class AutomationAndToolchainPaths(ScannerTestCase):
     """CI executes more than scripts/, and consumes pinned toolchains."""
 
@@ -477,6 +496,20 @@ class ShellFlagValues(ScannerTestCase):
     def test_variable_value_is_blocked(self):
         """Unjudgeable from here, so it stays blocked."""
         self.assertBlocked(self.build({}, {"lib/a.dart": f"var o = {self.FLAG}: allowShell;\n"}))
+
+    def test_expression_merely_starting_with_false_is_blocked(self):
+        """`false || true` evaluates true; the exemption is for `false` alone."""
+        for name, value in (("lib/x1.dart", "false || true"), ("lib/x2.dart", "false == false")):
+            with self.subTest(value):
+                self.assertBlocked(
+                    self.build({}, {name: f"var o = {self.FLAG}: {value};\n"})
+                )
+
+    def test_disabled_value_at_expression_delimiters(self):
+        for name, tail in (("lib/y1.dart", ","), ("lib/y2.dart", ")"), ("lib/y3.dart", ";")):
+            with self.subTest(tail):
+                result = self.build({}, {name: f"f({self.FLAG}: false{tail}\n"})
+                self.assertFalse(result.blocked, result.report)
 
     def test_explicitly_disabled_is_not_blocked(self):
         """Shell execution stays off, and an approval could not clear a block."""
@@ -705,6 +738,21 @@ class DownloadThenExecute(ScannerTestCase):
                     f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/i && ", spelling, " /tmp/i\n"
                 )
                 self.assertBlocked(self.build({}, {name: script}))
+
+    def test_wrapper_command_before_the_interpreter(self):
+        """`env sh` launches the interpreter just as `sh` does."""
+        for name, wrapper in (
+            ("packaging/w1.sh", "env"),
+            ("packaging/w2.sh", "nohup"),
+            ("packaging/w3.sh", "env FOO=1"),
+        ):
+            with self.subTest(wrapper):
+                script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} | {wrapper} ", "sh", "\n")
+                self.assertBlocked(self.build({}, {name: script}))
+
+    def test_wrapper_before_a_non_interpreter_is_not_blocked(self):
+        script = f"#!/bin/sh\ncurl -s {self.URL} | timeout 5 jq .\n"
+        self.assertOrdinary(self.build({}, {"packaging/w4.sh": script}))
 
     def test_redirect_belonging_to_a_later_command_is_not_blocked(self):
         """The curl never writes /tmp/i; printf does, after a `;`."""

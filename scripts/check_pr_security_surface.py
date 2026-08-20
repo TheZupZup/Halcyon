@@ -34,7 +34,16 @@ UNKNOWN_PATH = "<unresolved diff path>"
 
 
 SENSITIVE_PATH_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"^\.github/(workflows|actions)/"), "CI / GitHub Actions"),
+    # Default-sensitive for the whole directory, with a short allowlist for
+    # non-executable community metadata. Enumerating the automation instead
+    # would have to be extended for each new kind: .github/codex/prompts/ holds
+    # the prompt flutter-ci-fixer.yml reads from main and feeds to an agent with
+    # workspace-write and a repository secret, which no `workflows|actions` rule
+    # would ever have matched.
+    (
+        re.compile(r"^\.github/(?!ISSUE_TEMPLATE/|PULL_REQUEST_TEMPLATE|FUNDING\.)"),
+        "CI / automation configuration",
+    ),
     # scripts/, tool/ and tools/ all hold code that CI executes:
     # tool/version_from_tag.dart gates release versioning and
     # tools/large_library/ is run by the large-library workflow.
@@ -115,6 +124,14 @@ def _split_literal(*fragments: str) -> str:
 # across lines at any point where a space is legal, so every gap in the download
 # rules has to accept one — the flag, its value and the interpreter's argument
 # alike, not just the first of them.
+# Commands that launch another command. `| env sh` and `&& nohup bash f` run the
+# interpreter just as surely as naming it alone does, so the whole class is
+# allowed in front of one rather than each wrapper being added as it turns up.
+_EXEC_WRAPPER = (
+    r"(?:(?:sudo|env|command|exec|nohup|nice|stdbuf|setsid|ionice|timeout)\s+"
+    r"(?:[-\w=./]+\s+)*)*"
+)
+
 _SH_GAP = r"(?:[ \t]|\\\n)"
 
 _SEP = r"(?:\s|(?s:/\*.*?\*/)|//[^\n]*)*"
@@ -138,7 +155,14 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         # The whitespace sits inside the lookahead on purpose: with `\s*` before
         # it, the engine backtracks to zero width and tests the space instead of
         # the value, so `false` slips through as "not false".
-        re.compile(rf"""\b{_split_literal("runIn", "Shell")}['"]?\s*:(?!\s*false\b)"""),
+        #
+        # `false` also has to be the entire value. `false || true` and
+        # `false == false` both start with it and both evaluate true, so the
+        # exemption ends at a value delimiter.
+        re.compile(
+            rf"""\b{_split_literal("runIn", "Shell")}['"]?\s*:"""
+            r"""(?!\s*false\s*(?:[,);}\]\n]|$))"""
+        ),
         "runtime shell execution",
     ),
     (
@@ -167,8 +191,8 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
             # refusing to cross `;` or `&`, which would end the pipeline and
             # make a later `| sh` a different command.
             r"(?:curl|wget)(?:[^\n|]|\\\n)*(?:(?<!\|)\|(?!\|)[^|\n;&]*)*"
-            r"(?<!\|)\|(?!\|)[ \t]*\n?[ \t]*"
-            r"(?:sudo\s+)?(?:/\S+/)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
+            rf"(?<!\|)\|(?!\|)[ \t]*\n?[ \t]*"
+            rf"{_EXEC_WRAPPER}(?:/\S+/)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
             r"|\b(?:sh|bash|zsh)\s+<\(\s*(?:curl|wget)\b"
             r"|\b(?:sh|bash|zsh)\s+-c\s+['\"]?\$\(\s*(?:curl|wget)\b"
             r"|\beval\s+.*\$\(\s*(?:curl|wget)\b"
@@ -194,7 +218,7 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
             # compare equal.
             rf"['\"]?(?P<target>[^\s'\";&|<>]+)['\"]?"
             rf"[\s\S]{{0,2000}}?"
-            rf"(?:[\s;&|(](?:sudo{_SH_GAP}+)?(?:/\S+/)?"
+            rf"(?:[\s;&|(]{_EXEC_WRAPPER}(?:/\S+/)?"
             rf"(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node){_SH_GAP}+"
             # `. f` and `source f` execute the file in the current shell, which
             # is the same capability by a different spelling.

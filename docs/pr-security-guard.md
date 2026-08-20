@@ -10,7 +10,10 @@ lives in `scripts/check_pr_security_surface.py`; its tests are
 
 - **Ordinary PRs pass untouched.** UI, tests and docs changes produce
   `sensitive=false` and the gate is a no-op.
-- **Sensitive surfaces need a review.** Changes to CI, automation trees
+- **Sensitive surfaces need a review.** Changes to anything under `.github/`
+  except issue templates and funding metadata (workflows, composite actions,
+  Dependabot config, and the agent prompts CI feeds to `openai/codex-action`),
+  automation trees
   (`scripts/`, `tool/`, `tools/`), dependency manifests, build toolchain pins
   (`.flutter-version`, `.java-version`, the Gradle wrapper and its
   `distributionUrl`), Cargo manifests and lockfiles, Android permissions, the
