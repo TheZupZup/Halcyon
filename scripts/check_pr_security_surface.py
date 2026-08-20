@@ -73,6 +73,18 @@ def _split_literal(*fragments: str) -> str:
     return "".join(fragments)
 
 
+# Separator allowed between the tokens of a blocked construct. Dart accepts a
+# comment anywhere whitespace is legal, so a block or line comment wedged
+# between an API's receiver, its dot and its member name is the same call.
+#
+# This is deliberately a *separator*, not a comment-stripping pass over the
+# diff. Stripping would have to decide what is a comment and what is a string
+# literal, and getting that wrong is itself a bypass: a crafted `/*` inside a
+# string would make the stripper swallow the real code that follows it. Widening
+# the gap between two tokens cannot hide anything, because the separator only
+# ever matches whitespace and comments — never code.
+_SEP = r"(?:\s|(?s:/\*.*?\*/)|//[^\n]*)*"
+
 _FFI = _split_literal("f", "fi")
 _PR_TARGET_TRIGGER = _split_literal("pull_request", "_target")
 
@@ -81,7 +93,10 @@ _PR_TARGET_TRIGGER = _split_literal("pull_request", "_target")
 # same runtime capability as calling it inline, so requiring a following `(`
 # would leave a trivial bypass.
 BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"\bProcess\s*\.\s*(?:run|runSync|start|startSync|killPid)\b"), "runtime process execution"),
+    (
+        re.compile(rf"\bProcess{_SEP}\.{_SEP}(?:run|runSync|start|startSync|killPid)\b"),
+        "runtime process execution",
+    ),
     (re.compile(rf"""\b{_split_literal("runIn", "Shell")}\b"""), "runtime shell execution"),
     (
         re.compile(
@@ -102,12 +117,27 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (
         re.compile(
-            r"(?:curl|wget)[^\n|]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
+            r"(?:curl|wget)[^\n|]*\|\s*(?:sudo\s+)?(?:/\S+/)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
             r"|\b(?:sh|bash|zsh)\s+<\(\s*(?:curl|wget)\b"
             r"|\b(?:sh|bash|zsh)\s+-c\s+['\"]?\$\(\s*(?:curl|wget)\b"
             r"|\beval\s+.*\$\(\s*(?:curl|wget)\b"
         ),
         "download-and-execute shell pattern",
+    ),
+    (
+        # Download-to-file, then run that same file. The backreference is what
+        # keeps this precise: fetching a data file and separately running an
+        # unrelated local script does not match.
+        re.compile(
+            r"(?:curl|wget)[^\n]*?"
+            r"(?:\s-o\s+|\s--output[= ]|\s-O\s+|\s*>\s*)"
+            r"(?P<target>['\"]?[^\s'\";&|<>]+['\"]?)"
+            r"[\s\S]{0,2000}?"
+            r"(?:[\s;&|(](?:sudo\s+)?(?:/\S+/)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\s+"
+            r"|[\s;&|(]chmod\s+\+x\s+)"
+            r"(?P=target)"
+        ),
+        "download-then-execute shell pattern",
     ),
 )
 
