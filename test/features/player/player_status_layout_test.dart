@@ -119,4 +119,23 @@ void main() {
     expect(find.text('Playing from Navidrome'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('an error shows a Retry control that re-triggers play', (
+    tester,
+  ) async {
+    final controller = FakePlaybackController(
+      initial: const PlaybackState(
+        status: PlaybackStatus.error,
+        currentTrack: _track,
+        errorMessage: "Couldn't reach your music server.",
+      ),
+    );
+    await _pumpPlayer(tester, controller);
+
+    expect(find.text('Retry'), findsOneWidget);
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+
+    expect(controller.playCount, 1);
+  });
 }

@@ -126,6 +126,12 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   /// recovers without ever looping forever on a real outage/expiry.
   static const int _maxStreamRetries = 1;
 
+  /// How long a mid-stream re-buffer may persist before it is treated as a dead
+  /// stream. Prevents an unreachable server from leaving the UI stuck on
+  /// "Buffering…" when the engine never surfaces an error. Set shorter in tests.
+  static const Duration _defaultMidStreamBufferingTimeout =
+      Duration(seconds: 30);
+
   final AudioPlayer _player;
   final PlayableUriResolver _resolver;
 
@@ -242,6 +248,21 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   // failure. Reset when a fresh track loads and when playback reaches `playing`,
   // so each track (and each successful stretch) gets its own one-retry budget.
   int _retriesForCurrent = 0;
+
+  /// Whether a mid-stream recovery (bounded retry or sibling fallback) is
+  /// already running. Set synchronously before the async work starts so a
+  /// concurrent watchdog timeout and engine error cannot both drive recovery.
+  bool _streamRecoveryInFlight = false;
+
+  /// Fires when a mid-stream [PlaybackStatus.buffering] outlasts
+  /// [midStreamBufferingTimeout], turning a silent stall into a recoverable
+  /// failure. Null when not buffering.
+  Timer? _bufferingWatchdog;
+
+  /// How long mid-stream buffering may last before [_onBufferingTimeout]
+  /// runs. Never changed in production; tests set this to keep runs fast.
+  @visibleForTesting
+  Duration midStreamBufferingTimeout = _defaultMidStreamBufferingTimeout;
 
   // Guards against overlapping playback transitions. Every action that changes
   // what's playing — skip to next/previous, jump within the queue or history,
@@ -648,7 +669,20 @@ class JustAudioPlaybackController implements LocalPlaybackController {
     // unaffected.
     if (status == PlaybackStatus.idle) return;
     // Playback is healthy again: give a later, independent drop a fresh retry.
-    if (status == PlaybackStatus.playing) _retriesForCurrent = 0;
+    // Do not reset while a mid-stream recovery is still loading — a stale
+    // ready/playing event from setUrl must not refill the retry budget mid-attempt.
+    if (status == PlaybackStatus.playing) {
+      if (!_streamRecoveryInFlight) {
+        _retriesForCurrent = 0;
+      }
+      _cancelBufferingWatchdog();
+    }
+    if (status == PlaybackStatus.buffering &&
+        _state.status == PlaybackStatus.playing) {
+      // A mid-stream re-buffer on a track that was playing: arm the watchdog so
+      // a server that vanishes without an engine error can't hang forever.
+      _armBufferingWatchdog();
+    }
     // When a track finishes, what happens next depends on the repeat mode.
     if (status == PlaybackStatus.completed) {
       _onCompleted();
@@ -659,39 +693,167 @@ class JustAudioPlaybackController implements LocalPlaybackController {
 
   /// Recovers from an engine error that happens **while streaming**. A transient
   /// drop gets one bounded retry that re-resolves and reloads at the preserved
-  /// position; an auth/format failure (or an exhausted retry) shows a friendly,
-  /// secret-free message. The raw [error] (which can carry a tokenized URL) is
-  /// never logged or surfaced — only its classification is used.
+  /// position; when that is exhausted, sibling source candidates are tried once
+  /// at the same position. An auth/format failure (or an exhausted fallback)
+  /// shows a friendly, secret-free message. The raw [error] (which can carry a
+  /// tokenized URL) is never logged or surfaced — only its classification is
+  /// used.
   void _onEngineError(Object error, StackTrace _) {
-    // A cast receiver owns the audio while suspended: never touch local
-    // playback, so a local engine glitch can't pull output back from the
-    // receiver or start duplicate audio.
     if (_suspended) return;
-    // Only recover from a failure that happens once we're actually streaming; an
-    // initial-load failure is handled where setUrl is awaited (with its own
-    // friendly message), so we don't fight it here.
     if (_state.status != PlaybackStatus.playing &&
         _state.status != PlaybackStatus.buffering) {
       return;
     }
+    _handleStreamFailure(classifyEngineError(error));
+  }
+
+  /// Shared recovery for a classified mid-stream failure (from the engine or
+  /// from a buffering watchdog timeout when the server never answers).
+  ///
+  /// Coalesces concurrent triggers: only one recovery runs at a time. A second
+  /// failure that arrives while retry/fallback is already in flight is ignored
+  /// so it cannot start a duplicate `_playCurrent` or candidate pass.
+  void _handleStreamFailure(StreamInterruption interruption) {
+    unawaited(_beginStreamRecovery(interruption));
+  }
+
+  /// Runs the single shared mid-stream recovery path. Returns immediately when
+  /// another recovery is already in flight (or when there is nothing to recover).
+  Future<void> _beginStreamRecovery(StreamInterruption interruption) async {
+    if (_suspended) return;
+    if (_streamRecoveryInFlight) return;
     final Track? track = _queue.current;
     if (track == null) return;
 
-    final StreamInterruption interruption = classifyEngineError(error);
-    // Secret-free breadcrumb: only the classified *kind*, never the raw error
-    // (which can echo a tokenized stream URL).
+    // Claim the gate before any await so a racing engine error / watchdog
+    // timeout cannot start a second recovery.
+    _streamRecoveryInFlight = true;
+    _cancelBufferingWatchdog();
     StabilityDiagnostics.playbackError(interruption.kind.name);
-    if (interruption.retryable && _retriesForCurrent < _maxStreamRetries) {
-      _retriesForCurrent++;
-      // Re-resolve and reload at the preserved position. The resolver re-checks
-      // the session/server, so a real expiry/outage surfaces a precise friendly
-      // error while a transient blip simply recovers. setUrl replaces the
-      // source, so there is no duplicate playback and no jump to the start.
-      unawaited(_playCurrent(startAt: _state.position, isRetry: true));
+    try {
+      if (interruption.retryable && _retriesForCurrent < _maxStreamRetries) {
+        _retriesForCurrent++;
+        await _playCurrent(startAt: _state.position, isRetry: true);
+        return;
+      }
+      await _tryRemainingCandidatesOrError(track, interruption.message);
+    } finally {
+      _streamRecoveryInFlight = false;
+      // Recovery may finish while the UI is still on buffering (setUrl/play
+      // issued, engine quiet). Re-arm so that hang cannot outlive the bound;
+      // [_streamRecoveryInFlight] is clear, so a later timeout can run. No-ops
+      // when we already left buffering (playing / error / loading).
+      _armBufferingWatchdogIfBuffering();
+    }
+  }
+
+  /// Arms a one-shot watchdog while the engine is mid-stream buffering. If it
+  /// fires, the stall is treated like a server that stopped responding.
+  void _armBufferingWatchdog() {
+    _cancelBufferingWatchdog();
+    _bufferingWatchdog = Timer(midStreamBufferingTimeout, _onBufferingTimeout);
+  }
+
+  /// Arms the buffering watchdog only when status is already mid-stream
+  /// buffering — never for initial [PlaybackStatus.loading].
+  void _armBufferingWatchdogIfBuffering() {
+    if (_state.status != PlaybackStatus.buffering) return;
+    _armBufferingWatchdog();
+  }
+
+  void _cancelBufferingWatchdog() {
+    _bufferingWatchdog?.cancel();
+    _bufferingWatchdog = null;
+  }
+
+  void _onBufferingTimeout() {
+    _bufferingWatchdog = null;
+    if (_suspended) return;
+    if (_state.status != PlaybackStatus.buffering) return;
+    if (_queue.current == null) return;
+    _handleStreamFailure(
+      const StreamInterruption(
+        StreamInterruptionKind.serverUnreachable,
+        "Couldn't reach your music server. Check your connection and try again.",
+        retryable: true,
+      ),
+    );
+  }
+
+  /// After a mid-stream retry budget is spent, tries any sibling source copies
+  /// not yet attempted for the current track, then emits an error.
+  Future<void> _tryRemainingCandidatesOrError(
+    Track track,
+    String message,
+  ) async {
+    final Track? current = _queue.current;
+    final List<Track> candidates = _candidates.candidatesFor(track);
+    final int playedIndex = current == null
+        ? -1
+        : candidates.indexWhere((Track t) => t.uri == current.uri);
+    final List<Track> remaining =
+        playedIndex < 0 || playedIndex + 1 >= candidates.length
+            ? const <Track>[]
+            : candidates.sublist(playedIndex + 1);
+
+    if (remaining.isEmpty) {
+      _emitError(track, message);
       return;
     }
-    _emitError(track, interruption.message);
+
+    final int generation = ++_playbackGeneration;
+    final Duration startAt = _state.position;
+    _emit(_state.copyWith(status: PlaybackStatus.buffering));
+    // Controller-driven mid-stream buffering (not playing→buffering): still
+    // bound the hang so fallback cannot wait forever without an engine error.
+    _armBufferingWatchdog();
+
+    final ({Track track, ResolvedPlayable resolved})? outcome;
+    try {
+      outcome = await _loadFirstWorkingCandidate(remaining, generation);
+    } on PlaybackResolutionException catch (error) {
+      if (generation != _playbackGeneration) return;
+      _emitError(track, error.message);
+      return;
+    }
+
+    if (outcome == null || generation != _playbackGeneration) return;
+
+    final Track played = outcome.track;
+    final bool swappedProvider = played.uri != track.uri;
+    if (swappedProvider) _queue = _queue.replaceCurrent(played);
+    _emit(
+      _state.copyWith(
+        currentTrack: played,
+        source: outcome.resolved.source,
+        upNext: _queue.upNext,
+        previous: _queue.history,
+        hasPrevious: _queue.hasPrevious,
+      ),
+      force: swappedProvider,
+    );
+    await _applyVolume();
+    if (startAt > Duration.zero) await _player.seek(startAt);
+    if (generation != _playbackGeneration) return;
+    unawaited(_player.play());
   }
+
+  /// Drives [_handleStreamFailure] from a test without a platform engine error.
+  @visibleForTesting
+  void handleStreamFailureForTesting(StreamInterruption interruption) =>
+      _handleStreamFailure(interruption);
+
+  /// Like [handleStreamFailureForTesting], but awaits the shared recovery path
+  /// so tests can chain failures deterministically after each attempt finishes.
+  @visibleForTesting
+  Future<void> handleStreamFailureForTestingAsync(
+    StreamInterruption interruption,
+  ) =>
+      _beginStreamRecovery(interruption);
+
+  /// Drives [_onBufferingTimeout] from a test without waiting on a timer.
+  @visibleForTesting
+  void onBufferingTimeoutForTesting() => _onBufferingTimeout();
 
   /// Maps the engine's (playing, processingState) pair to a [PlaybackStatus].
   ///
@@ -974,6 +1136,7 @@ class JustAudioPlaybackController implements LocalPlaybackController {
     // A fresh load (or retry) establishes a new position baseline; drop any
     // coalesced tick from the previous source so it can't flush onto it.
     _resetPositionFlush();
+    _cancelBufferingWatchdog();
 
     // A fresh (non-retry) load starts a new track or a deliberate (re)play, so
     // reset the mid-stream recovery budget. A retry must keep its counter.
@@ -1002,6 +1165,8 @@ class JustAudioPlaybackController implements LocalPlaybackController {
       // visible and show a calm buffering state, rather than blanking to a fresh
       // load (which would look like the track jumped back to the start).
       _emit(_state.copyWith(status: PlaybackStatus.buffering));
+      // Bound this recovery buffering: playing→buffering is not observed here.
+      _armBufferingWatchdog();
     } else {
       // Reset position/duration up front so the UI doesn't show the previous
       // track's progress while the new one loads.
@@ -1212,6 +1377,7 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   /// Emits an error state for [track] carrying a friendly [message], preserving
   /// the queue context so the UI keeps showing the right track and up-next.
   void _emitError(Track track, String message) {
+    _cancelBufferingWatchdog();
     _emit(PlaybackState(
       status: PlaybackStatus.error,
       currentTrack: track,
@@ -1265,6 +1431,14 @@ class JustAudioPlaybackController implements LocalPlaybackController {
     _resumeAfterTransientLoss = false;
     _supersedeFocusTransport();
     _restoreDuckedVolume();
+    // After a server outage the engine may be in error with no loaded source.
+    // Re-resolve at the preserved position so a returned server (or a sibling
+    // copy) can recover without rebuilding the queue.
+    if (_state.status == PlaybackStatus.error && _queue.current != null) {
+      _retriesForCurrent = 0;
+      await _playCurrent(startAt: _state.position);
+      return;
+    }
     // play()'s future completes when playback ends, so we don't await it.
     unawaited(_player.play());
   }
@@ -1313,6 +1487,7 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   @override
   Future<void> dispose() async {
     _resetPositionFlush();
+    _cancelBufferingWatchdog();
     _cancelPendingFocusPause();
     await _interruptionSub?.cancel();
     await _becomingNoisySub?.cancel();
