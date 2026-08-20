@@ -1,0 +1,94 @@
+name: PR security review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+# Fork-safe: this workflow only reads the checkout and PR review metadata.
+# It never receives repository secrets and cannot write repository contents.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  security-surface:
+    name: Security surface guard
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+      REPO_OWNER: ${{ github.repository_owner }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Scan changed security surfaces
+        id: scan
+        continue-on-error: true
+        run: |
+          python3 scripts/check_pr_security_surface.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --report "$RUNNER_TEMP/security-surface.md" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Publish security surface report
+        if: ${{ always() }}
+        run: |
+          if [ -f "$RUNNER_TEMP/security-surface.md" ]; then
+            cat "$RUNNER_TEMP/security-surface.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # A maintainer approval is deliberately NOT an escape hatch for these.
+      # They introduce unusually powerful execution/CI primitives and must be
+      # redesigned or landed as a separate maintainer-controlled change.
+      - name: Reject blocked high-risk additions
+        if: ${{ steps.scan.outcome == 'failure' }}
+        run: |
+          echo "::error::The PR contains a blocked high-risk security pattern. See the job summary."
+          exit 1
+
+      # Ordinary PRs need no extra ceremony. Sensitive external PRs do: the
+      # repository owner must approve the exact current HEAD. If the contributor
+      # pushes another commit, the old approval becomes stale and this check
+      # fails again until the new HEAD is reviewed.
+      - name: Require owner approval for sensitive external PR
+        if: >-
+          ${{ steps.scan.outputs.sensitive == 'true'
+          && env.PR_AUTHOR != env.REPO_OWNER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          reviews="$(gh api \
+            "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100")"
+
+          latest_state="$(jq -r \
+            --arg owner "$REPO_OWNER" \
+            --arg head "$HEAD_SHA" \
+            '[.[]
+              | select(.user.login == $owner and .commit_id == $head)]
+             | sort_by(.submitted_at)
+             | last
+             | .state // ""' <<<"$reviews")"
+
+          if [ "$latest_state" != "APPROVED" ]; then
+            echo "::error::This PR touches a security-sensitive trust boundary. $REPO_OWNER must approve the current HEAD ($HEAD_SHA) after a focused security review."
+            echo "Sensitive surfaces are listed in the job summary."
+            exit 1
+          fi
+
+          echo "Current sensitive HEAD was explicitly approved by $REPO_OWNER."
+
+      - name: Security review gate passed
+        run: echo "PR security review gate passed."
