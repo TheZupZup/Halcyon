@@ -39,7 +39,9 @@ class LinuxPlaybackBackendInitializer {
 ///
 /// The transport, queue, resolver fallback and completion behaviour deliberately
 /// stay in [JustAudioPlaybackController]. This class only registers the Linux
-/// federated implementation before that controller creates its [AudioPlayer].
+/// federated implementation before that controller creates its [AudioPlayer],
+/// and enables post-suspend recovery so a system sleep/wake can re-prime the
+/// audio device and re-resolve remote streams without duplicating playback.
 /// Android never constructs this type and therefore keeps just_audio's native
 /// ExoPlayer implementation and its existing audio-service/audio-focus path.
 class LinuxPlaybackController extends JustAudioPlaybackController {
@@ -74,5 +76,5 @@ class LinuxPlaybackController extends JustAudioPlaybackController {
     super.streamingFallbackResolver,
     super.random,
     super.onTrackCompleted,
-  });
+  }) : super(recoverPlaybackAfterSuspend: true);
 }

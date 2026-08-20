@@ -69,12 +69,14 @@ class JustAudioPlaybackController implements LocalPlaybackController {
     PlayableUriResolver? streamingFallbackResolver,
     Random? random,
     TrackCompletionCallback? onTrackCompleted,
+    bool recoverPlaybackAfterSuspend = false,
   })  : _player = player ?? _defaultPlayer(),
         _resolver = resolver,
         _candidates = candidates,
         _streamingFallbackResolver = streamingFallbackResolver,
         _random = random ?? Random(),
         _onTrackCompleted = onTrackCompleted,
+        _recoverPlaybackAfterSuspend = recoverPlaybackAfterSuspend,
         // Own audio focus only for the engine we created. An injected player
         // (tests, or a future custom engine) keeps whatever interruption
         // handling its owner configured, so unit tests never touch the
@@ -137,6 +139,11 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   static const Duration _defaultMidStreamBufferingTimeout =
       Duration(seconds: 30);
 
+  /// Delay before a Linux-style post-suspend recovery reload, so audio devices
+  /// and the network have a chance to return after wake. Zero in tests.
+  static const Duration _defaultSuspendResumeBackoff =
+      Duration(milliseconds: 750);
+
   final AudioPlayer _player;
   final PlayableUriResolver _resolver;
 
@@ -157,6 +164,12 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   final PlayableUriResolver? _streamingFallbackResolver;
 
   final Random _random;
+
+  /// When true (Linux desktop), a lifecycle resume after suspend reloads the
+  /// current track at the preserved position if it was playing — audio devices
+  /// and tokenized streams are often dead after wake. Android keeps this false
+  /// so screen-on never auto-restarts playback.
+  final bool _recoverPlaybackAfterSuspend;
 
   /// Invoked once each time a track reaches its natural end, before the repeat
   /// mode decides what plays next. Null when no listener is wired (tests, or the
@@ -273,6 +286,19 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   /// tests set this to [Duration.zero] so recovery stays deterministic.
   @visibleForTesting
   Duration streamRetryBackoff = _defaultStreamRetryBackoff;
+
+  /// Delay before post-suspend recovery reload. Never changed in production;
+  /// tests set this to [Duration.zero].
+  @visibleForTesting
+  Duration suspendResumeBackoff = _defaultSuspendResumeBackoff;
+
+  /// Whether active playback should be recovered after the next lifecycle
+  /// resume. Set by [onAppBackgrounded]; consumed by [onAppForegrounded].
+  bool _recoverPlaybackOnForeground = false;
+
+  /// Coalesces concurrent lifecycle resumes so repeated suspend/wake cycles
+  /// never stack overlapping reloads or re-subscribe anything.
+  bool _suspendRecoveryInFlight = false;
 
   // Guards against overlapping playback transitions. Every action that changes
   // what's playing — skip to next/previous, jump within the queue or history,
@@ -582,18 +608,70 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   /// If a duck somehow lingered (e.g. an iOS duck whose unduck was never
   /// delivered), restore full volume so Linthra is never left quietly ducked.
   ///
-  /// It deliberately does **not** resume playback. The only valid signal that a
-  /// transient interruption has ended is an `AUDIOFOCUS_GAIN`, which is now
-  /// processed reliably in the background (the media service stays foreground
-  /// across a pause, so the isolate isn't frozen — see the audio-service config
-  /// in `LinthraAudioHandler`). Resuming on a mere foreground event could
-  /// restart audio over an interruption that is *still* holding focus — e.g.
-  /// opening Linthra while a call is ongoing — so resume is left entirely to the
-  /// real focus regain. A no-op while playing or paused-without-a-duck.
+  /// On Android it deliberately does **not** resume playback — screen-on must
+  /// never auto-start audio. On Linux ([_recoverPlaybackAfterSuspend]) a track
+  /// that was *playing* across system suspend is reloaded once at the preserved
+  /// position after a short backoff (audio devices and the network are often
+  /// not ready immediately after wake). A user-paused track stays paused.
+  @override
+  void onAppBackgrounded() {
+    if (_suspended) {
+      _recoverPlaybackOnForeground = false;
+      return;
+    }
+    // Remember intent only: playing/busy → recover; paused/error/idle → leave.
+    _recoverPlaybackOnForeground = _state.isPlaying || _state.isBusy;
+  }
+
   @override
   void onAppForegrounded() {
     if (_suspended) return;
     _restoreDuckedVolume();
+    if (!_recoverPlaybackAfterSuspend) {
+      // Android/iOS: never auto-recover on screen-on; drop any arming.
+      _recoverPlaybackOnForeground = false;
+      return;
+    }
+    unawaited(_recoverAfterSuspendIfNeeded());
+  }
+
+  /// Bounded post-suspend recovery for Linux. One in-flight attempt at a time;
+  /// never adds listeners; preserves queue/track; surfaces error+Retry on fail.
+  Future<void> _recoverAfterSuspendIfNeeded() async {
+    if (!_recoverPlaybackOnForeground) return;
+    if (_suspendRecoveryInFlight) return;
+    final Track? track = _queue.current;
+    if (track == null) {
+      _recoverPlaybackOnForeground = false;
+      return;
+    }
+
+    _suspendRecoveryInFlight = true;
+    // Consume the arming up front so a nested lifecycle event during backoff
+    // cannot schedule a second overlapping recovery for the same wake.
+    final bool shouldPlay = _recoverPlaybackOnForeground;
+    _recoverPlaybackOnForeground = false;
+    try {
+      final Duration backoff = suspendResumeBackoff;
+      if (backoff > Duration.zero) {
+        await Future<void>.delayed(backoff);
+      }
+      if (_suspended) return;
+      if (_queue.current?.uri != track.uri) return;
+      if (!shouldPlay) return;
+
+      StabilityDiagnostics.playbackError('suspend-resume-recovery');
+      _retriesForCurrent = 0;
+      // Re-resolve (fresh tokenized URL after a long sleep) and reload on the
+      // *same* engine — never a second player, so playback cannot duplicate.
+      await _playCurrent(
+        startAt: _state.position,
+        autoplay: true,
+        isRetry: true,
+      );
+    } finally {
+      _suspendRecoveryInFlight = false;
+    }
   }
 
   /// Classifies an audio-focus [event] into the action the engine should take,

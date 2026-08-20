@@ -95,8 +95,15 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.inactive) {
-      final status = ref.read(playbackControllerProvider).state.status;
-      StabilityDiagnostics.backgroundPlaybackState(status.name);
+      final controller = ref.read(playbackControllerProvider);
+      StabilityDiagnostics.backgroundPlaybackState(
+          controller.state.status.name);
+      // Arm suspend recovery only on a true pause (system sleep / window
+      // background). Brief `inactive` (dialogs, focus blips) must not reload.
+      if (state == AppLifecycleState.paused &&
+          controller is ActivePlaybackController) {
+        controller.onAppBackgrounded();
+      }
     }
     if (state == AppLifecycleState.resumed) {
       final controller = ref.read(playbackControllerProvider);

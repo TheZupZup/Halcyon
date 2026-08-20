@@ -47,10 +47,15 @@ abstract interface class LocalPlaybackController implements PlaybackController {
   /// loaded track immediately, so toggling takes effect without a track change.
   void setVolumeNormalizationEnabled(bool enabled);
 
+  /// Notes that the app/OS is entering a paused lifecycle (screen lock, window
+  /// hide, or system suspend). Remembers whether active playback should be
+  /// recovered after wake — without auto-starting a track the user had paused.
+  void onAppBackgrounded();
+
   /// A safety restore when the app returns to the foreground: undoes any
-  /// lingering audio-focus duck and resumes playback only if a transient focus
-  /// loss had paused it, recovering the case where another app's voice/mic
-  /// session ended without delivering a clean focus gain. Never resumes a track
-  /// the user paused, and a no-op while suspended or when nothing is pending.
+  /// lingering audio-focus duck and, on platforms that need it (Linux), runs a
+  /// bounded audio/network recovery for a track that was playing across
+  /// suspend. Never resumes a track the user paused, and a no-op while
+  /// suspended or when nothing is pending.
   void onAppForegrounded();
 }
