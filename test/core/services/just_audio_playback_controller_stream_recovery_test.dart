@@ -86,11 +86,9 @@ class _ControllablePlayer extends Fake implements AudioPlayer {
 class _FlappingResolver implements PlayableUriResolver {
   _FlappingResolver({
     required this.reachable,
-    this.token = 'SECRET-TOKEN',
   });
 
   final Set<String> reachable;
-  final String token;
   final List<String> calls = <String>[];
   int _counter = 0;
 
@@ -109,7 +107,7 @@ class _FlappingResolver implements PlayableUriResolver {
     _counter++;
     return ResolvedPlayable(
       Uri.parse('https://server.example/stream/${track.uri}'
-          '?n=$_counter&api_key=$token'),
+          '?n=$_counter'),
       PlaybackSource.streamingDirect,
     );
   }
