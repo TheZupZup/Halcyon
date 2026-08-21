@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import unittest
 from pathlib import Path
 
@@ -13,6 +14,9 @@ SCANNER_PATH = ROOT / "scripts" / "check_pr_security_surface.py"
 SPEC = importlib.util.spec_from_file_location("pr_security_scanner_edges", SCANNER_PATH)
 assert SPEC is not None and SPEC.loader is not None
 scanner = importlib.util.module_from_spec(SPEC)
+# dataclasses resolves postponed annotations through sys.modules while the
+# module executes; mirror normal import machinery before exec_module().
+sys.modules[SPEC.name] = scanner
 SPEC.loader.exec_module(scanner)
 
 
