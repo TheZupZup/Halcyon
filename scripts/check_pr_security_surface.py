@@ -123,6 +123,9 @@ def _split_literal(*fragments: str) -> str:
     return "".join(fragments)
 
 
+_DOWNLOAD_CLIENT = rf"(?:{_split_literal('cu', 'rl')}|{_split_literal('wg', 'et')})"
+
+
 # Separator allowed between the tokens of a blocked construct. Dart accepts a
 # comment anywhere whitespace is legal, so a block or line comment wedged
 # between an API's receiver, its dot and its member name is the same call.
@@ -156,7 +159,7 @@ _EXEC_WRAPPER = (
 #   equal when the same downloaded file is later executed.
 def _download_to_file(gap: str) -> str:
     return (
-        rf"(?:curl|wget)(?:[^\n;|&]|&(?!&)|\\\n)*?"
+        rf"{_DOWNLOAD_CLIENT}(?:[^\n;|&]|&(?!&)|\\\n)*?"
         rf"(?:{gap}+-[A-Za-z]*[oO]{gap}*"
         rf"|{gap}+--output(?:-document)?(?:=|{gap}){gap}*"
         rf"|{gap}*>{gap}*)"
@@ -236,13 +239,13 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
             # stages use the same quote-aware segment so quoted transformation
             # expressions remain part of that pipeline without crossing into a
             # later unrelated command.
-            rf"(?:curl|wget){_SHELL_COMMAND_SEGMENT}"
+            rf"{_DOWNLOAD_CLIENT}{_SHELL_COMMAND_SEGMENT}"
             rf"(?:(?<!\|)\|(?!\|){_SHELL_COMMAND_SEGMENT})*"
             rf"(?<!\|)\|(?!\|)[ \t]*\n?[ \t]*"
             rf"{_EXEC_WRAPPER}(?:/\S+/)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
-            r"|\b(?:sh|bash|zsh)\s+<\(\s*(?:curl|wget)\b"
-            r"|\b(?:sh|bash|zsh)\s+-c\s+['\"]?\$\(\s*(?:curl|wget)\b"
-            r"|\beval\s+.*\$\(\s*(?:curl|wget)\b"
+            rf"|\b(?:sh|bash|zsh)\s+<\(\s*{_DOWNLOAD_CLIENT}\b"
+            rf"|\b(?:sh|bash|zsh)\s+-c\s+['\"]?\$\(\s*{_DOWNLOAD_CLIENT}\b"
+            rf"|\beval\s+.*\$\(\s*{_DOWNLOAD_CLIENT}\b"
         ),
         "download-and-execute shell pattern",
     ),
