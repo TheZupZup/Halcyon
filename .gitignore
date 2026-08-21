@@ -18,7 +18,6 @@ build/
 
 # IDE
 .idea/
-.vscode/
 *.iml
 
 # OS
@@ -46,3 +45,6 @@ key.properties
 # future local publishing setup can never leak one.
 service-account*.json
 play-console*.json
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
