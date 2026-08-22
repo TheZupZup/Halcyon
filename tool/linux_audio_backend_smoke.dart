@@ -17,8 +17,9 @@ Future<void> main() async {
   var result = 0;
 
   try {
-    await _exerciseLifecycle(audioFile.path);
-    await _exerciseLifecycle(audioFile.path);
+    for (var cycle = 0; cycle < 3; cycle++) {
+      await _exerciseLifecycle(audioFile.path);
+    }
     stdout.writeln('Linux native audio lifecycle smoke passed.');
   } catch (error, stackTrace) {
     stderr.writeln('Linux native audio lifecycle smoke failed:');
@@ -36,14 +37,11 @@ Future<void> main() async {
 Future<void> _exerciseLifecycle(String path) async {
   final controller = LinuxPlaybackController();
   try {
-    // Queue while suspended, then resume without autoplay. This loads the local
-    // WAV through the real just_audio_media_kit/libmpv backend but never asks
-    // the audio device to produce sound.
-    await controller.suspend();
     await controller.playTrack(
       Track(id: 'smoke', title: 'Silent smoke sample', uri: path),
     );
-    await controller.resume(play: false);
+    await controller.play();
+    await controller.stop();
 
     if (controller.state.status == PlaybackStatus.error) {
       throw StateError(

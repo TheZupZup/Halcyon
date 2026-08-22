@@ -151,7 +151,7 @@ main() {
   if [ "${#missing[@]}" -eq 0 ]; then
     # A normal Flutter widget test cannot load the Linux plugin bundle, so
     # this target runs in the real GTK runner and opens a silent local WAV
-    # through libmpv without starting playback — the same smoke CI runs.
+    # through libmpv in three play → stop → dispose cycles — the same smoke CI runs.
     run_step "Build native audio lifecycle smoke" \
       "$FLUTTER" build linux --release \
       --target=tool/linux_audio_backend_smoke.dart

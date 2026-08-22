@@ -192,8 +192,8 @@ jobs:
 
       # A normal Flutter widget test cannot load the Linux plugin bundle, so
       # this target runs in the real GTK runner and opens a silent local WAV
-      # through libmpv without starting playback. Two create/load/dispose cycles
-      # cover reinitialization.
+      # through libmpv without requiring audible output. Three load/play/stop/
+      # dispose cycles cover reinitialization.
       - name: Build native audio lifecycle smoke
         run: >-
           flutter build linux --release
