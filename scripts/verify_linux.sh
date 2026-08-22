@@ -106,10 +106,18 @@ missing_native_deps() {
 # developer's machine already has a real display CI doesn't.
 run_audio_smoke() {
   local binary="$REPO_ROOT/build/linux/x64/release/bundle/linthra"
+  local alsa_null_conf
+  alsa_null_conf="$(mktemp)"
+  trap 'rm -f "$alsa_null_conf"' RETURN
+  printf '%s\n' \
+    'pcm.!default { type plug; slave.pcm "null" }' \
+    'pcm.null { type null }' \
+    'ctl.!default { type null }' \
+    > "$alsa_null_conf"
   if command -v xvfb-run >/dev/null 2>&1; then
-    xvfb-run --auto-servernum "$binary"
+    ALSA_CONFIG_PATH="$alsa_null_conf" xvfb-run --auto-servernum "$binary"
   else
-    "$binary"
+    ALSA_CONFIG_PATH="$alsa_null_conf" "$binary"
   fi
 }
 

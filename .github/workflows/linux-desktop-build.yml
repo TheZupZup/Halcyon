@@ -202,9 +202,9 @@ jobs:
           flutter build linux --release
           --target=tool/linux_audio_backend_smoke.dart
 
-      # libmpv's ALSA backend needs a default device even for a silent WAV.
-      # ubuntu-latest has no /dev/snd nodes, so route ALSA to the null plugin
-      # for this step only — production builds keep the host's normal audio.
+      # libmpv autoselects PipeWire on ubuntu-latest, which has no audio device.
+      # The smoke target sets `ao=alsa`; route ALSA's default PCM to the null
+      # plugin for this step only — production builds keep the host's normal audio.
       - name: Run native audio lifecycle smoke
         run: |
           set -euo pipefail

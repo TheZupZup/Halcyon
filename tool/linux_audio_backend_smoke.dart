@@ -2,12 +2,17 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
+import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:linthra/core/models/playback_source.dart';
 import 'package:linthra/core/models/playback_state.dart';
 import 'package:linthra/core/models/track.dart';
 import 'package:linthra/core/services/linux_playback_controller.dart';
 
 Future<void> main() async {
+  // Headless CI has no PipeWire/Pulse device. Force libmpv onto ALSA so the
+  // workflow's ALSA_CONFIG_PATH null PCM can satisfy ao init without hardware.
+  JustAudioMediaKit.mpvProperties = const {'ao': 'alsa'};
+
   WidgetsFlutterBinding.ensureInitialized();
 
   final directory =
@@ -41,8 +46,10 @@ Future<void> _exerciseLifecycle(String path) async {
       Track(id: 'smoke', title: 'Silent smoke sample', uri: path),
     );
     await controller.play();
-    await controller.stop();
 
+    // Assert while the track is still loaded: stop() clears [PlaybackState.source]
+    // by design, so checking afterward would always fail even when libmpv opened
+    // the WAV successfully.
     if (controller.state.status == PlaybackStatus.error) {
       throw StateError(
         controller.state.errorMessage ?? 'The native backend rejected the WAV.',
@@ -51,6 +58,8 @@ Future<void> _exerciseLifecycle(String path) async {
     if (controller.state.source != PlaybackSource.localFile) {
       throw StateError('The native backend did not load the local WAV.');
     }
+
+    await controller.stop();
   } finally {
     await controller.dispose();
   }
