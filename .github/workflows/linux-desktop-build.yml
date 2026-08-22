@@ -212,6 +212,7 @@ jobs:
           trap 'rm -f "$alsa_null_conf"' EXIT
           printf '%s\n' \
             'pcm.!default { type plug; slave.pcm "null" }' \
+            'pcm.null { type null }' \
             'ctl.!default { type null }' \
             > "$alsa_null_conf"
           ALSA_CONFIG_PATH="$alsa_null_conf" xvfb-run --auto-servernum \
