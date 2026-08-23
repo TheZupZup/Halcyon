@@ -16,6 +16,15 @@ build/
 # Any other native platform (windows/, macos/, …) is still generated locally via
 # `flutter create .`; there is no target for them yet.
 
+# flatpak-builder's own state/cache dir, plus the local build/repo output of
+# `flatpak-builder ... flatpak-builder-build io.github.thezupzup.linthra.yml`
+# (see flatpak/README.md). All generated, none committed —
+# flatpak/io.github.thezupzup.linthra.yml and flatpak/generated/ are the
+# source of truth.
+.flatpak-builder/
+/flatpak/repo/
+/flatpak/flatpak-builder-build/
+
 # IDE
 .idea/
 .vscode/
