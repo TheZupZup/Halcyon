@@ -1,0 +1,6 @@
+Linthra 0.2.4
+
+- Verifies Android APKs against Linthra's official release signing certificate.
+- Shows a prominent warning before the app UI when a release signature is unknown or cannot be verified.
+- Keeps build provenance visible in Settings → About after the warning is acknowledged.
+- Uses the same public signing-certificate fingerprint already pinned by F-Droid reproducible builds.
