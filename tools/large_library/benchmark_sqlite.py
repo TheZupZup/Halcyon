@@ -43,13 +43,17 @@ def benchmark(
     sql: str,
     params: tuple[object, ...],
     iterations: int,
-) -> tuple[float, float]:
+) -> tuple[float, float, float]:
     samples_ms: list[float] = []
     for _ in range(iterations):
         started = time.perf_counter_ns()
         connection.execute(sql, params).fetchall()
         samples_ms.append((time.perf_counter_ns() - started) / 1_000_000)
-    return statistics.mean(samples_ms), statistics.quantiles(samples_ms, n=20)[18]
+    return (
+        statistics.mean(samples_ms),
+        statistics.quantiles(samples_ms, n=20)[18],
+        max(samples_ms),
+    )
 
 
 def main() -> None:
@@ -66,9 +70,13 @@ def main() -> None:
         print(f"catalog: {count:,} tracks")
 
         failed = False
+        results: list[tuple[str, float, float, float]] = []
         for name, sql, params in QUERIES:
             plan = query_plan(connection, sql, params)
-            average_ms, p95_ms = benchmark(connection, sql, params, args.iterations)
+            average_ms, p95_ms, max_ms = benchmark(
+                connection, sql, params, args.iterations
+            )
+            results.append((name, average_ms, p95_ms, max_ms))
             print(
                 f"{name:16} avg={average_ms:8.3f} ms "
                 f"p95={p95_ms:8.3f} ms plan={plan}"
@@ -87,6 +95,20 @@ def main() -> None:
                 )
                 failed = True
 
+        total_average_ms = sum(average_ms for _, average_ms, _, _ in results)
+        average_query_ms = total_average_ms / len(results)
+        slowest_name, _, _, slowest_max_ms = max(
+            results, key=lambda result: result[3]
+        )
+
+        print()
+        print("benchmark summary")
+        print(f"  tracks:            {count:,}")
+        print(f"  queries:           {len(results)}")
+        print(f"  iterations:  	     {args.iterations:,}")
+        print(f"  total query time:  {total_average_ms:8.3f} ms")
+        print(f"  average/query:     {average_query_ms:8.3f} ms")
+        print(f"  slowest query:     {slowest_max_ms:8.3f} ms ({slowest_name})")
         if failed:
             raise SystemExit(1)
     finally:
