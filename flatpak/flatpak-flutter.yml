@@ -1,0 +1,216 @@
+# flatpak-flutter.yml — input template for flatpak-flutter.py.
+#
+# This is NOT the manifest flatpak-builder consumes. It is the hand-authored
+# source that `flatpak-flutter.py` (https://github.com/TheAppgineer/flatpak-flutter,
+# the tool referenced by Flutter's own deployment docs and by
+# flatpak/flatpak-builder-tools) reads to produce the real, offline-buildable
+# manifest: `io.github.thezupzup.linthra.yml`, alongside a generated
+# `generated/sources/pubspec.json` pinning every package in the committed
+# `pubspec.lock`, and a generated Flutter SDK module pinning the exact engine
+# artifacts for the `.flutter-version` tag.
+#
+# Regenerate the output after bumping `.flutter-version` or any pub.dev
+# dependency:
+#
+#   ./scripts/regenerate_flatpak_sources.sh
+#
+# See flatpak/README.md.
+app-id: io.github.thezupzup.linthra
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+# org.gnome.Sdk//50 (built on freedesktop-sdk 25.08) has no C/C++ compiler of
+# its own kind Flutter's Linux tool invokes: `flutter build linux` hardcodes
+# CC=clang/CXX=clang++, and linux/CMakeLists.txt's -Werror exception for
+# flutter_secure_storage_linux is scoped to Clang specifically. This is the
+# same LLVM version flatpak-flutter's own generated template defaults to for
+# freedesktop-sdk 25.08.
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.llvm20
+# linux/CMakeLists.txt: BINARY_NAME "linthra" — check_linux_runner.py asserts
+# this matches pubspec.yaml's `name:`.
+command: linthra
+
+finish-args:
+  # Windowing: Wayland is the default on Fedora Atomic/Kinoite/Silverblue;
+  # X11 fallback covers everything else. Neither is optional for a GTK window.
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # GPU acceleration for Flutter's GTK/Skia embedder. Without it Linthra still
+  # renders, just on software rendering; --device=dri is the minimal grant
+  # that lets it use the real GPU.
+  - --device=dri
+  #
+  # Deliberately withheld for issue #432 (see flatpak/README.md "What's
+  # deferred" for the reasoning):
+  #   --socket=pulseaudio        (audio output: #433 — mpv_initialize() never
+  #                                opens an audio device; LinuxPlaybackController
+  #                                only dlopens/registers libmpv at startup and
+  #                                never creates a player before first frame, so
+  #                                nothing at startup touches audio. Verified:
+  #                                the installed Flatpak reaches the same first
+  #                                frame with this permission absent.)
+  #   --share=network            (provider streaming: #440)
+  #   --filesystem=host/home     (broad filesystem access: #438/#439)
+  #   --talk-name=org.freedesktop.secrets  (Secret Service: #441)
+  # Their absence is safe: flutter_secure_storage/Jellyfin-Subsonic-Plex
+  # session restore on Linux treats every read/write failure as "not signed
+  # in" and keeps running (docs/linux-desktop.md "Secure storage").
+
+modules:
+  # === Bare libmpv, built from pinned upstream source =======================
+  #
+  # media_kit/just_audio_media_kit dlopen libmpv.so/.so.1/.so.2 synchronously
+  # during Linthra's startup bootstrap — before the first frame — and nothing
+  # in the call path catches a failed dlopen (see linux_playback_controller.dart
+  # and media_kit's native_library.dart). A GNOME/freedesktop runtime does not
+  # ship libmpv, so without it the app cannot reach a usable first frame at
+  # all, which makes a bare libmpv a genuine #432 requirement rather than
+  # #433 scope creep. Fully-featured audio (codec coverage, hardware
+  # acceleration, tuned config) stays #433's job; this module is deliberately
+  # the smallest buildable libmpv, because mpv's own meson.build hard-requires
+  # libavcodec/libavfilter/libavformat/libavutil/libswresample/libswscale
+  # (ffmpeg), libplacebo and libass unconditionally — there is no smaller mpv.
+  #
+  # ffmpeg is built from source, not via org.freedesktop.Platform.ffmpeg-full:
+  # mpv links against libavcodec/libavformat/etc. at compile time via
+  # pkg-config, and ffmpeg-full/codecs-extra is a *runtime* extension (mounted
+  # into /app only after the build), so it cannot satisfy a build-time
+  # pkg-config dependency() check. This is also what the official
+  # io.mpv.Mpv Flathub manifest does. LGPL only (no --enable-gpl/--enable-nonfree)
+  # and no video codecs/hwaccel/network-protocol libs: Linthra is audio-only
+  # and #432 grants no network permission, so none of that is reachable yet.
+  - name: ffmpeg
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+      - /share/ffmpeg
+    config-opts:
+      - --disable-static
+      - --enable-shared
+      - --disable-doc
+      - --disable-programs
+      - --disable-network
+    sources:
+      - type: archive
+        url: https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n9.0.1.tar.gz
+        sha256: 195d54bebe1a27f84d77f4b989d193466f305b355da92292766a69f16880b18a
+
+  # libplacebo: a hard mpv dependency (meson.build's `dependencies = [libass,
+  # ..., libplacebo, ...]` has no feature toggle), even though Linthra never
+  # renders video — mpv 0.41's GPU-rendering path is not optional. Vulkan is
+  # required: libplacebo's own meson.build errors out at configure time if
+  # compiled without Vulkan support. jinja/markupsafe/glad are libplacebo git
+  # submodules the plain source archive does not include (they show up as
+  # empty directories); libplacebo's meson.build imports them directly off
+  # disk (no PyPI/pip, no network) so they're declared here as ordinary pinned
+  # sources extracted into the same paths the submodules would occupy.
+  - name: libplacebo
+    buildsystem: meson
+    config-opts:
+      - -Dvulkan=enabled
+      - -Dshaderc=disabled
+      - -Dglslang=disabled
+      - -Ddemos=false
+      - -Dtests=false
+    sources:
+      - type: archive
+        url: https://code.videolan.org/videolan/libplacebo/-/archive/v7.360.1/libplacebo-v7.360.1.tar.gz
+        sha256: 14c0a99f4b01557ec9826ce6b1d52f6de21be274ba03fd5aab7307f18766dc39
+      - type: archive
+        url: https://github.com/pallets/jinja/archive/refs/tags/3.1.6.tar.gz
+        sha256: 2074b22a72caa65474902234b320d73463d6d4c223ee49f4b433495758356337
+        dest: 3rdparty/jinja
+      - type: archive
+        url: https://github.com/pallets/markupsafe/archive/refs/tags/3.0.3.tar.gz
+        sha256: f1d9d06c34515dd3ad210ec769da613057b536d11d6c039183b87757a883a254
+        dest: 3rdparty/markupsafe
+      - type: archive
+        url: https://github.com/Dav1dde/glad/archive/refs/tags/v2.0.8.tar.gz
+        sha256: 44f06f9195427c7017f5028d0894f57eb216b0a8f7c4eda7ce883732aeb2d0fc
+        dest: 3rdparty/glad
+
+  # libass: also a hard mpv dependency (subtitle rendering support compiled
+  # into libmpv's core regardless of whether Linthra ever feeds it subtitles).
+  - name: libass
+    config-opts:
+      - --disable-static
+      - --enable-fontconfig
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+    sources:
+      - type: archive
+        url: https://github.com/libass/libass/archive/refs/tags/0.17.5.tar.gz
+        sha256: fa286fc9ee1ba3b932703a3df7b8474d01dc8abe29ec69b6fa68781dc4bf7acc
+
+  - name: mpv
+    buildsystem: meson
+    config-opts:
+      # Only libmpv is needed; the mpv CLI player pulls in scripting, disc
+      # and gamepad stacks Linthra never touches.
+      - -Dcplayer=false
+      - -Dlibmpv=true
+      - -Dgpl=false
+      - -Dbuild-date=false
+      - -Dmanpage-build=disabled
+      - -Dhtml-build=disabled
+      - -Dpdf-build=disabled
+      - -Dtests=false
+      - -Dcdda=disabled
+      - -Ddvdnav=disabled
+      - -Ddvbin=disabled
+      - -Dlibbluray=disabled
+      - -Dlibarchive=disabled
+      - -Dlua=disabled
+      - -Djavascript=disabled
+      - -Dvapoursynth=disabled
+      - -Dcplugins=disabled
+      - -Drubberband=disabled
+      - -Dalsa=enabled
+      - -Dpulse=enabled
+    sources:
+      - type: archive
+        url: https://github.com/mpv-player/mpv/archive/refs/tags/v0.41.0.tar.gz
+        sha256: ee21092a5ee427353392360929dc64645c54479aefdb5babc5cfbb5fad626209
+
+  # === linthra: the app itself ===============================================
+  - name: linthra
+    buildsystem: simple
+    build-options:
+      # Rewritten by flatpak-flutter to /var/lib/flutter/bin, where the
+      # generated Flutter SDK module installs the activated toolchain.
+      append-path: /usr/lib/sdk/llvm20/bin:flutter/bin
+      prepend-ld-library-path: /usr/lib/sdk/llvm20/lib
+    build-commands:
+      - flutter pub get --enforce-lockfile
+      - flutter build linux --release --no-pub
+      # Install the whole relocatable bundle (binary + lib/ + data/) under
+      # /app/lib/linthra, then symlink the binary into /app/bin.
+      # linux/CMakeLists.txt sets CMAKE_INSTALL_RPATH to "$ORIGIN/lib", and
+      # $ORIGIN follows the real file location through a symlink, so this
+      # keeps the bundle's own relative layout intact instead of splitting it
+      # across /app/bin and /app/lib.
+      - install -d /app/lib/linthra
+      - cp -r build/linux/x64/release/bundle/. /app/lib/linthra/
+      - install -d /app/bin
+      - ln -s ../lib/linthra/linthra /app/bin/linthra
+    sources:
+      # The app's own source. flatpak-flutter's pre-processing step cannot
+      # read a `dir` source (it only fetches `git` sources to inspect
+      # pubspec.lock — see flatpak/README.md), so generating
+      # generated/sources/pubspec.json requires a one-time staged directory;
+      # the committed *output* manifest keeps this `dir` source, which
+      # flatpak-builder itself handles natively at real build time.
+      - type: dir
+        path: ..
+      # Flutter SDK, pinned to the project's .flutter-version. flatpak-flutter
+      # replaces this git source with a generated module (see flatpak/README.md)
+      # that pins the matching Dart SDK and Linux engine artifacts by their
+      # real storage.googleapis.com URLs and sha256, so nothing is fetched
+      # ad hoc during the sandboxed build.
+      - type: git
+        url: https://github.com/flutter/flutter.git
+        tag: '3.44.7'
+        dest: flutter
