@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/lifecycle/async_disposal_registry.dart';
 import '../../core/platform/host_platform.dart';
 import '../../core/repositories/playback_session_store.dart';
 import '../../core/services/playback_session_persistence.dart';
@@ -57,6 +58,6 @@ final playbackSessionPersistenceProvider =
       return true;
     },
   );
-  ref.onDispose(service.dispose);
+  ref.onDisposeAsync(service.dispose);
   return service;
 });

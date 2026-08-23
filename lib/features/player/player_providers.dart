@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
 
+import '../../core/lifecycle/async_disposal_registry.dart';
 import '../../core/models/playback_state.dart';
 import '../../core/platform/host_platform.dart';
 import '../../core/services/active_playback_controller.dart';
@@ -229,7 +230,7 @@ final localPlaybackControllerProvider =
   if (!PlatformPlaybackSupport.hasOnDeviceEngine(host)) {
     final UnsupportedPlaybackController unsupported =
         UnsupportedPlaybackController();
-    ref.onDispose(unsupported.dispose);
+    ref.onDisposeAsync(unsupported.dispose);
     return unsupported;
   }
 
@@ -262,7 +263,7 @@ final localPlaybackControllerProvider =
           onTrackCompleted: (track) => unawaited(
               ref.read(playHistoryRepositoryProvider).recordCompletion(track)),
         );
-  ref.onDispose(controller.dispose);
+  ref.onDisposeAsync(controller.dispose);
   return controller;
 });
 
@@ -284,7 +285,7 @@ final playbackControllerProvider = Provider<PlaybackController>((ref) {
     local: ref.read(localPlaybackControllerProvider),
     cast: ref.read(castServiceProvider),
   );
-  ref.onDispose(controller.dispose);
+  ref.onDisposeAsync(controller.dispose);
   return controller;
 });
 
@@ -311,7 +312,7 @@ final smartPrecacheServiceProvider = Provider<SmartPrecacheService>((ref) {
     prefetcher: ref.read(trackPrefetcherProvider),
     preferences: ref.read(downloadPreferencesProvider),
   );
-  ref.onDispose(service.dispose);
+  ref.onDisposeAsync(service.dispose);
   return service;
 });
 
@@ -331,7 +332,7 @@ final remotePrebufferServiceProvider = Provider<RemotePrebufferService>((ref) {
     playbackStates: ref.read(playbackControllerProvider).stateStream,
     prebufferer: ref.read(remoteStreamPrebuffererProvider),
   );
-  ref.onDispose(service.dispose);
+  ref.onDisposeAsync(service.dispose);
   return service;
 });
 
@@ -381,7 +382,7 @@ final playbackReportingServiceProvider =
     playbackStates: ref.read(playbackControllerProvider).stateStream,
     reporter: ref.read(serverPlaybackReporterProvider),
   );
-  ref.onDispose(service.dispose);
+  ref.onDisposeAsync(service.dispose);
   return service;
 });
 
@@ -396,7 +397,7 @@ final remoteControlReceiverProvider = Provider<RemoteControlReceiver>((ref) {
     session: () => ref.read(jellyfinMusicSourceProvider)?.session,
     client: () => ref.read(jellyfinClientProvider),
   );
-  ref.onDispose(receiver.dispose);
+  ref.onDisposeAsync(receiver.dispose);
   return receiver;
 });
 
@@ -409,7 +410,7 @@ final remoteControlServiceProvider = Provider<RemoteControlService>((ref) {
     receiver: ref.read(remoteControlReceiverProvider),
     controller: ref.read(playbackControllerProvider),
   );
-  ref.onDispose(service.dispose);
+  ref.onDisposeAsync(service.dispose);
   return service;
 });
 
@@ -436,7 +437,7 @@ final remoteControlActivatorProvider = Provider<RemoteControlActivator>((ref) {
     playbackStates: ref.read(playbackControllerProvider).stateStream,
     isControllable: _isJellyfinControllable,
   );
-  ref.onDispose(activator.dispose);
+  ref.onDisposeAsync(activator.dispose);
   return activator;
 });
 

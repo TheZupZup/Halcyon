@@ -1,10 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/app_info.dart';
+import '../core/lifecycle/platform_shutdown_policy.dart';
+import '../core/platform/host_platform.dart';
 import '../core/services/active_playback_controller.dart';
 import '../core/services/notification_permission.dart';
 import '../core/services/stability_diagnostics.dart';
+import '../data/repositories/host_platform_provider.dart';
 import '../features/appearance/app_icon_controller.dart';
 import '../features/appearance/custom_brand_palette.dart';
 import '../features/appearance/custom_theme_controller.dart';
@@ -15,6 +20,7 @@ import '../features/onboarding/onboarding_controller.dart';
 import '../features/player/player_providers.dart';
 import '../features/support/support_actions_provider.dart';
 import '../features/support/supporter_entitlement.dart';
+import 'application_lifecycle.dart';
 import 'brand_theme.dart';
 import 'router.dart';
 import 'theme.dart';
@@ -50,7 +56,11 @@ final notificationPermissionProvider = Provider<NotificationPermission>((ref) {
 /// exercised by Linthra's widget tests — see docs/linux-desktop.md's
 /// "Light/Dark/System theme" row for what is and isn't verified.
 class LinthraApp extends ConsumerStatefulWidget {
-  const LinthraApp({super.key});
+  const LinthraApp({super.key, this.lifecycle});
+
+  /// Root lifecycle handle installed by `main`. When the embedder delivers
+  /// [AppLifecycleState.detached], this runs [ApplicationHandle.shutdown].
+  final ApplicationHandle? lifecycle;
 
   @override
   ConsumerState<LinthraApp> createState() => _LinthraAppState();
@@ -111,6 +121,16 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
         controller.onAppResumed();
       }
       ref.read(remoteLibraryRefresherProvider).refresh();
+    }
+    if (state == AppLifecycleState.detached) {
+      // Desktop only. On Android `detached` also fires when the Activity is
+      // destroyed while `audio_service` keeps playing in a foreground service,
+      // so shutting down here would stop background audio — see
+      // [PlatformShutdownPolicy].
+      final HostPlatform host = ref.read(hostPlatformProvider);
+      if (PlatformShutdownPolicy.shutsDownOnDetached(host)) {
+        unawaited(widget.lifecycle?.shutdown());
+      }
     }
   }
 

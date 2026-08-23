@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/lifecycle/async_disposal_registry.dart';
 import '../../core/models/plex_session.dart';
 import '../../core/models/subsonic_session.dart';
 import '../../core/services/media_artwork_cache.dart';
@@ -78,7 +79,7 @@ final mediaArtworkCacheProvider = Provider<MediaArtworkCache>((ref) {
       plex: ref.read(plexSettingsControllerProvider.notifier).session,
     ),
   );
-  ref.onDispose(cache.dispose);
+  ref.onDisposeAsync(cache.dispose);
   return cache;
 });
 
@@ -93,6 +94,6 @@ final mediaArtworkPrewarmServiceProvider =
     playbackStates: ref.read(playbackControllerProvider).stateStream,
     warm: ref.read(mediaArtworkCacheProvider).resolve,
   );
-  ref.onDispose(service.dispose);
+  ref.onDisposeAsync(service.dispose);
   return service;
 });
