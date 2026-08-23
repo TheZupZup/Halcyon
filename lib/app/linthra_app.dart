@@ -4,9 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/app_info.dart';
+import '../core/lifecycle/platform_shutdown_policy.dart';
+import '../core/platform/host_platform.dart';
 import '../core/services/active_playback_controller.dart';
 import '../core/services/notification_permission.dart';
 import '../core/services/stability_diagnostics.dart';
+import '../data/repositories/host_platform_provider.dart';
 import '../features/appearance/app_icon_controller.dart';
 import '../features/appearance/custom_brand_palette.dart';
 import '../features/appearance/custom_theme_controller.dart';
@@ -120,7 +123,14 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
       ref.read(remoteLibraryRefresherProvider).refresh();
     }
     if (state == AppLifecycleState.detached) {
-      unawaited(widget.lifecycle?.shutdown());
+      // Desktop only. On Android `detached` also fires when the Activity is
+      // destroyed while `audio_service` keeps playing in a foreground service,
+      // so shutting down here would stop background audio — see
+      // [PlatformShutdownPolicy].
+      final HostPlatform host = ref.read(hostPlatformProvider);
+      if (PlatformShutdownPolicy.shutsDownOnDetached(host)) {
+        unawaited(widget.lifecycle?.shutdown());
+      }
     }
   }
 
