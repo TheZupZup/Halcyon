@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/lifecycle/async_disposal_registry.dart';
 import '../../../core/models/cast_state.dart';
 import '../../../core/services/cast/cast_media_resolver.dart';
 import '../../../core/services/cast/cast_service.dart';
@@ -22,7 +23,7 @@ import '../player_providers.dart';
 /// sheet are unchanged either way.
 final castServiceProvider = Provider<CastService>((ref) {
   final service = UnavailableCastService();
-  ref.onDispose(service.dispose);
+  ref.onDisposeAsync(service.dispose);
   return service;
 });
 
@@ -62,7 +63,7 @@ final chromecastCastServiceOverride = castServiceProvider.overrideWith((ref) {
       defaultTargetPlatform == TargetPlatform.iOS;
   if (!castable) {
     final UnavailableCastService fallback = UnavailableCastService();
-    ref.onDispose(fallback.dispose);
+    ref.onDisposeAsync(fallback.dispose);
     return fallback;
   }
 
@@ -78,6 +79,6 @@ final chromecastCastServiceOverride = castServiceProvider.overrideWith((ref) {
         .map((s) => s.currentTrack)
         .distinct((a, b) => a?.uri == b?.uri),
   );
-  ref.onDispose(service.dispose);
+  ref.onDisposeAsync(service.dispose);
   return service;
 });

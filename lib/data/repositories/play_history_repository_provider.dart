@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/lifecycle/async_disposal_registry.dart';
 import '../../core/repositories/play_history_repository.dart';
 import '../../core/repositories/play_history_store.dart';
 import 'default_play_history_repository.dart';
@@ -25,7 +26,7 @@ final playHistoryRepositoryProvider = Provider<PlayHistoryRepository>((ref) {
     catalogForMigration: () =>
         ref.read(musicLibraryRepositoryProvider).getAllTracks(),
   );
-  ref.onDispose(repository.dispose);
+  ref.onDisposeAsync(repository.dispose);
   return repository;
 });
 
