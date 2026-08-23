@@ -13,12 +13,28 @@ Future<void> main() async {
   // paints in the user's chosen mode.
   final ThemeModePreference storedThemeMode = await readStoredThemeMode();
 
+  // One container backs the whole app so the *same* PlaybackController and
+  // MusicLibraryRepository instances drive both the UI (through providers) and
+  // the platform media session: Android Auto browses the real catalog and the
+  // notification / lock screen reflect the real controller. The production
+  // bindings it applies — the Drift catalog, the shared_preferences stores, the
+  // encrypted session storage, the real downloader/share/lyrics/cast services —
+  // each carry their reasoning in [productionApplicationOverrides]. Tests keep
+  // the in-memory defaults unless they opt into these bindings.
   final container = ProviderContainer(
     overrides: productionApplicationOverrides(
       storedThemeMode: storedThemeMode,
     ),
   );
 
+  // Everything `main` used to do inline between the container and `runApp`:
+  // attaching the media session, starting the side-effect services, warming the
+  // persisted sessions, and installing the global artwork hooks. The handle it
+  // returns owns all of it, and shutting it down releases all of it.
+  //
+  // A bootstrap that fails has already released whatever it managed to create
+  // (see [bootstrapApplication]) and rethrows, so the app never reaches `runApp`
+  // half-initialized — and never leaves a database or socket behind either.
   final ApplicationHandle lifecycle = await bootstrapApplication(container);
 
   runApp(

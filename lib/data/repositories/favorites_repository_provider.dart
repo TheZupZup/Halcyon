@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/lifecycle/async_disposal_registry.dart';
 import '../../core/repositories/favorites_repository.dart';
 import '../../core/repositories/favorites_store.dart';
 import 'in_memory_favorites_store.dart';
@@ -21,7 +22,7 @@ final favoritesRepositoryProvider = Provider<FavoritesRepository>((ref) {
   final repository = SyncedFavoritesRepository(
     store: ref.watch(favoritesStoreProvider),
   );
-  ref.onDispose(repository.dispose);
+  ref.onDisposeAsync(repository.dispose);
   return repository;
 });
 

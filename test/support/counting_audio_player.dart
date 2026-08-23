@@ -4,8 +4,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
 
 /// Channel-free [AudioPlayer] that records lifecycle calls for shutdown tests.
+///
+/// Pass [disposeGate] to make teardown *observably* asynchronous: [dispose]
+/// then parks until the test completes the gate, so a test can prove that
+/// `ApplicationHandle.shutdown()` is still waiting rather than relying on
+/// timing.
 class CountingAudioPlayer extends Fake implements AudioPlayer {
-  CountingAudioPlayer();
+  CountingAudioPlayer({this.disposeGate});
+
+  /// When set, [dispose] does not finish until this completer completes.
+  final Completer<void>? disposeGate;
 
   final StreamController<PlayerState> _states =
       StreamController<PlayerState>.broadcast(sync: true);
@@ -19,6 +27,12 @@ class CountingAudioPlayer extends Fake implements AudioPlayer {
   int disposeCount = 0;
   int stopCount = 0;
   int playCount = 0;
+
+  /// Set the moment [dispose] is entered, before it awaits [disposeGate].
+  bool disposeStarted = false;
+
+  /// Set only once [dispose] has run to completion.
+  bool disposeFinished = false;
 
   @override
   Stream<PlayerState> get playerStateStream => _states.stream;
@@ -68,10 +82,14 @@ class CountingAudioPlayer extends Fake implements AudioPlayer {
 
   @override
   Future<void> dispose() async {
+    disposeStarted = true;
     disposeCount++;
+    final Completer<void>? gate = disposeGate;
+    if (gate != null) await gate.future;
     await _states.close();
     await _positions.close();
     await _durations.close();
     await _events.close();
+    disposeFinished = true;
   }
 }

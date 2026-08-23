@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/lifecycle/async_disposal_registry.dart';
 import '../../core/models/track.dart';
 import '../../core/repositories/download_preferences.dart';
 import '../../core/repositories/download_repository.dart';
@@ -87,7 +88,7 @@ final _cacheDownloadRepositoryProvider =
     catalogForMigration: () =>
         ref.read(musicLibraryRepositoryProvider).getAllTracks(),
   );
-  ref.onDispose(repository.dispose);
+  ref.onDisposeAsync(repository.dispose);
   return repository;
 });
 

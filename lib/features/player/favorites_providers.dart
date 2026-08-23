@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/lifecycle/async_disposal_registry.dart';
 import '../../core/repositories/remote_sync_gateway.dart';
 import '../../data/repositories/favorites_repository_provider.dart';
 import '../../data/repositories/jellyfin_favorites_gateway.dart';
@@ -48,6 +49,6 @@ final remoteFavoritesSyncOverride =
       ),
     ],
   );
-  ref.onDispose(repository.dispose);
+  ref.onDisposeAsync(repository.dispose);
   return repository;
 });

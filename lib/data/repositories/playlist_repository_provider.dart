@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/lifecycle/async_disposal_registry.dart';
 import '../../core/repositories/playlist_repository.dart';
 import '../../core/repositories/playlist_store.dart';
 import '../../core/repositories/remote_sync_gateway.dart';
@@ -33,7 +34,7 @@ final playlistRepositoryProvider = Provider<PlaylistRepository>((ref) {
     catalogForMigration: () =>
         ref.read(musicLibraryRepositoryProvider).getAllTracks(),
   );
-  ref.onDispose(repository.dispose);
+  ref.onDisposeAsync(repository.dispose);
   return repository;
 });
 
@@ -68,6 +69,6 @@ final remotePlaylistSyncOverride =
     catalogForMigration: () =>
         ref.read(musicLibraryRepositoryProvider).getAllTracks(),
   );
-  ref.onDispose(repository.dispose);
+  ref.onDisposeAsync(repository.dispose);
   return repository;
 });
