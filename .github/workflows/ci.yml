@@ -50,6 +50,16 @@ jobs:
       - name: Analyze
         run: flutter analyze
 
+      # `flutter analyze` above never looks at third_party/** (analysis_options
+      # excludes it, so upstream code is not held to Linthra's stricter lint
+      # set). This analyzes each vendored package from its own directory with
+      # the same pinned toolchain, and — offline, no downloads — proves the
+      # vendored source is still exactly "upstream + the recorded patch" by
+      # reverse-applying third_party/<pkg>/upstream.patch and checking the
+      # result against upstream.sha256. Local twin: the same script.
+      - name: Check vendored packages
+        run: ./scripts/check_vendored_packages.sh
+
       - name: Run tests
         run: flutter test
 

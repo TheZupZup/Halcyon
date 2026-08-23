@@ -141,6 +141,9 @@ main() {
   run_step "flutter pub get --enforce-lockfile" "$FLUTTER" pub get --enforce-lockfile
   run_step "dart format --set-exit-if-changed ." dart format --set-exit-if-changed .
   run_step "flutter analyze" "$FLUTTER" analyze
+  # analyze skips third_party/** (see analysis_options.yaml); this analyzes each
+  # vendored package on its own and re-checks it against its recorded upstream.
+  run_step "Vendored package checks" ./scripts/check_vendored_packages.sh
   run_step "flutter test" "$FLUTTER" test
 
   # Flutter-independent: the committed runner still matches the app's identity

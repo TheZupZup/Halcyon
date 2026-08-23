@@ -1,6 +1,19 @@
 include: package:flutter_lints/flutter.yaml
 
 analyzer:
+  # Only Linthra's own Dart is held to the rules below.
+  #   * build/**       — generated output, never reviewed or edited.
+  #   * third_party/** — vendored upstream packages. Holding someone else's
+  #                      source to Linthra's stricter lint set would mean
+  #                      patching it for style, which is the opposite of the
+  #                      "smallest possible delta" the vendoring promises. They
+  #                      are analyzed instead from their own directory, against
+  #                      their own analysis_options.yaml, by
+  #                      scripts/check_vendored_packages.sh (run in CI) — so
+  #                      excluding them here does not leave them unanalyzed.
+  #   * the platform directories — native host projects (Gradle/CMake/Xcode)
+  #                      plus generated plugin registrants; any Dart that ends
+  #                      up there is tooling output, not app code.
   exclude:
     - build/**
     - third_party/**

@@ -167,6 +167,23 @@ The same resolved URI path handles regular filesystem files and direct or
 transcoded Jellyfin, Navidrome/Subsonic, and supported Plex HTTP(S) URLs. No
 source-specific player exists and credentials remain in the existing resolver.
 
+### Vendored `just_audio_media_kit`
+
+`just_audio_media_kit` is vendored under `third_party/just_audio_media_kit`
+(and wired in through a `dependency_overrides` path entry) rather than pulled
+from pub.dev. The local delta is two hunks that add
+`JustAudioMediaKit.mpvProperties`, an optional map of libmpv properties applied
+at player creation, so the headless CI smoke target can force `ao=alsa` where
+there is no PipeWire/Pulse device. Production sets nothing, so the libmpv calls
+are identical to the published package's.
+
+`third_party/just_audio_media_kit/PATCHES.md` records the exact upstream
+version and archive digest, what is and isn't vendored, and how to refresh it.
+`scripts/check_vendored_packages.sh` (run by CI and by
+`scripts/verify_linux.sh`) analyzes the package from its own directory with the
+pinned toolchain and proves — offline — that the tree is still upstream plus
+that recorded patch.
+
 libmpv provides broad codec/container support and PulseAudio/PipeWire output.
 It is a native runtime dependency, not a binary downloaded when Linthra starts.
 The future Flatpak manifest must build or include libmpv as a declared module.
