@@ -43,6 +43,13 @@ class MainActivity : AudioServiceActivity() {
         InstallHistoryChannel(applicationContext)
     }
 
+    // Verifies the installed APK's current signing certificate against the
+    // official Linthra release certificate. Public certificate hashes only;
+    // private signing material never enters the application.
+    private val buildIntegrityChannel by lazy {
+        BuildIntegrityChannel(applicationContext)
+    }
+
     override fun onResume() {
         super.onResume()
         displayRefreshRate.onResume()
@@ -117,6 +124,15 @@ class MainActivity : AudioServiceActivity() {
 
         // First-install/update history for the v0.2.0 onboarding migration.
         installHistoryChannel.configure(flutterEngine.dartExecutor.binaryMessenger)
+
+        // APK provenance: one-shot signing-certificate classification used by
+        // the startup warning and Settings -> About build-integrity card.
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            BuildIntegrityChannel.CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            buildIntegrityChannel.handle(call, result)
+        }
 
         // Launcher-icon switching: enable the chosen <activity-alias> and
         // disable the others (LauncherIconChannel). Separate channel from SAF so
