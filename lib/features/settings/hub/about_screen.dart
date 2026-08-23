@@ -8,6 +8,7 @@ import '../../../app/routes.dart';
 import '../../../core/app_info.dart';
 import '../../../data/repositories/share_service_provider.dart';
 import '../../appearance/selected_logo_mark.dart';
+import '../../security/build_integrity_card.dart';
 import '../../support/support_actions_provider.dart';
 import '../about/support_section.dart';
 import '../about/whats_new_section.dart';
@@ -61,6 +62,8 @@ class AboutScreen extends ConsumerWidget {
         const _BrandPanel(),
         const SizedBox(height: AppSpacing.md),
         const _BuildInfoCard(),
+        const SizedBox(height: AppSpacing.md),
+        const BuildIntegrityCard(),
         const SizedBox(height: AppSpacing.md),
         const WhatsNewSection(),
         const SizedBox(height: AppSpacing.md),
