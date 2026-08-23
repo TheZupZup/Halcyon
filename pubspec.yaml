@@ -9,7 +9,7 @@ publish_to: "none"
 # Android build (versionName/versionCode) and the in-app version mirrors it via
 # AppInfo._devVersionName, so a plain `flutter build` (CI and F-Droid alike) and
 # the tag all agree.
-version: 0.2.3+203999
+version: 0.2.4+204999
 
 environment:
   sdk: ">=3.6.0 <4.0.0"
@@ -47,6 +47,7 @@ dependencies:
   # Background playback + platform media session (notification, lock screen,
   # Android Auto). Used only by LinthraAudioHandler in the services layer, which
   # forwards session commands to PlaybackController and mirrors its state out.
+  # The UI never depends on audio_service directly.
   # The UI never depends on audio_service directly.
   audio_service: ^0.18.15
   # Audio-focus / interruption handling for the on-device engine. just_audio's
