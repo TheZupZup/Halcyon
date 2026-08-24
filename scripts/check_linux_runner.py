@@ -21,6 +21,16 @@ that disagrees with Android's would mean two different identities for one
 product; a window title that disagrees with `AppInfo.name` would mean the title
 bar and the About screen disagree.
 
+The same three answers are what the installed desktop entry
+(`linux/packaging/<app-id>.desktop`, #434) has to repeat — its filename, its
+`Icon=`, its `Name=` and its `Exec=` — so it is checked against those sources
+of truth too, rather than against the runner's copy of them. A desktop entry
+that disagrees is not a build failure either: it installs, it just launches
+nothing, shows the wrong name, or (with a filename that is not the app id)
+never gets exported by flatpak-builder at all. The Flatpak manifests are
+checked for the install step that puts it in `/app/share/applications`, since
+an entry nothing installs is the same silence.
+
 It also checks two things that are about *how* the runner builds rather than
 what it is called:
 
@@ -55,6 +65,23 @@ MY_APPLICATION = Path("linux") / "runner" / "my_application.cc"
 PUBSPEC = Path("pubspec.yaml")
 APP_INFO = Path("lib") / "core" / "app_info.dart"
 BUILD_GRADLE = Path("android") / "app" / "build.gradle"
+# The installed desktop entry and the two Flatpak manifests that install it.
+# All three are named after the application id, so their real paths are built
+# from it at check time rather than hardcoded here.
+PACKAGING_DIR = Path("linux") / "packaging"
+FLATPAK_DIR = Path("flatpak")
+FLATPAK_TEMPLATE = FLATPAK_DIR / "flatpak-flutter.yml"
+
+# Where a Flatpak's desktop entry has to land: flatpak-builder exports what it
+# finds in this directory at `finish` time and nothing from anywhere else.
+DESKTOP_ENTRY_INSTALL_DIR = "/app/share/applications"
+
+# freedesktop's main categories for an audio player. `Audio` is only valid
+# alongside `AudioVideo`, and `Player` alone would leave the entry ungrouped in
+# menus that split media by kind. Extra categories (Music, …) are fine.
+REQUIRED_CATEGORIES = ("AudioVideo", "Audio", "Player")
+
+DESKTOP_ENTRY_GROUP = "Desktop Entry"
 
 # The CMake variable linux/CMakeLists.txt uses to accept an already-unpacked
 # SQLite amalgamation instead of downloading one. See docs/linux-desktop.md.
@@ -169,6 +196,112 @@ def app_display_name(root: Path) -> str:
     )
 
 
+def desktop_entry_file(root: Path) -> Path:
+    """Where the installed desktop entry has to live, from the app id.
+
+    The filename is not decoration: Flatpak only exports `<app-id>.desktop`,
+    and AppStream (#435) will key its component id to the same name.
+    """
+    return PACKAGING_DIR / f"{android_application_id(root)}.desktop"
+
+
+def desktop_entry(root: Path) -> dict[str, str]:
+    """The `[Desktop Entry]` group of the installed entry, as key -> value.
+
+    A hand-rolled reader rather than `configparser`, which lowercases option
+    names by default (`Name` and `Exec` would come back as `name`/`exec`) and
+    whose default interpolation treats `%` — the field-code character in a
+    desktop `Exec=` — as syntax. Only the default group is returned; a
+    localized `Name[de]` key is a distinct key here, and a later group
+    (`[Desktop Action …]`) is not read at all.
+    """
+    text = _read(root, desktop_entry_file(root))
+    values: dict[str, str] = {}
+    in_group = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_group = stripped[1:-1] == DESKTOP_ENTRY_GROUP
+            continue
+        if in_group and "=" in stripped:
+            key, _, value = stripped.partition("=")
+            values[key.strip()] = value.strip()
+    if not values:
+        raise CheckError(
+            f"{desktop_entry_file(root)}: no [{DESKTOP_ENTRY_GROUP}] group"
+        )
+    return values
+
+
+def desktop_entry_problems(root: Path) -> list[str]:
+    """Disagreements between the desktop entry and the app's identity."""
+    entry = desktop_entry(root)
+    where = desktop_entry_file(root)
+    problems: list[str] = []
+
+    def require(key: str, expected: str, source: str) -> None:
+        actual = entry.get(key)
+        if actual is None:
+            problems.append(f"{where}: no {key}=, expected {expected!r} ({source})")
+        elif actual != expected:
+            problems.append(
+                f"{where}: {key}={actual!r} but {source} says {expected!r}"
+            )
+
+    require("Type", "Application", "a launchable desktop entry")
+    require("Name", app_display_name(root), "lib/core/app_info.dart AppInfo.name")
+    # Exec is the bare command, not a path: /app/bin/<name> inside the Flatpak,
+    # whatever a native package chose outside it. No `%U`/`%F` field code —
+    # Linthra takes no file or URI argument, so accepting one would advertise a
+    # handler that silently drops what it is opened with.
+    require("Exec", pubspec_name(root), "pubspec.yaml name")
+    # Icon is an icon-theme name, which is the app id: #436 installs the icon
+    # files under exactly that name.
+    require(
+        "Icon",
+        android_application_id(root),
+        "android/app/build.gradle applicationId",
+    )
+
+    categories = [item for item in entry.get("Categories", "").split(";") if item]
+    missing = [name for name in REQUIRED_CATEGORIES if name not in categories]
+    if missing:
+        problems.append(
+            f"{where}: Categories is missing {', '.join(missing)} — an audio "
+            f"player needs {';'.join(REQUIRED_CATEGORIES)}"
+        )
+
+    return problems
+
+
+def desktop_entry_install_problems(root: Path) -> list[str]:
+    """Flatpak manifests that do not install the desktop entry.
+
+    Both are checked: `flatpak-flutter.yml` is hand-authored and
+    `<app-id>.yml` is generated from it by
+    scripts/regenerate_flatpak_sources.sh, so a manifest change that was never
+    regenerated leaves the built Flatpak without the entry while the diff looks
+    complete.
+    """
+    app_id = android_application_id(root)
+    source = desktop_entry_file(root)
+    destination = f"{DESKTOP_ENTRY_INSTALL_DIR}/{app_id}.desktop"
+    install = re.compile(
+        rf"install\s+-Dm644\s+{re.escape(str(source))}\s+{re.escape(destination)}"
+    )
+
+    problems: list[str] = []
+    for manifest in (FLATPAK_TEMPLATE, FLATPAK_DIR / f"{app_id}.yml"):
+        if install.search(_read(root, manifest)) is None:
+            problems.append(
+                f"{manifest} does not install {source} to {destination}, so the "
+                "built Flatpak has no desktop entry to export"
+            )
+    return problems
+
+
 def absolute_paths_under_linux(root: Path) -> list[str]:
     """Absolute host paths hardcoded in the committed Linux build files.
 
@@ -220,6 +353,12 @@ def check(root: Path) -> list[str]:
         app_display_name(root),
         "lib/core/app_info.dart AppInfo.name",
     )
+
+    # The installed desktop entry repeats the identity above; it is checked
+    # against the same sources of truth, not against the runner's copy, so a
+    # runner that drifts is reported once rather than twice.
+    problems.extend(desktop_entry_problems(root))
+    problems.extend(desktop_entry_install_problems(root))
 
     # Window metrics: a minimum larger than the default would open the window
     # already clamped, which reads as the app ignoring its own default.
