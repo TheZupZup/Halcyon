@@ -42,89 +42,68 @@ are independent audio runtimes by design; only the Flatpak is self-contained.
 
 ## Building, installing, running
 
-### Fedora Atomic (Kinoite / Silverblue) — the normal case
-
-`flatpak` itself is already part of the base image. Install `flatpak-builder`
-as a Flatpak app rather than layering it — no `rpm-ostree install`, no reboot:
+The full contributor workflow — host tools, build, install, run, rebuild,
+clean/uninstall and debugging, written for Fedora Atomic (Kinoite/Silverblue)
+and usable anywhere else — is
+[docs/flatpak-development.md](../docs/flatpak-development.md). The short
+version, run from this directory:
 
 ```bash
-flatpak install --user flathub org.flatpak.Builder \
-  org.gnome.Platform//50 org.gnome.Sdk//50 \
-  org.freedesktop.Sdk.Extension.llvm20//25.08
-
-cd flatpak
 flatpak run org.flatpak.Builder --user --force-clean --repo=repo \
   flatpak-builder-build io.github.thezupzup.linthra.yml
 
-flatpak --user remote-add --if-not-exists --no-gpg-verify \
-  linthra-dev repo
+flatpak --user remote-add --if-not-exists --no-gpg-verify linthra-dev repo
 flatpak --user install -y linthra-dev io.github.thezupzup.linthra
 
 flatpak run io.github.thezupzup.linthra
 ```
 
-(A shell alias, e.g. `alias flatpak-builder='flatpak run org.flatpak.Builder'`
-in `~/.bashrc`, lets you type the commands below as-is instead.)
-
-### Fedora Workstation / other distros with a native `flatpak-builder`
-
-Install both from your package manager (Fedora: `sudo dnf install flatpak
-flatpak-builder`) and drop the `flatpak run org.flatpak.Builder` prefix —
-everywhere above, run plain `flatpak-builder ...` instead.
-
-### Running from inside another sandbox (e.g. this repo opened in the VS Code Flatpak)
-
-If your own terminal is itself inside a Flatpak sandbox, neither `flatpak`
-nor `flatpak-builder` is reachable directly — prefix every command above
-(from either section) with `flatpak-spawn --host`, e.g.
-`flatpak-spawn --host flatpak run org.flatpak.Builder --user ...`. This is
-an extra note for that specific situation, not the normal path.
+On a distribution with a native `flatpak-builder`, drop the
+`flatpak run org.flatpak.Builder` prefix and run plain `flatpak-builder ...`.
+To uninstall: `flatpak --user uninstall io.github.thezupzup.linthra` and
+`flatpak --user remote-delete linthra-dev`.
 
 Nothing above needs network access during the actual sandboxed build —
 `flatpak-builder`'s normal declared-source fetch (`generated/sources/pubspec.json`,
 the Flutter SDK module, the ffmpeg/libplacebo/libass/mpv archives) happens
 before the sandbox is entered, exactly like any other Flatpak module.
 
-To uninstall: `flatpak --user uninstall io.github.thezupzup.linthra` and
-`flatpak --user remote-delete linthra-dev`.
-
 ## Testing audio locally
 
 The committed manifest grants `--socket=pulseaudio` but no filesystem or
 network access, matching #438/#439/#440's scope. To manually verify playback
-of your own local files or a real remote stream, use *temporary*,
-non-committed `flatpak override` grants and revoke exactly what you added
-afterward — never add these to `io.github.thezupzup.linthra.yml`, and never
-use `--reset`, which wipes *every* persistent override you have for this app
-(including any unrelated ones you already had) rather than just the one this
-test added:
+of your own local files or a real remote stream, pass the extra permission to
+`flatpak run` itself. Options given there apply to that one invocation only,
+so there is nothing to revoke afterwards and nothing is left behind:
 
 ```bash
-# Local file: point a temporary filesystem grant at a directory with a test
-# track, launch, play it from within the app, then revoke that exact grant.
-flatpak --user override --filesystem=/path/to/test-music:ro io.github.thezupzup.linthra
-flatpak run io.github.thezupzup.linthra
-flatpak --user override --nofilesystem=/path/to/test-music io.github.thezupzup.linthra
+# Local file: read-only access to a directory with a test track, for this
+# launch only. Play it from within the app.
+flatpak run --filesystem=/path/to/test-music:ro io.github.thezupzup.linthra
 
 # Remote HTTP(S) stream: same idea with network instead.
-flatpak --user override --share=network io.github.thezupzup.linthra
-flatpak run io.github.thezupzup.linthra
-flatpak --user override --unshare=network io.github.thezupzup.linthra
+flatpak run --share=network io.github.thezupzup.linthra
 ```
 
-Confirm each grant is actually gone afterward — check the specific
-permission you added rather than assuming empty output, since you may
-already have unrelated overrides set for this app:
+Do **not** use `flatpak override` for this. Its grants are persistent, and the
+apparent undo is not one: `--nofilesystem=…`/`--unshare=network` record a
+*negative* override on top of the grant rather than deleting it, so the app
+keeps leftover permission state either way. `--reset` is worse — it wipes
+*every* persistent override you have for this app, including unrelated ones
+you set yourself. A one-shot `flatpak run` permission avoids the whole problem.
+
+Never add these permissions to `io.github.thezupzup.linthra.yml` either: a
+committed grant is #440's (network) and #438/#439's (filesystem) decision, not
+a testing convenience. The package itself is unchanged by the runs above, and
+stays that way:
 
 ```bash
-flatpak override --user --show io.github.thezupzup.linthra
-# Look for the absence of the filesystem/network line you added above;
-# any other overrides already there are not this test's concern.
+flatpak info --show-permissions io.github.thezupzup.linthra
+# Still only the manifest's finish-args — a permission passed to `flatpak run`
+# never appears here.
 ```
 
-should no longer list the `filesystem`/`network` line the test added, though
-any other override you already had for this app before testing is expected
-to remain. Automated audio smoke coverage is #446's job, not this file's.
+Automated audio smoke coverage is #446's job, not this file's.
 
 ## Regenerating the pinned sources
 
@@ -151,21 +130,22 @@ Not in this manifest — each has its own issue:
   finish-args and the associated install steps are absent on purpose.
 * **Provider network access** (#440) — no permanent `--share=network`.
   #433 proved the bundled ffmpeg/libmpv can decode HTTP(S) audio using only a
-  *temporary*, non-committed `flatpak override --user --share=network`
-  applied and removed for that validation; permanently granting Linthra
-  network access for real provider use (Jellyfin/Navidrome-Subsonic/Plex) is
-  #440's job, not this manifest's.
+  temporary, non-committed grant for that validation (see
+  [Testing audio locally](#testing-audio-locally)); permanently granting
+  Linthra network access for real provider use
+  (Jellyfin/Navidrome-Subsonic/Plex) is #440's job, not this manifest's.
 * **Filesystem/portal permissions** (#438/#439), **Secret Service** (#441) —
   no `--filesystem=host|home` or `--talk-name=org.freedesktop.secrets`.
   Jellyfin/Subsonic/Plex session restore and secure-storage reads already
   degrade to "not signed in" without them (`docs/linux-desktop.md` §"Secure
   storage"). #433's local-audio validation likewise used a temporary,
-  non-committed filesystem override rather than a committed grant.
+  non-committed filesystem grant rather than a committed one.
 * **Video codecs, hardware acceleration/hwaccel, subtitle-adjacent tuning
   beyond what libmpv/libass require to build** — Linthra is audio-only; the
   ffmpeg/mpv build stays scoped to the container/codec/protocol support
   Linthra's supported formats and HTTP(S) streaming actually need.
 * **CI** (#444), **automated launch/audio smoke tests** (#445/#446), **local-
-  library sandbox test** (#447), **Fedora Atomic development documentation**
-  (#448) — out of scope here; this file is the minimal "how do I build and
-  validate this locally" note #432/#433 asked for.
+  library sandbox test** (#447) — out of scope here; this file is the minimal
+  "how do I build and validate this locally" note #432/#433 asked for, and
+  [docs/flatpak-development.md](../docs/flatpak-development.md) is the
+  contributor workflow around it.

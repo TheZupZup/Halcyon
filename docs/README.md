@@ -11,6 +11,7 @@ The full index of Linthra's docs. New to the project? Start with the
 | Contributing & setup | [CONTRIBUTING.md](../CONTRIBUTING.md) |
 | Development, build & CI | [development.md](./development.md) |
 | Linux desktop build (experimental) | [linux-desktop.md](./linux-desktop.md) |
+| Flatpak development (Fedora Atomic) | [flatpak-development.md](./flatpak-development.md) |
 | Codebase tour (where everything lives) | [codebase-tour.md](./codebase-tour.md) |
 | Architecture & extension points | [architecture.md](./architecture.md) |
 | Where to help (contributor roadmap) | [contributor-roadmap.md](./contributor-roadmap.md) |
