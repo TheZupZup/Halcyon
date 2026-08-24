@@ -7,10 +7,8 @@ import '../core/app_info.dart';
 import '../core/lifecycle/platform_shutdown_policy.dart';
 import '../core/platform/host_platform.dart';
 import '../core/services/active_playback_controller.dart';
-import '../core/services/build_integrity_service.dart';
 import '../core/services/notification_permission.dart';
 import '../core/services/stability_diagnostics.dart';
-import '../data/repositories/build_integrity_provider.dart';
 import '../data/repositories/host_platform_provider.dart';
 import '../features/appearance/app_icon_controller.dart';
 import '../features/appearance/custom_brand_palette.dart';
@@ -20,7 +18,6 @@ import '../features/appearance/theme_mode_controller.dart';
 import '../features/library/remote_library_refresher.dart';
 import '../features/onboarding/onboarding_controller.dart';
 import '../features/player/player_providers.dart';
-import '../features/security/unofficial_build_warning_screen.dart';
 import '../features/support/support_actions_provider.dart';
 import '../features/support/supporter_entitlement.dart';
 import 'application_lifecycle.dart';
@@ -72,12 +69,6 @@ class LinthraApp extends ConsumerStatefulWidget {
 class _LinthraAppState extends ConsumerState<LinthraApp>
     with WidgetsBindingObserver {
   bool _notificationPermissionRequested = false;
-
-  /// A suspicious/unverifiable Android build must be acknowledged again after
-  /// every fresh process launch. This is intentionally not persisted: a user
-  /// should never be able to dismiss provenance risk once and then forget that
-  /// this APK is still outside Linthra's official signing identity.
-  bool _unofficialBuildAcknowledged = false;
 
   @override
   void initState() {
@@ -151,7 +142,6 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
     final distribution = ref.watch(supportDistributionProvider);
     final supporterEntitlement = ref.watch(supporterEntitlementProvider);
     final onboardingBootstrap = ref.watch(onboardingBootstrapProvider);
-    final buildIntegrity = ref.watch(buildIntegrityStatusProvider);
 
     BrandPalette paletteFor(Brightness brightness) {
       final bool mayApplyCustomPalette = distribution.offersCustomPalette &&
@@ -166,10 +156,11 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
     final ThemeData lightTheme = AppTheme.light(paletteFor(Brightness.light));
     final ThemeData darkTheme = AppTheme.dark(paletteFor(Brightness.dark));
 
-    // Do not construct the router until first-install/update state and Android
-    // build provenance are known. The signing check is local PackageManager
-    // work only — no network request and no telemetry.
-    if (onboardingBootstrap.isLoading || buildIntegrity.isLoading) {
+    // Do not construct the router until first-install/update state is known.
+    // This tiny branded launch surface prevents both a library→welcome flash and
+    // a welcome→library flash while SharedPreferences/native install history are
+    // being resolved.
+    if (onboardingBootstrap.isLoading) {
       return MaterialApp(
         title: AppInfo.name,
         debugShowCheckedModeBanner: false,
@@ -177,28 +168,6 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
         darkTheme: darkTheme,
         themeMode: themeMode.materialThemeMode,
         home: const _BootstrapSurface(),
-      );
-    }
-
-    // A provider error is intentionally treated as unverifiable on Android.
-    // The production service already converts expected platform failures to
-    // this state, but this fallback keeps the root fail-closed even if a future
-    // implementation unexpectedly throws.
-    final BuildIntegrityStatus integrity = buildIntegrity.valueOrNull ??
-        const BuildIntegrityStatus.unavailable();
-    if (integrity.shouldWarn && !_unofficialBuildAcknowledged) {
-      return MaterialApp(
-        title: AppInfo.name,
-        debugShowCheckedModeBanner: false,
-        theme: lightTheme,
-        darkTheme: darkTheme,
-        themeMode: themeMode.materialThemeMode,
-        home: UnofficialBuildWarningScreen(
-          status: integrity,
-          onContinue: () {
-            setState(() => _unofficialBuildAcknowledged = true);
-          },
-        ),
       );
     }
 

@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/models/theme_mode_preference.dart';
 import '../core/platform/host_platform.dart';
 import '../data/repositories/app_icon_variant_store_provider.dart';
-import '../data/repositories/build_integrity_provider.dart';
 import '../data/repositories/default_provider_store_provider.dart';
 import '../data/repositories/download_repository_provider.dart';
 import '../data/repositories/favorites_repository_provider.dart';
@@ -74,7 +73,6 @@ List<Override> productionApplicationOverrides({
     sharedPreferencesAppIconVariantStoreOverride,
     sharedPreferencesThemeModeStoreOverride,
     initialThemeModeProvider.overrideWithValue(storedThemeMode),
-    if (resolvedHost.isAndroid) platformBuildIntegrityServiceOverride,
     platformLauncherIconServiceOverride,
     platformShareServiceOverride,
     lyricsServiceOverride,

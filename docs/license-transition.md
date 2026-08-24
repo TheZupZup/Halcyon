@@ -80,10 +80,19 @@ reviewable change:
 - update the in-app About screen and its tests;
 - update `native/linthra_core/Cargo.toml`;
 - update the repository's F-Droid metadata to `License: AGPL-3.0-or-later`;
+- update the Fastlane store metadata that states the license to users, in particular
+  `fastlane/metadata/android/en-US/full_description.txt` (this text is shown on the
+  F-Droid and Play listings, so it is user-facing and must not be missed);
 - update current F-Droid/readiness/submission documentation without rewriting historical
   release facts;
 - update current Play Store/listing documentation where it identifies the project
   license;
+- update `docs/privacy-policy.md` and any other active policy document that states the
+  project license;
+- update `docs/dependency-license-audit.md`, which states the project license *and*
+  the compatibility reasoning that depends on it;
+- re-run the dependency-license compatibility audit against AGPL-3.0-or-later before
+  the switch (see below);
 - update any current generated/static documentation pages that display MPL-2.0;
 - run a repository-wide search for `MPL-2.0`, `MPL 2.0`, and `Mozilla Public License`
   before merge so no active metadata is missed; and
@@ -99,13 +108,44 @@ places:
 - `native/linthra_core/Cargo.toml`
 - `lib/features/settings/hub/about_screen.dart`
 - `test/features/settings/hub/about_screen_test.dart`
+- `fastlane/metadata/android/en-US/full_description.txt`
 - `docs/fdroid-build-recipe.md`
 - `docs/fdroid-readiness.md`
 - `docs/fdroid-submission.md`
 - `docs/play-store-listing.md`
 - `docs/play-store-readiness.md`
+- `docs/dependency-license-audit.md`
+- `docs/privacy-policy.md`
 - `docs/index.html`
 - `docs/privacy.html`
+
+This list is a starting point, not a guarantee of completeness. Re-run the search at the
+time of the switch rather than trusting this list.
+
+## Dependency license compatibility
+
+AGPL-3.0-or-later is a stronger copyleft than MPL-2.0, and compatibility with it is
+one-way for several common licenses. Before the switch, re-run the dependency license
+audit and confirm that every dependency Linthra actually ships remains compatible with
+AGPL-3.0-or-later.
+
+This audit must cover the native and desktop dependency chain, not only Dart packages.
+The Linux/Flatpak playback path pulls in the libmpv/FFmpeg chain, which is licensed
+differently from the permissive Dart dependency set that
+`docs/dependency-license-audit.md` was originally written against, and that document has
+not been revisited since the Linux desktop work landed.
+
+Some combinations that need explicit confirmation rather than assumption:
+
+- `GPL-2.0-only` dependencies are **not** compatible with AGPL-3.0-or-later;
+- `LGPL-2.1-only` needs care, whereas `LGPL-2.1-or-later` can be used via its upgrade
+  path to LGPLv3;
+- how the libmpv/FFmpeg chain is actually configured and licensed in the builds Linthra
+  ships, which can differ between distributions.
+
+**Do not attempt this audit as part of the documentation change.** It is a prerequisite
+for the license switch itself, and its result may affect whether or how the switch can
+proceed.
 
 ## F-Droid
 
@@ -128,6 +168,11 @@ AGPL controls the terms under which covered source and derivative works are dist
 [`TRADEMARKS.md`](../TRADEMARKS.md) controls whether a third-party build may present
 itself using Linthra's official identity.
 
-For a modified downstream build, the expected rule is simple: keep the source open as
-required by the applicable software license, and use a distinct name/branding so users
-do not mistake that build for one reviewed and published by the Linthra project.
+For a downstream build that materially changes Linthra's behaviour or user-facing
+identity, the expected rule is simple: keep the source open as required by the applicable
+software license, and use a distinct name/branding so users do not mistake that build for
+one reviewed and published by the Linthra project.
+
+Independent distributions that build Linthra from source without materially changing it —
+F-Droid, Flathub, and Linux distribution packaging — are explicitly not asked to rebrand.
+See [`TRADEMARKS.md`](../TRADEMARKS.md) for the packaging carve-out.
