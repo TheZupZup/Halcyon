@@ -203,6 +203,14 @@ class _PlaybackProgressBarState extends State<PlaybackProgressBar> {
                 max: hasDuration ? totalMs.toDouble() : 1.0,
                 onChanged: canSeek ? _onChanged : null,
                 onChangeEnd: canSeek ? _onChangeEnd : null,
+                // The wave path names itself (see [WavySeekBar]); without this
+                // the Material fallback would announce a bare percentage with
+                // nothing saying what it measures. `label` is semantics-only
+                // here: the value indicator it can also drive is shown
+                // `onlyForDiscrete`, and this slider is continuous.
+                label: _positionLabel,
+                semanticFormatterCallback: (double value) =>
+                    _semanticValue(value, hasDuration ? totalMs : 0),
               ),
             ),
         },
@@ -223,6 +231,17 @@ class _PlaybackProgressBarState extends State<PlaybackProgressBar> {
         ),
       ],
     );
+  }
+
+  /// The name both renderers announce, so the bar reads the same whichever
+  /// style is in use.
+  static const String _positionLabel = 'Playback position';
+
+  /// The spoken position, in the same `elapsed of total` shape [WavySeekBar]
+  /// uses. An unknown duration says so rather than implying a length.
+  static String _semanticValue(double milliseconds, int totalMs) {
+    if (totalMs <= 0) return 'Unknown';
+    return '${_formatMs(milliseconds)} of ${_formatMs(totalMs.toDouble())}';
   }
 
   static String _formatMs(double milliseconds) =>

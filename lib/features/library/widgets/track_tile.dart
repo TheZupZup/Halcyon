@@ -127,10 +127,16 @@ class TrackTile extends ConsumerWidget {
         ),
       ),
       trailing: selectionActive
-          ? Checkbox(
-              value: selected,
-              onChanged:
-                  onSelectToggle == null ? null : (_) => onSelectToggle!(),
+          // The row itself already carries the selected state (and toggles on
+          // tap), so the box is the visual echo of it: a second, unnamed
+          // checkbox node next to every title would only make the list harder
+          // to move through, not clearer.
+          ? ExcludeSemantics(
+              child: Checkbox(
+                value: selected,
+                onChanged:
+                    onSelectToggle == null ? null : (_) => onSelectToggle!(),
+              ),
             )
           : Row(
               mainAxisSize: MainAxisSize.min,
@@ -198,9 +204,13 @@ class _StatusGlyph extends StatelessWidget {
           semanticLabel: 'Downloaded',
         );
       case DownloadStatus.downloading:
-        return SizedBox.square(
-          dimension: 16,
-          child: CircularProgressIndicator(strokeWidth: 2, value: progress),
+        // The other three states name themselves; this one is a bare ring.
+        return Semantics(
+          label: 'Downloading',
+          child: SizedBox.square(
+            dimension: 16,
+            child: CircularProgressIndicator(strokeWidth: 2, value: progress),
+          ),
         );
       case DownloadStatus.queued:
         return Icon(

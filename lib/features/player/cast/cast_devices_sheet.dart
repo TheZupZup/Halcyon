@@ -194,22 +194,30 @@ class _Body extends ConsumerWidget {
         if (state.isConnected)
           CastVolumeControls(state: state, service: service),
         for (final device in devices)
-          ListTile(
-            leading: Icon(
-              state.connectedDevice == device
-                  ? Icons.cast_connected
-                  : Icons.cast,
-            ),
-            title: Text(device.name),
-            trailing: state.connectedDevice == device
-                ? TextButton(
-                    onPressed: service.disconnect,
-                    child: const Text('Disconnect'),
-                  )
-                : null,
-            onTap: state.connectedDevice == device
-                ? null
-                : () => service.connect(device),
+          Builder(
+            builder: (BuildContext context) {
+              final bool isConnected = state.connectedDevice == device;
+              return ListTile(
+                // The connected row is deliberately not tappable (there is
+                // nothing to connect to twice). Marking it selected is what
+                // makes that read as "this is the one you're on" rather than
+                // as an inert row, and the glyph says the same thing for
+                // anyone who only hears the leading icon.
+                selected: isConnected,
+                leading: Icon(
+                  isConnected ? Icons.cast_connected : Icons.cast,
+                  semanticLabel: isConnected ? 'Connected' : null,
+                ),
+                title: Text(device.name),
+                trailing: isConnected
+                    ? TextButton(
+                        onPressed: service.disconnect,
+                        child: const Text('Disconnect'),
+                      )
+                    : null,
+                onTap: isConnected ? null : () => service.connect(device),
+              );
+            },
           ),
       ],
     );
@@ -290,6 +298,9 @@ class _CastVolumeControlsState extends State<CastVolumeControls> {
                     : null,
                 color: muteColor,
                 icon: Icon(muted ? Icons.volume_off : Icons.volume_up),
+                // Selected while muted, so mute reads as the toggle it is
+                // rather than as two buttons that swap places.
+                isSelected: muted,
                 tooltip: muted ? 'Unmute' : 'Mute',
               ),
               Expanded(
@@ -297,6 +308,13 @@ class _CastVolumeControlsState extends State<CastVolumeControls> {
                   value: sliderValue,
                   onChanged: supported ? _onChanged : null,
                   onChangeEnd: supported ? _onChangeEnd : null,
+                  // Names the slider for anyone who lands on it directly
+                  // instead of reading the heading above it first. Semantics
+                  // only: the value indicator `label` can also drive is shown
+                  // `onlyForDiscrete`, and this slider is continuous.
+                  label: 'Cast volume',
+                  semanticFormatterCallback: (double value) =>
+                      '${(value * 100).round()}%',
                 ),
               ),
             ],

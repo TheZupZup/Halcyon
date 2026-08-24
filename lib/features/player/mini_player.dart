@@ -77,40 +77,54 @@ class MiniPlayer extends ConsumerWidget {
                   ),
                   child: Row(
                     children: [
-                      SizedBox.square(
-                        dimension: 44,
-                        child: AlbumArtwork(
-                          artworkUri: track.artworkUri,
-                          borderRadius: BorderRadius.circular(AppRadii.sm),
+                      // The cover carries no information the lines beside it
+                      // don't already say, so it stays out of the reading
+                      // order rather than announcing an image before them.
+                      ExcludeSemantics(
+                        child: SizedBox.square(
+                          dimension: 44,
+                          child: AlbumArtwork(
+                            artworkUri: track.artworkUri,
+                            borderRadius: BorderRadius.circular(AppRadii.sm),
+                          ),
                         ),
                       ),
                       const SizedBox(width: AppSpacing.md),
                       Expanded(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              track.title,
-                              style: theme.textTheme.titleSmall?.copyWith(
-                                fontWeight: FontWeight.w600,
+                        // One node for the whole metadata block, so the bar
+                        // announces "<title>, <artist> • <source>" once
+                        // instead of three fragments in a row. The play/pause
+                        // button stays outside it and keeps its own node.
+                        child: MergeSemantics(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                track.title,
+                                style: theme.textTheme.titleSmall?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            if (subtitle != null || sourceName != null)
-                              _MiniSubtitle(
-                                subtitle: subtitle,
-                                sourceName: sourceName,
-                              ),
-                          ],
+                              if (subtitle != null || sourceName != null)
+                                _MiniSubtitle(
+                                  subtitle: subtitle,
+                                  sourceName: sourceName,
+                                ),
+                            ],
+                          ),
                         ),
                       ),
                       if (isCasting) ...[
+                        // Icon-only, and the only thing on the bar that says
+                        // the audio is going somewhere else — so it is named.
                         Icon(
                           Icons.cast_connected,
                           size: 18,
                           color: theme.colorScheme.primary,
+                          semanticLabel: 'Casting',
                         ),
                         const SizedBox(width: AppSpacing.sm),
                       ],
@@ -242,11 +256,16 @@ class _PlayPauseButton extends ConsumerWidget {
     // A spinner for both preparing and mid-stream buffering, so the mini-player
     // shows activity (never looks frozen) while the stream catches up.
     if (state.isBusy) {
-      return const SizedBox.square(
-        dimension: 24,
-        child: Padding(
-          padding: EdgeInsets.all(AppSpacing.xs),
-          child: CircularProgressIndicator(strokeWidth: 2),
+      // The spinner stands where play/pause normally is: without a name it
+      // reads as the transport control having simply vanished.
+      return Semantics(
+        label: 'Buffering',
+        child: const SizedBox.square(
+          dimension: 24,
+          child: Padding(
+            padding: EdgeInsets.all(AppSpacing.xs),
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
         ),
       );
     }

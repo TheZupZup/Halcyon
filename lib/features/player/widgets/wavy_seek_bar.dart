@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../../../app/dimens.dart';
 import '../../../shared/widgets/wavy_progress_indicator.dart';
 
 /// A seekable playback position control drawn as a gentle wave.
@@ -14,6 +16,12 @@ import '../../../shared/widgets/wavy_progress_indicator.dart';
 /// elapsed and total time and can seek with the increase/decrease actions,
 /// stepping by [_semanticStepFraction] of the track (never less than
 /// [_minSemanticStep], so a long song doesn't take a hundred taps to cross).
+///
+/// A real [Slider] is also keyboard-operable, which matters wherever there is a
+/// keyboard — a desktop window, but equally an Android tablet with a keyboard
+/// case — so that is replaced too: the bar takes Tab focus, draws a focus ring
+/// while it holds it, and seeks by the same step on the left/right arrow keys
+/// (mirrored under RTL, exactly as [Slider] does).
 class WavySeekBar extends StatelessWidget {
   const WavySeekBar({
     required this.value,
@@ -69,10 +77,59 @@ class WavySeekBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The focus node is owned by [Focus] itself; the [Builder] below reads it
+    // back so the ring and the slider's `focused` flag follow it without this
+    // widget having to hold state of its own.
+    return Focus(
+      canRequestFocus: _enabled,
+      skipTraversal: !_enabled,
+      // The seek semantics below already declare the slider role, its value and
+      // its focus state; a second, bare focus node would only add an empty
+      // wrapper node around it.
+      includeSemantics: false,
+      onKeyEvent: (FocusNode node, KeyEvent event) => _onKeyEvent(
+        context,
+        event,
+      ),
+      child: Builder(
+        builder: (BuildContext context) {
+          final FocusNode node = Focus.of(context);
+          return _seekSemantics(
+            node: node,
+            child: _bar(context, node),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Seeks by one [_semanticStep] on the arrow keys, so the bar is operable
+  /// from the keyboard the way [Slider] is. Left/right are read against the
+  /// text direction, so "right" always means "later" on screen.
+  KeyEventResult _onKeyEvent(BuildContext context, KeyEvent event) {
+    if (!_enabled) return KeyEventResult.ignored;
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final bool rtl = Directionality.of(context) == TextDirection.rtl;
+    final bool forward;
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      forward = !rtl;
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      forward = rtl;
+    } else {
+      return KeyEventResult.ignored;
+    }
+    final double step = forward ? _semanticStep : -_semanticStep;
+    onChangeEnd?.call((value + step).clamp(0.0, max));
+    return KeyEventResult.handled;
+  }
+
+  Widget _bar(BuildContext context, FocusNode node) {
     final theme = Theme.of(context);
     final double fraction = max > 0 ? (value / max).clamp(0.0, 1.0) : 0.0;
 
-    final Widget bar = LayoutBuilder(
+    return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final double width = constraints.maxWidth;
 
@@ -96,23 +153,43 @@ class WavySeekBar extends StatelessWidget {
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTapDown: _enabled
-              ? (details) => onChanged!(positionAt(details.localPosition.dx))
+              ? (details) {
+                  // Clicking the bar hands it the keyboard too, so the arrow
+                  // keys keep seeking from where the pointer left off.
+                  node.requestFocus();
+                  onChanged!(positionAt(details.localPosition.dx));
+                }
               : null,
           onTapUp: _enabled
               ? (details) =>
                   onChangeEnd?.call(positionAt(details.localPosition.dx))
               : null,
           onHorizontalDragStart: _enabled
-              ? (details) => onChanged!(positionAt(details.localPosition.dx))
+              ? (details) {
+                  node.requestFocus();
+                  onChanged!(positionAt(details.localPosition.dx));
+                }
               : null,
           onHorizontalDragUpdate: _enabled
               ? (details) => onChanged!(positionAt(details.localPosition.dx))
               : null,
           onHorizontalDragEnd:
               _enabled ? (details) => onChangeEnd?.call(value) : null,
-          child: SizedBox(
+          child: Container(
             height: _hitHeight,
             width: double.infinity,
+            // A visible focus ring is the keyboard's equivalent of the pointer's
+            // marker: without it, Tab moves through the transport with nothing
+            // on screen saying where it landed.
+            decoration: node.hasFocus
+                ? BoxDecoration(
+                    borderRadius: BorderRadius.circular(AppRadii.sm),
+                    border: Border.all(
+                      color: theme.colorScheme.secondary,
+                      width: 2,
+                    ),
+                  )
+                : null,
             child: WavyProgressIndicator(
               value: fraction,
               activeColor: theme.colorScheme.secondary,
@@ -130,13 +207,11 @@ class WavySeekBar extends StatelessWidget {
         );
       },
     );
-
-    return _seekSemantics(child: bar);
   }
 
   /// Declares the slider role a real [Slider] would have provided, with the
   /// spoken value and — when seeking is possible — the two seek actions.
-  Widget _seekSemantics({required Widget child}) {
+  Widget _seekSemantics({required FocusNode node, required Widget child}) {
     if (!_enabled) {
       return Semantics(
         label: 'Playback position',
@@ -157,6 +232,8 @@ class WavySeekBar extends StatelessWidget {
       slider: true,
       container: true,
       excludeSemantics: true,
+      focusable: true,
+      focused: node.hasFocus,
       label: 'Playback position',
       value: '${semanticFormatter(value)} of ${semanticFormatter(max)}',
       increasedValue: '${semanticFormatter(increased)} of '
@@ -165,6 +242,9 @@ class WavySeekBar extends StatelessWidget {
           '${semanticFormatter(max)}',
       onIncrease: () => onChangeEnd?.call(increased),
       onDecrease: () => onChangeEnd?.call(decreased),
+      // The same "move focus here" action a real [Slider] offers, so assistive
+      // tech can hand the bar the keyboard and then use the arrow keys.
+      onFocus: node.requestFocus,
       child: child,
     );
   }

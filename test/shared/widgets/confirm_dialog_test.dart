@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/shared/widgets/confirm_dialog.dart';
 
@@ -61,5 +62,66 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
     await tester.pumpAndSettle();
     expect(result, isTrue);
+  });
+
+  testWidgets('a destructive dialog opens with the safe action focused',
+      (tester) async {
+    await pumpButton(tester, onResult: (_) {});
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    // Enter has to mean "back out", never "delete": a keyboard user who opens
+    // this dialog and presses it without reading must not lose their files.
+    expect(
+      Focus.of(tester.element(find.text('Cancel'))).hasFocus,
+      isTrue,
+    );
+    expect(
+      Focus.of(tester.element(find.text('Delete'))).hasFocus,
+      isFalse,
+    );
+  });
+
+  testWidgets('Tab moves from Cancel to the action, and back', (tester) async {
+    await pumpButton(tester, onResult: (_) {});
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    // Visual order is Cancel then the action, and focus follows it.
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    expect(Focus.of(tester.element(find.text('Delete'))).hasFocus, isTrue);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shift);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shift);
+    await tester.pump();
+    expect(Focus.of(tester.element(find.text('Cancel'))).hasFocus, isTrue);
+  });
+
+  testWidgets('a non-destructive dialog focuses the action instead',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (BuildContext context) => TextButton(
+              onPressed: () => showConfirmDialog(
+                context,
+                title: 'Sign in again?',
+                message: 'Your session expired.',
+                confirmLabel: 'Sign in',
+                destructive: false,
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    expect(Focus.of(tester.element(find.text('Sign in'))).hasFocus, isTrue);
   });
 }
