@@ -93,30 +93,38 @@ To uninstall: `flatpak --user uninstall io.github.thezupzup.linthra` and
 The committed manifest grants `--socket=pulseaudio` but no filesystem or
 network access, matching #438/#439/#440's scope. To manually verify playback
 of your own local files or a real remote stream, use *temporary*,
-non-committed `flatpak override` grants and remove them afterward — never add
-these to `io.github.thezupzup.linthra.yml`:
+non-committed `flatpak override` grants and revoke exactly what you added
+afterward — never add these to `io.github.thezupzup.linthra.yml`, and never
+use `--reset`, which wipes *every* persistent override you have for this app
+(including any unrelated ones you already had) rather than just the one this
+test added:
 
 ```bash
 # Local file: point a temporary filesystem grant at a directory with a test
-# track, launch, play it from within the app, then revoke the grant.
+# track, launch, play it from within the app, then revoke that exact grant.
 flatpak --user override --filesystem=/path/to/test-music:ro io.github.thezupzup.linthra
 flatpak run io.github.thezupzup.linthra
-flatpak --user override --reset io.github.thezupzup.linthra   # or targeted --nofilesystem
+flatpak --user override --nofilesystem=/path/to/test-music io.github.thezupzup.linthra
 
 # Remote HTTP(S) stream: same idea with network instead.
 flatpak --user override --share=network io.github.thezupzup.linthra
 flatpak run io.github.thezupzup.linthra
-flatpak --user override --reset io.github.thezupzup.linthra
+flatpak --user override --unshare=network io.github.thezupzup.linthra
 ```
 
-Confirm the grant is actually gone afterward:
+Confirm each grant is actually gone afterward — check the specific
+permission you added rather than assuming empty output, since you may
+already have unrelated overrides set for this app:
 
 ```bash
 flatpak override --user --show io.github.thezupzup.linthra
+# Look for the absence of the filesystem/network line you added above;
+# any other overrides already there are not this test's concern.
 ```
 
-should print nothing beyond what `io.github.thezupzup.linthra.yml` itself
-declares. Automated audio smoke coverage is #446's job, not this file's.
+should no longer list the `filesystem`/`network` line the test added, though
+any other override you already had for this app before testing is expected
+to remain. Automated audio smoke coverage is #446's job, not this file's.
 
 ## Regenerating the pinned sources
 
