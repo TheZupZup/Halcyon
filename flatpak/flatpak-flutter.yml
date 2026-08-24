@@ -41,17 +41,23 @@ finish-args:
   # renders, just on software rendering; --device=dri is the minimal grant
   # that lets it use the real GPU.
   - --device=dri
+  # Audio output (#433). LinuxPlaybackController's libmpv now actually opens
+  # an audio device (ao=auto, built with -Dpulse=enabled below) instead of
+  # only being dlopened/registered at startup as it was for #432. On the
+  # current org.gnome.Platform//50 / freedesktop-sdk 25.08 runtime this is
+  # still the correct, minimal grant for audio: PipeWire's default desktop
+  # deployment ships pipewire-pulse, a PulseAudio-protocol-compatible server,
+  # so --socket=pulseaudio is what reaches both a native PulseAudio session
+  # and a PipeWire one — there is no separate "--socket=pipewire" finish-arg.
+  - --socket=pulseaudio
   #
-  # Deliberately withheld for issue #432 (see flatpak/README.md "What's
-  # deferred" for the reasoning):
-  #   --socket=pulseaudio        (audio output: #433 — mpv_initialize() never
-  #                                opens an audio device; LinuxPlaybackController
-  #                                only dlopens/registers libmpv at startup and
-  #                                never creates a player before first frame, so
-  #                                nothing at startup touches audio. Verified:
-  #                                the installed Flatpak reaches the same first
-  #                                frame with this permission absent.)
-  #   --share=network            (provider streaming: #440)
+  # Deliberately withheld for issue #432, still withheld here (see
+  # flatpak/README.md "What's deferred" for the reasoning):
+  #   --share=network            (provider streaming: #440. #433 only proves
+  #                                the bundled runtime *can* play HTTP(S)
+  #                                audio, using a temporary, non-committed
+  #                                `flatpak override` for that validation —
+  #                                see flatpak/README.md.)
   #   --filesystem=host/home     (broad filesystem access: #438/#439)
   #   --talk-name=org.freedesktop.secrets  (Secret Service: #441)
   # Their absence is safe: flutter_secure_storage/Jellyfin-Subsonic-Plex
@@ -59,28 +65,55 @@ finish-args:
   # in" and keeps running (docs/linux-desktop.md "Secure storage").
 
 modules:
-  # === Bare libmpv, built from pinned upstream source =======================
+  # === Self-contained libmpv audio runtime, built from pinned upstream source
   #
   # media_kit/just_audio_media_kit dlopen libmpv.so/.so.1/.so.2 synchronously
   # during Linthra's startup bootstrap — before the first frame — and nothing
   # in the call path catches a failed dlopen (see linux_playback_controller.dart
   # and media_kit's native_library.dart). A GNOME/freedesktop runtime does not
-  # ship libmpv, so without it the app cannot reach a usable first frame at
-  # all, which makes a bare libmpv a genuine #432 requirement rather than
-  # #433 scope creep. Fully-featured audio (codec coverage, hardware
-  # acceleration, tuned config) stays #433's job; this module is deliberately
-  # the smallest buildable libmpv, because mpv's own meson.build hard-requires
+  # ship libmpv, so this module exists in the first place because #432 could
+  # not reach a usable first frame without it. #433 turns that bootstrap
+  # libmpv into a real playback engine: mpv's own meson.build hard-requires
   # libavcodec/libavfilter/libavformat/libavutil/libswresample/libswscale
-  # (ffmpeg), libplacebo and libass unconditionally — there is no smaller mpv.
+  # (ffmpeg), libplacebo and libass unconditionally — there is no smaller mpv
+  # — so this stays one module chain, just configured for real audio output
+  # and remote streaming instead of the #432 bootstrap minimum.
   #
   # ffmpeg is built from source, not via org.freedesktop.Platform.ffmpeg-full:
   # mpv links against libavcodec/libavformat/etc. at compile time via
   # pkg-config, and ffmpeg-full/codecs-extra is a *runtime* extension (mounted
   # into /app only after the build), so it cannot satisfy a build-time
   # pkg-config dependency() check. This is also what the official
-  # io.mpv.Mpv Flathub manifest does. LGPL only (no --enable-gpl/--enable-nonfree)
-  # and no video codecs/hwaccel/network-protocol libs: Linthra is audio-only
-  # and #432 grants no network permission, so none of that is reachable yet.
+  # io.mpv.Mpv Flathub manifest does. LGPL only (no --enable-gpl/--enable-nonfree):
+  # Linthra is audio-only, so no video codec/hwaccel libraries are enabled —
+  # only the container/codec support current main actually needs (see
+  # lib/core/sources/local/audio_file_types.dart's `supportedExtensions`:
+  # mp3, flac, m4a, aac, ogg, opus, wav) plus network protocols for remote
+  # HTTP(S) playback (#433's other requirement). Every one of those seven
+  # formats decodes with an ffmpeg *native* decoder (mp3float/aac/flac/
+  # vorbis/opus/pcm_*/alac) — none needs an external codec library
+  # (libmp3lame/libvorbis/libopus are encoder-side only) — so no additional
+  # codec module was added; the #432 chain already carried full decode
+  # coverage for Linthra's supported formats, it just couldn't reach the
+  # network to fetch remote bytes.
+  #
+  # --enable-network (replacing #432's --disable-network) turns on ffmpeg's
+  # http/https/tcp/tls protocol layer, which mpv's stream_lavf.c uses
+  # directly for any http(s):// URL — the same path both local files and
+  # resolved Jellyfin/Navidrome-Subsonic/Plex stream URLs already go through
+  # (see docs/linux-desktop.md "Audio playback"). --enable-gnutls adds the
+  # TLS backend https:// needs: GnuTLS is LGPLv2.1+, so it keeps this LGPL-only
+  # build's licensing unchanged, and org.gnome.Sdk//50 already ships gnutls.pc
+  # (verified: `pkg-config --modversion gnutls` inside the SDK resolves to
+  # 3.8.13), so no new module/source is declared for it — it links against
+  # the runtime's own gnutls the same way mpv already links the runtime's
+  # alsa/pulse below. Flatpak's sandbox also always exposes the host's CA
+  # trust store at /etc/ssl/certs regardless of filesystem permissions, so
+  # certificate verification needs no extra grant either. OpenSSL is present
+  # in the same runtime too (verified) but gnutls was chosen as the
+  # traditionally-LGPL-compatible, commonly-used choice for an LGPL ffmpeg
+  # build and to sidestep OpenSSL's historical GPL-linking caveats entirely,
+  # even though modern OpenSSL (3.x, Apache-2.0) would also be acceptable.
   - name: ffmpeg
     cleanup:
       - /include
@@ -91,7 +124,8 @@ modules:
       - --enable-shared
       - --disable-doc
       - --disable-programs
-      - --disable-network
+      - --enable-network
+      - --enable-gnutls
     sources:
       - type: archive
         url: https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n9.0.1.tar.gz
@@ -168,8 +202,32 @@ modules:
       - -Dvapoursynth=disabled
       - -Dcplugins=disabled
       - -Drubberband=disabled
+      # Both audio outputs were already declared in #432 in anticipation of
+      # this issue. They now do real work: mpv's ao=auto picks pulse, which
+      # is also the protocol pipewire-pulse (the default PipeWire
+      # compatibility server on modern desktops) speaks — the same target
+      # --socket=pulseaudio opens up above. alsa=enabled stays as the
+      # non-PipeWire/non-Pulse fallback (org.gnome.Sdk//50 ships both
+      # alsa.pc and libpulse.pc — verified). No new mpv build option is
+      # needed for network streaming: mpv has no separate "network" toggle
+      # of its own — it opens http(s):// URLs straight through ffmpeg's
+      # protocol layer, which is where --enable-network/--enable-gnutls
+      # above actually live.
       - -Dalsa=enabled
       - -Dpulse=enabled
+      # mpv's own `pipewire` audio-output option defaults to meson's `auto`
+      # (unlike every other feature here, which #432 already pinned
+      # explicitly), and org.gnome.Sdk//50 happens to carry libpipewire's
+      # dev files — so leaving it on `auto` would silently build a *second*,
+      # undeclared audio backend the committed finish-args don't grant a
+      # socket for (a native PipeWire client needs its own IPC socket;
+      # --socket=pulseaudio only exposes the PulseAudio-protocol/
+      # pipewire-pulse endpoint pulse=enabled above already targets — see
+      # flatpak-flutter.yml's finish-args comment). Disabling it explicitly
+      # keeps this module's actual audio-output surface matching exactly
+      # what's declared and granted, rather than depending on what a future
+      # SDK bump happens to ship.
+      - -Dpipewire=disabled
     sources:
       - type: archive
         url: https://github.com/mpv-player/mpv/archive/refs/tags/v0.41.0.tar.gz

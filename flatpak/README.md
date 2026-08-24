@@ -1,11 +1,34 @@
-# Flatpak (local build — issue #432)
+# Flatpak (local build — issues #432, #433)
 
 This is the packaging **foundation**: enough to build Linthra's native Flutter
 Linux bundle inside `flatpak-builder`, install it, and launch the real
-`io.github.thezupzup.linthra` app to a usable first frame. It is
-deliberately not the Flathub submission, not a desktop-integrated package, and
-not a full audio-quality Flatpak — see "What's deferred" below and the
-comments in `io.github.thezupzup.linthra.yml` itself.
+`io.github.thezupzup.linthra` app to real, audible local and remote playback
+through a fully self-contained audio runtime. It is deliberately not the
+Flathub submission and not a desktop-integrated package — see "What's
+deferred" below and the comments in `io.github.thezupzup.linthra.yml` itself.
+
+## Audio runtime
+
+The Flatpak bundles its own `libmpv`, built from source together with its
+`ffmpeg`/`libplacebo`/`libass` dependencies (see the `modules:` comments in
+`flatpak-flutter.yml`) and installed under `/app/lib`. **Host `mpv-libs` /
+`libmpv` is never used and is not required to install or run the Flatpak** —
+`media_kit`/`just_audio_media_kit` dlopen the bundled copy, which resolves
+before anything under `/usr/lib*` or `/lib*` because the Flatpak sandbox
+exposes no host library path. Playback uses `--socket=pulseaudio` for audio
+output, which reaches both a native PulseAudio session and PipeWire's
+`pipewire-pulse` compatibility server (there is no separate PipeWire
+finish-arg). The bundled ffmpeg is also built with `--enable-network
+--enable-gnutls`, so the same libmpv decodes local files and plays HTTP(S)
+audio streams (Jellyfin, Navidrome/Subsonic, Plex) without any host codec or
+TLS library — see the `ffmpeg` module comments for exactly which formats that
+covers and why no additional codec library was needed.
+
+**Native, non-Flatpak Linthra is unaffected**: `flutter build linux` outside
+this packaging still links nothing at build time and still expects the
+system `mpv-libs`/`libmpv` runtime documented in
+[docs/linux-desktop.md](../docs/linux-desktop.md#required-packages). The two
+are independent audio runtimes by design; only the Flatpak is self-contained.
 
 ## Files here
 
@@ -65,6 +88,36 @@ before the sandbox is entered, exactly like any other Flatpak module.
 To uninstall: `flatpak --user uninstall io.github.thezupzup.linthra` and
 `flatpak --user remote-delete linthra-dev`.
 
+## Testing audio locally
+
+The committed manifest grants `--socket=pulseaudio` but no filesystem or
+network access, matching #438/#439/#440's scope. To manually verify playback
+of your own local files or a real remote stream, use *temporary*,
+non-committed `flatpak override` grants and remove them afterward — never add
+these to `io.github.thezupzup.linthra.yml`:
+
+```bash
+# Local file: point a temporary filesystem grant at a directory with a test
+# track, launch, play it from within the app, then revoke the grant.
+flatpak --user override --filesystem=/path/to/test-music:ro io.github.thezupzup.linthra
+flatpak run io.github.thezupzup.linthra
+flatpak --user override --reset io.github.thezupzup.linthra   # or targeted --nofilesystem
+
+# Remote HTTP(S) stream: same idea with network instead.
+flatpak --user override --share=network io.github.thezupzup.linthra
+flatpak run io.github.thezupzup.linthra
+flatpak --user override --reset io.github.thezupzup.linthra
+```
+
+Confirm the grant is actually gone afterward:
+
+```bash
+flatpak override --user --show io.github.thezupzup.linthra
+```
+
+should print nothing beyond what `io.github.thezupzup.linthra.yml` itself
+declares. Automated audio smoke coverage is #446's job, not this file's.
+
 ## Regenerating the pinned sources
 
 Re-run this whenever `.flutter-version` or `pubspec.lock` changes:
@@ -88,21 +141,23 @@ Not in this manifest — each has its own issue:
 * **Desktop file** (#434), **AppStream metainfo** (#435), **scalable icon
   packaging** (#436) — `rename-desktop-file`/`rename-icon`/`--filesystem`
   finish-args and the associated install steps are absent on purpose.
-* **Provider network access** (#440), **filesystem/portal permissions**
-  (#438/#439), **Secret Service** (#441) — no `--share=network`,
-  `--filesystem=host|home`, or `--talk-name=org.freedesktop.secrets`.
+* **Provider network access** (#440) — no permanent `--share=network`.
+  #433 proved the bundled ffmpeg/libmpv can decode HTTP(S) audio using only a
+  *temporary*, non-committed `flatpak override --user --share=network`
+  applied and removed for that validation; permanently granting Linthra
+  network access for real provider use (Jellyfin/Navidrome-Subsonic/Plex) is
+  #440's job, not this manifest's.
+* **Filesystem/portal permissions** (#438/#439), **Secret Service** (#441) —
+  no `--filesystem=host|home` or `--talk-name=org.freedesktop.secrets`.
   Jellyfin/Subsonic/Plex session restore and secure-storage reads already
   degrade to "not signed in" without them (`docs/linux-desktop.md` §"Secure
-  storage").
-* **Full audio runtime** (#433) — the `ffmpeg`/`libplacebo`/`libass`/`mpv`
-  modules here build the *smallest* libmpv that lets Linthra's startup
-  bootstrap (which dlopens libmpv before the first frame — see
-  `lib/core/services/linux_playback_controller.dart`) succeed instead of
-  crashing. `--socket=pulseaudio` is likewise absent: startup only registers
-  the backend and never opens an audio device before first frame (verified —
-  the installed Flatpak reaches the same first frame without it). Codec
-  breadth, hardware acceleration, actual audio output, and tuned mpv options
-  are #433's job, not this one's.
-* **CI** (#444), **automated launch/audio smoke tests** (#445/#446), **Fedora
-  Atomic development documentation** (#448) — out of scope here; this file is
-  the minimal "how do I build this locally" note #432 asked for.
+  storage"). #433's local-audio validation likewise used a temporary,
+  non-committed filesystem override rather than a committed grant.
+* **Video codecs, hardware acceleration/hwaccel, subtitle-adjacent tuning
+  beyond what libmpv/libass require to build** — Linthra is audio-only; the
+  ffmpeg/mpv build stays scoped to the container/codec/protocol support
+  Linthra's supported formats and HTTP(S) streaming actually need.
+* **CI** (#444), **automated launch/audio smoke tests** (#445/#446), **local-
+  library sandbox test** (#447), **Fedora Atomic development documentation**
+  (#448) — out of scope here; this file is the minimal "how do I build and
+  validate this locally" note #432/#433 asked for.
