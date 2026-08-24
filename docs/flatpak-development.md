@@ -226,10 +226,14 @@ Ordered least to most destructive. Nothing here needs `sudo`.
 | `flatpak --user uninstall --delete-data io.github.thezupzup.linthra` | the app **and** `~/.var/app/io.github.thezupzup.linthra/` | **Destructive.** Wipes the Flatpak install's settings, library database and cache. Your native build's data under `~/.local/share`/`~/.config` is untouched |
 | `rm -rf .tool/flatpak-flutter .tool/flatpak-flutter-venv` | the source-regeneration tool checkout | Safe; refetched by `regenerate_flatpak_sources.sh` |
 
-Never use `flatpak override --reset` to tidy up: it wipes *every* persistent
-override you have for the app, including unrelated ones you set yourself.
-Revoke the specific grant you added instead — see
-[`flatpak/README.md`](../flatpak/README.md#testing-audio-locally).
+The audio/network testing in
+[`flatpak/README.md`](../flatpak/README.md#testing-audio-locally) leaves
+nothing to clean up: those permissions are passed to `flatpak run` and last
+only for that invocation. That is why it does not use `flatpak override` —
+override grants persist, `--nofilesystem=…`/`--unshare=network` add a
+*negative* override rather than deleting the grant, and `--reset` wipes
+*every* persistent override you have for the app, including unrelated ones you
+set yourself.
 
 ## Debugging
 
@@ -275,7 +279,8 @@ flatpak info --show-permissions io.github.thezupzup.linthra
 flatpak info io.github.thezupzup.linthra
 flatpak info -m io.github.thezupzup.linthra
 
-# Local overrides only — what *you* have granted on top, not what's packaged.
+# Persistent local overrides — what *you* have granted on top, not what's
+# packaged. Empty if you have stuck to one-shot `flatpak run` permissions.
 flatpak override --user --show io.github.thezupzup.linthra
 ```
 
@@ -304,11 +309,19 @@ So these are **expected**, not bugs, and not worth debugging:
   [#436](https://github.com/TheZupZup/Linthra/issues/436)). Launch it with
   `flatpak run`.
 
-To exercise those paths anyway, use **temporary** `flatpak override` grants and
-revoke exactly what you added — the recipe, including how to verify the grant
-is gone, is in
+To exercise those paths anyway, pass the permission to `flatpak run` for a
+single launch — it applies to that invocation only, so there is nothing to
+revoke and nothing left behind:
+
+```bash
+flatpak run --filesystem=/path/to/test-music:ro io.github.thezupzup.linthra
+flatpak run --share=network io.github.thezupzup.linthra
+```
+
+Use that rather than `flatpak override`, whose grants persist and cannot be
+cleanly undone — see
 [`flatpak/README.md`](../flatpak/README.md#testing-audio-locally). Never commit
-them to the manifest.
+either permission to the manifest.
 
 ## Smoke testing
 
@@ -337,9 +350,11 @@ Until #445/#446 land, the manual pass for a packaging change is:
 2. `flatpak run io.github.thezupzup.linthra` → the window opens and renders.
    A missing bundled library shows up here, as a startup failure before the
    first frame.
-3. Play audio through a temporary override, per
-   [`flatpak/README.md`](../flatpak/README.md#testing-audio-locally), then
-   revoke the grant and confirm it is gone.
+3. Play audio with a one-shot permission —
+   `flatpak run --filesystem=/path/to/test-music:ro io.github.thezupzup.linthra`,
+   or `--share=network` for a stream, per
+   [`flatpak/README.md`](../flatpak/README.md#testing-audio-locally). It lasts
+   for that launch only.
 4. `flatpak info --show-permissions io.github.thezupzup.linthra` → still only
    the five finish-args listed above, i.e. you did not widen the sandbox by
    accident.

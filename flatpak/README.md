@@ -72,39 +72,38 @@ before the sandbox is entered, exactly like any other Flatpak module.
 
 The committed manifest grants `--socket=pulseaudio` but no filesystem or
 network access, matching #438/#439/#440's scope. To manually verify playback
-of your own local files or a real remote stream, use *temporary*,
-non-committed `flatpak override` grants and revoke exactly what you added
-afterward — never add these to `io.github.thezupzup.linthra.yml`, and never
-use `--reset`, which wipes *every* persistent override you have for this app
-(including any unrelated ones you already had) rather than just the one this
-test added:
+of your own local files or a real remote stream, pass the extra permission to
+`flatpak run` itself. Options given there apply to that one invocation only,
+so there is nothing to revoke afterwards and nothing is left behind:
 
 ```bash
-# Local file: point a temporary filesystem grant at a directory with a test
-# track, launch, play it from within the app, then revoke that exact grant.
-flatpak --user override --filesystem=/path/to/test-music:ro io.github.thezupzup.linthra
-flatpak run io.github.thezupzup.linthra
-flatpak --user override --nofilesystem=/path/to/test-music io.github.thezupzup.linthra
+# Local file: read-only access to a directory with a test track, for this
+# launch only. Play it from within the app.
+flatpak run --filesystem=/path/to/test-music:ro io.github.thezupzup.linthra
 
 # Remote HTTP(S) stream: same idea with network instead.
-flatpak --user override --share=network io.github.thezupzup.linthra
-flatpak run io.github.thezupzup.linthra
-flatpak --user override --unshare=network io.github.thezupzup.linthra
+flatpak run --share=network io.github.thezupzup.linthra
 ```
 
-Confirm each grant is actually gone afterward — check the specific
-permission you added rather than assuming empty output, since you may
-already have unrelated overrides set for this app:
+Do **not** use `flatpak override` for this. Its grants are persistent, and the
+apparent undo is not one: `--nofilesystem=…`/`--unshare=network` record a
+*negative* override on top of the grant rather than deleting it, so the app
+keeps leftover permission state either way. `--reset` is worse — it wipes
+*every* persistent override you have for this app, including unrelated ones
+you set yourself. A one-shot `flatpak run` permission avoids the whole problem.
+
+Never add these permissions to `io.github.thezupzup.linthra.yml` either: a
+committed grant is #440's (network) and #438/#439's (filesystem) decision, not
+a testing convenience. The package itself is unchanged by the runs above, and
+stays that way:
 
 ```bash
-flatpak override --user --show io.github.thezupzup.linthra
-# Look for the absence of the filesystem/network line you added above;
-# any other overrides already there are not this test's concern.
+flatpak info --show-permissions io.github.thezupzup.linthra
+# Still only the manifest's finish-args — a permission passed to `flatpak run`
+# never appears here.
 ```
 
-should no longer list the `filesystem`/`network` line the test added, though
-any other override you already had for this app before testing is expected
-to remain. Automated audio smoke coverage is #446's job, not this file's.
+Automated audio smoke coverage is #446's job, not this file's.
 
 ## Regenerating the pinned sources
 
@@ -131,16 +130,16 @@ Not in this manifest — each has its own issue:
   finish-args and the associated install steps are absent on purpose.
 * **Provider network access** (#440) — no permanent `--share=network`.
   #433 proved the bundled ffmpeg/libmpv can decode HTTP(S) audio using only a
-  *temporary*, non-committed `flatpak override --user --share=network`
-  applied and removed for that validation; permanently granting Linthra
-  network access for real provider use (Jellyfin/Navidrome-Subsonic/Plex) is
-  #440's job, not this manifest's.
+  temporary, non-committed grant for that validation (see
+  [Testing audio locally](#testing-audio-locally)); permanently granting
+  Linthra network access for real provider use
+  (Jellyfin/Navidrome-Subsonic/Plex) is #440's job, not this manifest's.
 * **Filesystem/portal permissions** (#438/#439), **Secret Service** (#441) —
   no `--filesystem=host|home` or `--talk-name=org.freedesktop.secrets`.
   Jellyfin/Subsonic/Plex session restore and secure-storage reads already
   degrade to "not signed in" without them (`docs/linux-desktop.md` §"Secure
   storage"). #433's local-audio validation likewise used a temporary,
-  non-committed filesystem override rather than a committed grant.
+  non-committed filesystem grant rather than a committed one.
 * **Video codecs, hardware acceleration/hwaccel, subtitle-adjacent tuning
   beyond what libmpv/libass require to build** — Linthra is audio-only; the
   ffmpeg/mpv build stays scoped to the container/codec/protocol support
