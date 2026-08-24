@@ -1,0 +1,39 @@
+# Linthra's installed desktop entry (#434).
+#
+# The filename is the application id — io.github.thezupzup.linthra — because
+# that is what every desktop-integration lookup keys off: flatpak-builder only
+# exports a desktop file whose name starts with the app id, AppStream (#435)
+# will point its `<launchable type="desktop-id">` at this exact filename, and
+# the icon (#436) is installed as `<app-id>.png/.svg`, which is what makes
+# `Icon=` below resolve.
+# The same id is already `APPLICATION_ID` in linux/CMakeLists.txt, Android's
+# `applicationId`, and the Flatpak `app-id`; scripts/check_linux_runner.py
+# holds all of those together.
+#
+# Nothing here may name a build machine: `Exec=` is a bare command, resolved
+# from PATH (`/app/bin/linthra` inside the Flatpak, wherever a native package
+# puts it otherwise), and `Icon=` is an icon-theme name rather than a path.
+# check_linux_runner.py's absolute-path scan covers this file too.
+#
+# The window this launches identifies itself with the same id — the runner
+# calls `g_set_prgname(APPLICATION_ID)` and registers its GtkApplication under
+# it (linux/runner/my_application.cc) — so the running window associates with
+# this entry on both Wayland and X11 without a `StartupWMClass=` override.
+#
+# Validate after editing:  desktop-file-validate linux/packaging/io.github.thezupzup.linthra.desktop
+[Desktop Entry]
+Type=Application
+Name=Linthra
+GenericName=Music Player
+Comment=Play your own music, from this device or your own server
+Exec=linthra
+Icon=io.github.thezupzup.linthra
+Terminal=false
+# AudioVideo is the required main category; Audio and Player narrow it to an
+# audio player, and Music is the registered additional category launchers use
+# to group music apps. No %U/%F field code and no MimeType: Linthra does not
+# take a file or URI argument today, and claiming one would advertise an
+# "Open with Linthra" handler that drops whatever it is given.
+Categories=AudioVideo;Audio;Player;Music;
+Keywords=music;audio;player;library;playlist;jellyfin;subsonic;navidrome;plex;
+StartupNotify=true

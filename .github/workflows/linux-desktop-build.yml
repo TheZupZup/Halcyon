@@ -141,6 +141,8 @@ jobs:
       #                                              also supplies runtime libmpv
       #   libasound2-plugins                        — ALSA null PCM for headless
       #                                              native audio lifecycle smoke
+      #   desktop-file-utils                        — desktop-file-validate, for
+      #                                              the installed desktop entry
       - name: Install Linux build dependencies
         run: |
           set -euo pipefail
@@ -156,6 +158,7 @@ jobs:
             libsecret-1-dev \
             libmpv-dev \
             libasound2-plugins \
+            desktop-file-utils \
             xauth \
             xvfb
 
@@ -192,6 +195,21 @@ jobs:
 
       - name: Test the Linux runner tooling
         run: python3 test/tooling/check_linux_runner_test.py
+
+      # Syntax half of the desktop entry check (#434); the identity half — the
+      # filename, Name, Exec, Icon and the Flatpak install step — is in
+      # check_linux_runner.py above. desktop-file-validate exits 0 for
+      # everything it calls a warning, hint, or "error (will be fatal in the
+      # future)", so its exit status alone would let a deprecated key or a
+      # miscategorised entry through; any output at all is the failure signal.
+      - name: Validate the desktop entry
+        run: |
+          set -euo pipefail
+          report="$(desktop-file-validate linux/packaging/io.github.thezupzup.linthra.desktop)"
+          if [ -n "$report" ]; then
+            printf '%s\n' "$report" >&2
+            exit 1
+          fi
 
       # A normal Flutter widget test cannot load the Linux plugin bundle, so
       # this target runs in the real GTK runner and opens a silent local WAV

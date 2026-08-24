@@ -121,6 +121,17 @@ run_audio_smoke() {
   fi
 }
 
+# desktop-file-validate reports warnings, hints and "error (will be fatal in
+# the future)" on stdout while still exiting 0, so its exit status alone would
+# pass a deprecated key or a miscategorised entry. Any output is a failure —
+# same rule as the CI step in .github/workflows/linux-desktop-build.yml.
+validate_desktop_entry() {
+  local entry="$REPO_ROOT/linux/packaging/io.github.thezupzup.linthra.desktop"
+  local report
+  report="$(desktop-file-validate "$entry")" || return 1
+  [ -z "$report" ] || { printf '%s\n' "$report" >&2; return 1; }
+}
+
 FAILED=()
 
 run_step() {
@@ -150,6 +161,17 @@ main() {
   # and can still build without a network. Cheap, so it runs before the build.
   run_step "Linux runner configuration" python3 scripts/check_linux_runner.py
   run_step "Linux runner tooling tests" python3 test/tooling/check_linux_runner_test.py
+
+  # The desktop entry's syntax (#434). check_linux_runner.py above already
+  # covers its agreement with the app; this is the freedesktop tooling's own
+  # verdict on the file. Optional locally — desktop-file-utils is not one of
+  # the build dependencies — but CI always has it.
+  if command -v desktop-file-validate >/dev/null 2>&1; then
+    run_step "Desktop entry validation" validate_desktop_entry
+  else
+    warn "desktop-file-validate not found (package desktop-file-utils);"
+    warn "skipping the desktop entry syntax check. CI still runs it."
+  fi
 
   # Read line by line: a dependency name can contain spaces ("gtk+-3.0
   # development headers"), so word splitting would mangle the report.

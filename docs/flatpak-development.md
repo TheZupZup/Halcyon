@@ -19,9 +19,10 @@ Three docs, three jobs:
 
 > Flatpak packaging is in progress ([issue #376](https://github.com/TheZupZup/Linthra/issues/376)).
 > The committed manifest builds, installs and launches the real app with
-> working audio, but it is not the Flathub submission: there is no desktop
-> file, icon or AppStream metadata yet, and no network, filesystem or
-> Secret Service access. See [What the sandbox allows today](#what-the-sandbox-allows-today).
+> working audio, and installs a desktop entry so Linthra appears in the
+> application menu, but it is not the Flathub submission: there is no icon or
+> AppStream metadata yet, and no network, filesystem or Secret Service access.
+> See [What the sandbox allows today](#what-the-sandbox-allows-today).
 
 All commands are relative to the repository. Run them from the repository root
 unless a block starts with `cd flatpak`.
@@ -303,11 +304,13 @@ So these are **expected**, not bugs, and not worth debugging:
 * Saved sessions come back as "not signed in" — no Secret Service access yet
   ([#441](https://github.com/TheZupZup/Linthra/issues/441)). Linthra treats
   that as signed-out and keeps running; it never falls back to plaintext.
-* There is no desktop entry or icon in the application menu
-  ([#434](https://github.com/TheZupZup/Linthra/issues/434) /
-  [#435](https://github.com/TheZupZup/Linthra/issues/435) /
-  [#436](https://github.com/TheZupZup/Linthra/issues/436)). Launch it with
-  `flatpak run`.
+* Linthra is in the application menu now
+  ([#434](https://github.com/TheZupZup/Linthra/issues/434)) — but with the
+  desktop's fallback icon, because the icon files are still to come
+  ([#436](https://github.com/TheZupZup/Linthra/issues/436)), and with no
+  software-centre listing
+  ([#435](https://github.com/TheZupZup/Linthra/issues/435)). `flatpak run`
+  still works and is what these debugging commands assume.
 
 To exercise those paths anyway, pass the permission to `flatpak run` for a
 single launch — it applies to that invocation only, so there is nothing to

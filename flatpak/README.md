@@ -1,11 +1,13 @@
-# Flatpak (local build — issues #432, #433)
+# Flatpak (local build — issues #432, #433, #434)
 
 This is the packaging **foundation**: enough to build Linthra's native Flutter
-Linux bundle inside `flatpak-builder`, install it, and launch the real
-`io.github.thezupzup.linthra` app to real, audible local and remote playback
-through a fully self-contained audio runtime. It is deliberately not the
-Flathub submission and not a desktop-integrated package — see "What's
-deferred" below and the comments in `io.github.thezupzup.linthra.yml` itself.
+Linux bundle inside `flatpak-builder`, install it, launch the real
+`io.github.thezupzup.linthra` app from the application menu, and get real,
+audible local and remote playback through a fully self-contained audio
+runtime. It is deliberately not the Flathub submission — the icon and
+AppStream metadata that go with the desktop entry are still open, and so are
+the sandbox permissions; see "What's deferred" below and the comments in
+`io.github.thezupzup.linthra.yml` itself.
 
 ## Audio runtime
 
@@ -30,11 +32,49 @@ system `mpv-libs`/`libmpv` runtime documented in
 [docs/linux-desktop.md](../docs/linux-desktop.md#required-packages). The two
 are independent audio runtimes by design; only the Flatpak is self-contained.
 
+## Desktop entry
+
+`../linux/packaging/io.github.thezupzup.linthra.desktop` is what puts Linthra
+in the application menu. The `linthra` module installs it verbatim:
+
+```
+install -Dm644 linux/packaging/io.github.thezupzup.linthra.desktop \
+  /app/share/applications/io.github.thezupzup.linthra.desktop
+```
+
+`/app/share/applications` is the only directory flatpak-builder exports from at
+`finish` time, and it only exports files whose name starts with the app id —
+this one *is* the app id, so there is no `rename-desktop-file` in the manifest.
+Export
+rewrites `Exec=linthra` into the host-side `flatpak run …` form, so the entry
+carries the bare command and no absolute path; the same file works unchanged
+for a native package that puts `linthra` on `PATH`.
+
+Two things keep it honest, both offline and both already in CI
+(`.github/workflows/linux-desktop-build.yml`):
+
+```bash
+desktop-file-validate linux/packaging/io.github.thezupzup.linthra.desktop
+python3 scripts/check_linux_runner.py
+```
+
+The first is syntax — note that `desktop-file-validate` exits 0 even for
+warnings and "will be fatal in the future" errors, so CI and
+`scripts/verify_linux.sh` treat *any* output from it as a failure rather than
+trusting its exit status. The second is identity: `scripts/check_linux_runner.py`
+checks the entry's filename, `Name`, `Exec`, `Icon` and `Categories` against
+the same sources of truth the Linux runner is held to (`AppInfo.name`,
+`pubspec.yaml`'s `name`, Android's `applicationId`), and checks that **both**
+this directory's manifests — the hand-authored template and the generated
+manifest — actually install it, so a regeneration that was never run shows up
+as a failure rather than as a Flatpak with no menu entry.
+
 ## Files here
 
 | File | What it is |
 | --- | --- |
 | `flatpak-flutter.yml` | Hand-authored input. Never built directly. |
+| `../linux/packaging/io.github.thezupzup.linthra.desktop` | Hand-authored, and not Flatpak-only: the installed desktop entry (#434), which this manifest copies into `/app/share/applications/` for flatpak-builder to export. It lives beside the rest of the Linux packaging inputs rather than here so a future native package installs the same file. |
 | `io.github.thezupzup.linthra.yml` | **Generated.** The real manifest `flatpak-builder` consumes. Do not hand-edit — regenerate instead (below). |
 | `generated/sources/pubspec.json` | **Generated.** One pinned, hashed source per package in the committed `pubspec.lock` (plus Flutter's own internal `flutter_tools` package), so `flutter pub get --offline` inside the sandbox never touches pub.dev. Also carries two known per-plugin fixes from flatpak-flutter's own `foreign-deps` database: `sqlite3_flutter_libs` and `media_kit_libs_linux`'s own CMake `FetchContent` downloads (sqlite amalgamation, mimalloc) are pre-placed at the exact cache paths CMake checks before downloading, so they're satisfied without a network hit even though `linux/CMakeLists.txt` already disables/redirects both independently. |
 | `generated/modules/flutter-sdk-3.44.7.json` | **Generated.** Pins the Dart SDK and Linux engine artifacts for the exact `.flutter-version` tag by their real `storage.googleapis.com` URLs and sha256, plus a small patch so Flutter's own internal tool bootstrap runs `pub upgrade --offline`. |
@@ -125,9 +165,13 @@ and the current `pubspec.lock`. Diff the result before committing.
 
 Not in this manifest — each has its own issue:
 
-* **Desktop file** (#434), **AppStream metainfo** (#435), **scalable icon
-  packaging** (#436) — `rename-desktop-file`/`rename-icon`/`--filesystem`
-  finish-args and the associated install steps are absent on purpose.
+* **AppStream metainfo** (#435), **scalable icon packaging** (#436) — no
+  `<app-id>.metainfo.xml` and no icon is installed, so the desktop entry's
+  `Icon=io.github.thezupzup.linthra` currently resolves to nothing and the
+  launcher falls back to a generic icon. The entry deliberately names the icon
+  anyway: #436 installs the files under exactly that name and nothing here has
+  to change when it lands. `rename-desktop-file`/`rename-icon` are not used and
+  are not needed — everything is installed under the app id already.
 * **Provider network access** (#440) — no permanent `--share=network`.
   #433 proved the bundled ffmpeg/libmpv can decode HTTP(S) audio using only a
   temporary, non-committed grant for that validation (see
