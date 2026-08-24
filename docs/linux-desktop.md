@@ -31,7 +31,12 @@ what works today, and what deliberately does not yet.
 
 ## Required packages
 
-The Flutter Linux toolchain plus the native libraries Linthra's plugins need.
+The Flutter Linux toolchain plus the native libraries Linthra's plugins need,
+for the **native** build described on this page.
+
+> Building the **Flatpak** instead? None of these packages are needed for it —
+> it brings its own toolchain and bundles its own libmpv. See
+> [flatpak-development.md](./flatpak-development.md).
 
 ### Fedora / Fedora Kinoite
 
@@ -186,7 +191,9 @@ that recorded patch.
 
 libmpv provides broad codec/container support and PulseAudio/PipeWire output.
 It is a native runtime dependency, not a binary downloaded when Linthra starts.
-The future Flatpak manifest must build or include libmpv as a declared module.
+The Flatpak manifest therefore builds libmpv as a declared module and bundles
+it, so the packaged app needs no host libmpv at all
+([flatpak-development.md](./flatpak-development.md)).
 `media_kit_libs_linux` normally offers an optional build-time mimalloc download;
 Linthra explicitly disables it in `linux/CMakeLists.txt`, so this backend adds no
 undeclared network access to an isolated `flatpak-builder` build.
@@ -342,9 +349,15 @@ for exactly how the CI job builds and attaches it.
 ## Where this is going
 
 The Linux distribution target is **Flathub**. A locally installable Flatpak on
-Fedora Kinoite is a validation step on the way, not the destination. Flatpak
-packaging — manifest, desktop file, icons, AppStream metadata, sandbox
-permissions — is later work in #376 and is not part of this milestone.
+Fedora Kinoite is a validation step on the way, not the destination.
+
+That packaging is now underway in #376 and lives outside this page: the
+committed manifest is in [`flatpak/`](../flatpak/README.md) and the contributor
+workflow for building, installing and debugging it on Fedora Atomic is
+[flatpak-development.md](./flatpak-development.md). It builds, installs and
+launches with working audio; desktop file, icons, AppStream metadata and the
+network/filesystem/Secret Service permissions are still open sub-issues. None
+of it changes the native build on this page.
 
 Decisions already taken with that destination in mind:
 

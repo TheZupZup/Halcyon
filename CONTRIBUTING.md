@@ -58,6 +58,9 @@ For the other areas:
   what is still unsupported there — is in
   [docs/linux-desktop.md](./docs/linux-desktop.md); `./scripts/verify_linux.sh`
   is the desktop twin of `verify_android.sh`.
+- `flatpak/` packages that Linux build as a Flatpak. Building, installing and
+  debugging it locally — on Fedora Atomic (Kinoite/Silverblue) or anywhere
+  else — is [docs/flatpak-development.md](./docs/flatpak-development.md).
 - `tools/large_library/` contains the Python and SQLite large-library tooling.
 
 ## Before you start

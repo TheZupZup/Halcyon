@@ -42,51 +42,31 @@ are independent audio runtimes by design; only the Flatpak is self-contained.
 
 ## Building, installing, running
 
-### Fedora Atomic (Kinoite / Silverblue) — the normal case
-
-`flatpak` itself is already part of the base image. Install `flatpak-builder`
-as a Flatpak app rather than layering it — no `rpm-ostree install`, no reboot:
+The full contributor workflow — host tools, build, install, run, rebuild,
+clean/uninstall and debugging, written for Fedora Atomic (Kinoite/Silverblue)
+and usable anywhere else — is
+[docs/flatpak-development.md](../docs/flatpak-development.md). The short
+version, run from this directory:
 
 ```bash
-flatpak install --user flathub org.flatpak.Builder \
-  org.gnome.Platform//50 org.gnome.Sdk//50 \
-  org.freedesktop.Sdk.Extension.llvm20//25.08
-
-cd flatpak
 flatpak run org.flatpak.Builder --user --force-clean --repo=repo \
   flatpak-builder-build io.github.thezupzup.linthra.yml
 
-flatpak --user remote-add --if-not-exists --no-gpg-verify \
-  linthra-dev repo
+flatpak --user remote-add --if-not-exists --no-gpg-verify linthra-dev repo
 flatpak --user install -y linthra-dev io.github.thezupzup.linthra
 
 flatpak run io.github.thezupzup.linthra
 ```
 
-(A shell alias, e.g. `alias flatpak-builder='flatpak run org.flatpak.Builder'`
-in `~/.bashrc`, lets you type the commands below as-is instead.)
-
-### Fedora Workstation / other distros with a native `flatpak-builder`
-
-Install both from your package manager (Fedora: `sudo dnf install flatpak
-flatpak-builder`) and drop the `flatpak run org.flatpak.Builder` prefix —
-everywhere above, run plain `flatpak-builder ...` instead.
-
-### Running from inside another sandbox (e.g. this repo opened in the VS Code Flatpak)
-
-If your own terminal is itself inside a Flatpak sandbox, neither `flatpak`
-nor `flatpak-builder` is reachable directly — prefix every command above
-(from either section) with `flatpak-spawn --host`, e.g.
-`flatpak-spawn --host flatpak run org.flatpak.Builder --user ...`. This is
-an extra note for that specific situation, not the normal path.
+On a distribution with a native `flatpak-builder`, drop the
+`flatpak run org.flatpak.Builder` prefix and run plain `flatpak-builder ...`.
+To uninstall: `flatpak --user uninstall io.github.thezupzup.linthra` and
+`flatpak --user remote-delete linthra-dev`.
 
 Nothing above needs network access during the actual sandboxed build —
 `flatpak-builder`'s normal declared-source fetch (`generated/sources/pubspec.json`,
 the Flutter SDK module, the ffmpeg/libplacebo/libass/mpv archives) happens
 before the sandbox is entered, exactly like any other Flatpak module.
-
-To uninstall: `flatpak --user uninstall io.github.thezupzup.linthra` and
-`flatpak --user remote-delete linthra-dev`.
 
 ## Testing audio locally
 
@@ -166,6 +146,7 @@ Not in this manifest — each has its own issue:
   ffmpeg/mpv build stays scoped to the container/codec/protocol support
   Linthra's supported formats and HTTP(S) streaming actually need.
 * **CI** (#444), **automated launch/audio smoke tests** (#445/#446), **local-
-  library sandbox test** (#447), **Fedora Atomic development documentation**
-  (#448) — out of scope here; this file is the minimal "how do I build and
-  validate this locally" note #432/#433 asked for.
+  library sandbox test** (#447) — out of scope here; this file is the minimal
+  "how do I build and validate this locally" note #432/#433 asked for, and
+  [docs/flatpak-development.md](../docs/flatpak-development.md) is the
+  contributor workflow around it.
