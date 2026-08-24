@@ -14,7 +14,9 @@ keeps these tests from depending on Linthra's current version or app id.
 The desktop entry (#434) is tested the same way, and for the same reason: a
 `.desktop` file that names the wrong binary, the wrong icon or the wrong app id
 is still a perfectly valid desktop file, so only a comparison against the app's
-own identity catches it.
+own identity catches it. The application icon (#436) is the other half of that
+pair: `Icon=` is a theme name, so nothing but a comparison notices when the
+installed file stops answering to it.
 
 One test does run against the real repository, because "the checker passes on
 the actual runner" is the thing the CI job cares about.
@@ -120,6 +122,23 @@ Categories=AudioVideo;Audio;Player;Music;
 StartupNotify=true
 """
 
+# A minimal but structurally real SVG: a self-contained mark whose only
+# references are internal fragments (`url(#g)`), which is what the icon check
+# has to accept while rejecting anything reaching outside the file.
+ICON_SVG = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"
+     viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9C84FF" />
+      <stop offset="1" stop-color="#FF9F43" />
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="384" height="384" rx="96" fill="url(#g)" />
+</svg>
+"""
+
 # Only the parts of a Flatpak manifest this checker reads. Both the
 # hand-authored template and the file generated from it are written from this,
 # because the check exists precisely to catch the two disagreeing.
@@ -132,7 +151,15 @@ modules:
     build-commands:
       - install -d /app/bin
       - install -Dm644 linux/packaging/{app_id}.desktop /app/share/applications/{app_id}.desktop
+      - install -Dm644 tool/branding/linthra_icon.svg /app/share/icons/hicolor/scalable/apps/{app_id}.svg
 """
+
+# The install step the icon tests remove or rewrite, kept in one place so the
+# fixture and the assertions cannot drift apart.
+ICON_INSTALL_LINE = (
+    "      - install -Dm644 tool/branding/linthra_icon.svg "
+    "/app/share/icons/hicolor/scalable/apps/{app_id}.svg\n"
+)
 
 
 def build_checkout(
@@ -146,11 +173,14 @@ def build_checkout(
     desktop_entry: str | None = None,
     desktop_entry_name: str | None = None,
     flatpak_manifest: str | None = None,
+    icon_svg: str | None = None,
+    write_icon: bool = True,
 ) -> Path:
     """Write a minimal, internally consistent checkout the checker can read."""
     (directory / "linux" / "runner").mkdir(parents=True, exist_ok=True)
     (directory / "linux" / "packaging").mkdir(parents=True, exist_ok=True)
     (directory / "flatpak").mkdir(parents=True, exist_ok=True)
+    (directory / "tool" / "branding").mkdir(parents=True, exist_ok=True)
     (directory / "android" / "app").mkdir(parents=True, exist_ok=True)
     (directory / "lib" / "core").mkdir(parents=True, exist_ok=True)
 
@@ -200,6 +230,10 @@ def build_checkout(
         FLATPAK_MANIFEST.format(app_id=APP_ID, binary=BINARY), encoding="utf-8"
     )
     (directory / "flatpak" / f"{APP_ID}.yml").write_text(manifest, encoding="utf-8")
+    if write_icon:
+        (directory / "tool" / "branding" / "linthra_icon.svg").write_text(
+            icon_svg if icon_svg is not None else ICON_SVG, encoding="utf-8"
+        )
     return directory
 
 
@@ -309,13 +343,16 @@ class DesktopEntryTest(CheckoutCase):
         self.assertIn("Exec=", problems[0])
 
     def test_the_icon_must_be_the_app_id(self) -> None:
-        # The icon files (#436) are installed under the app id; any other name
+        # The icon file (#436) is installed under the app id; any other name
         # resolves to nothing and the entry shows a fallback icon forever.
+        # Scoped to the entry's own problems: since #436 the icon check reports
+        # this same rename from the other side (IconInstallTest), and this test
+        # is about the entry disagreeing with the app's identity.
         build_checkout(
             self.root,
             desktop_entry=self.entry().replace(f"Icon={APP_ID}", "Icon=exampleapp"),
         )
-        problems = checker.check(self.root)
+        problems = checker.desktop_entry_problems(self.root)
         self.assertEqual(len(problems), 1)
         self.assertIn("Icon=", problems[0])
 
@@ -392,6 +429,165 @@ class DesktopEntryInstallTest(CheckoutCase):
         problems = checker.check(self.root)
         self.assertEqual(len(problems), 1)
         self.assertIn("no desktop entry to export", problems[0])
+
+
+class IconInstallTest(CheckoutCase):
+    """The desktop entry's `Icon=` and the installed icon file, held together.
+
+    Nothing else connects them: `Icon=` is a theme name, the install step is a
+    shell line in a manifest, and every mismatch here builds, installs and
+    launches perfectly — it just shows a generic icon.
+    """
+
+    def test_a_consistent_checkout_installs_the_icon(self) -> None:
+        build_checkout(self.root)
+        self.assertEqual(checker.check(self.root), [])
+
+    def test_a_generated_manifest_that_lost_the_icon_is_caught(self) -> None:
+        # The same drift the desktop entry has: the template gains the install
+        # step, scripts/regenerate_flatpak_sources.sh is never re-run, and the
+        # manifest flatpak-builder consumes ships no icon.
+        build_checkout(
+            self.root,
+            flatpak_manifest=FLATPAK_MANIFEST.format(
+                app_id=APP_ID, binary=BINARY
+            ).replace(ICON_INSTALL_LINE.format(app_id=APP_ID), ""),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn(f"flatpak/{APP_ID}.yml", problems[0])
+        self.assertIn("/app/share/icons/hicolor/scalable/apps", problems[0])
+
+    def test_renaming_the_installed_icon_is_caught(self) -> None:
+        # The drift this check exists for: the icon is installed under a name
+        # that is no longer the one `Icon=` looks up.
+        build_checkout(
+            self.root,
+            flatpak_manifest=FLATPAK_MANIFEST.format(
+                app_id=APP_ID, binary=BINARY
+            ).replace(f"apps/{APP_ID}.svg", "apps/exampleapp.svg"),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn(f"Icon={APP_ID}", problems[0])
+
+    def test_renaming_the_entrys_icon_is_caught_on_both_sides(self) -> None:
+        # The mirror image: `Icon=` changes and the install step does not. The
+        # entry check reports the identity break, the icon check reports that
+        # nothing installs a file answering to the new name.
+        build_checkout(
+            self.root,
+            desktop_entry=DESKTOP_ENTRY.format(
+                display_name=DISPLAY_NAME, binary=BINARY, app_id=APP_ID
+            ).replace(f"Icon={APP_ID}", "Icon=exampleapp"),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 3)
+        self.assertTrue(any("Icon=" in problem for problem in problems))
+        self.assertEqual(
+            2,
+            sum("apps/exampleapp.svg" in problem for problem in problems),
+        )
+
+    def test_installing_outside_the_icon_theme_is_caught(self) -> None:
+        # /app/share/icons/<app-id>.svg is not in any theme, so no launcher
+        # ever looks there — the same shape of mistake as installing the
+        # desktop entry outside /app/share/applications.
+        build_checkout(
+            self.root,
+            flatpak_manifest=FLATPAK_MANIFEST.format(
+                app_id=APP_ID, binary=BINARY
+            ).replace("/app/share/icons/hicolor/scalable/apps/", "/app/share/icons/"),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("hicolor/scalable/apps", problems[0])
+
+    def test_a_missing_icon_source_is_caught(self) -> None:
+        build_checkout(self.root, write_icon=False)
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("linthra_icon.svg is missing", problems[0])
+
+
+class IconSourceTest(CheckoutCase):
+    """What the icon file itself may contain.
+
+    Both failures are invisible until the icon is rendered from inside the
+    sandbox, where the developer's filesystem and the network are not there.
+    """
+
+    def test_internal_fragment_references_are_allowed(self) -> None:
+        # `fill="url(#g)"` is how an SVG uses its own gradient. Flagging it
+        # would make the check useless on Linthra's actual mark.
+        build_checkout(self.root)
+        self.assertEqual(checker.check(self.root), [])
+
+    def test_an_external_image_reference_is_caught(self) -> None:
+        build_checkout(
+            self.root,
+            icon_svg=ICON_SVG.replace(
+                "</svg>",
+                '  <image href="https://example.invalid/mark.png" />\n</svg>',
+            ),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("references something outside itself", problems[0])
+
+    def test_an_imported_stylesheet_is_caught(self) -> None:
+        build_checkout(
+            self.root,
+            icon_svg=ICON_SVG.replace(
+                "<defs>", '<style>@import url("theme.css");</style>\n  <defs>'
+            ),
+        )
+        problems = checker.check(self.root)
+        self.assertTrue(problems)
+        self.assertTrue(
+            all("references something outside itself" in p for p in problems)
+        )
+
+    def test_a_malformed_svg_is_caught(self) -> None:
+        # A broken SVG installs perfectly and then draws nothing.
+        build_checkout(self.root, icon_svg=ICON_SVG.replace("</svg>", ""))
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("not well-formed XML", problems[0])
+
+    def test_a_non_svg_root_element_is_caught(self) -> None:
+        build_checkout(
+            self.root, icon_svg='<?xml version="1.0"?>\n<html><body /></html>\n'
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("not an SVG", problems[0])
+
+    def test_an_svg_without_a_viewbox_is_caught(self) -> None:
+        # It would sit in scalable/ without actually being scalable: it renders
+        # at its intrinsic size and every launcher resamples it.
+        build_checkout(
+            self.root, icon_svg=ICON_SVG.replace('\n     viewBox="0 0 512 512"', "")
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("no viewBox", problems[0])
+
+    def test_a_developer_machine_path_is_caught(self) -> None:
+        # An editor that saved a linked bitmap leaves exactly this behind: the
+        # icon renders on the machine it was exported from and nowhere else.
+        build_checkout(
+            self.root,
+            icon_svg=ICON_SVG.replace(
+                "</svg>",
+                '  <image href="/home/dev/art/mark.png" />\n</svg>',
+            ),
+        )
+        problems = checker.check(self.root)
+        self.assertTrue(any("absolute host path" in problem for problem in problems))
+        self.assertTrue(
+            any("/home/dev/art/mark.png" in problem for problem in problems)
+        )
 
 
 class WindowMetricsTest(CheckoutCase):
@@ -545,6 +741,35 @@ class RealRepositoryTest(unittest.TestCase):
 
     def test_the_window_title_is_the_product_name(self) -> None:
         self.assertEqual(checker.window_title(ROOT), checker.app_display_name(ROOT))
+
+    def test_the_installed_icon_is_named_for_the_desktop_entrys_icon_key(self) -> None:
+        # Stated explicitly because it is the whole point of #436: the file
+        # the Flatpak installs answers to the name the launcher looks up.
+        icon_name = checker.desktop_entry(ROOT)["Icon"]
+        installed = (
+            f"{checker.ICON_INSTALL_DIR}/{icon_name}{checker.ICON_EXTENSION}"
+        )
+        self.assertEqual(
+            installed,
+            "/app/share/icons/hicolor/scalable/apps/"
+            f"{checker.android_application_id(ROOT)}.svg",
+        )
+        for manifest in (
+            checker.FLATPAK_TEMPLATE,
+            checker.FLATPAK_DIR / f"{checker.android_application_id(ROOT)}.yml",
+        ):
+            self.assertIn(installed, (ROOT / manifest).read_text(encoding="utf-8"))
+
+    def test_the_icon_source_is_the_canonical_brand_mark(self) -> None:
+        # Not a copy and not a redraw: the file Linux packaging installs is the
+        # same vector source tool/branding/generate_icons.py renders from.
+        self.assertTrue((ROOT / checker.ICON_SOURCE).is_file())
+        self.assertIn(
+            checker.ICON_SOURCE.name,
+            (ROOT / "tool" / "branding" / "generate_icons.py").read_text(
+                encoding="utf-8"
+            ),
+        )
 
 
 if __name__ == "__main__":

@@ -19,9 +19,10 @@ Three docs, three jobs:
 
 > Flatpak packaging is in progress ([issue #376](https://github.com/TheZupZup/Linthra/issues/376)).
 > The committed manifest builds, installs and launches the real app with
-> working audio, and installs a desktop entry so Linthra appears in the
-> application menu, but it is not the Flathub submission: there is no icon or
-> AppStream metadata yet, and no network, filesystem or Secret Service access.
+> working audio, and installs a desktop entry and Linthra's own icon so the app
+> appears properly in the application menu, but it is not the Flathub
+> submission: there is no AppStream metadata yet, and no network, filesystem or
+> Secret Service access.
 > See [What the sandbox allows today](#what-the-sandbox-allows-today).
 
 All commands are relative to the repository. Run them from the repository root
@@ -305,12 +306,25 @@ So these are **expected**, not bugs, and not worth debugging:
   ([#441](https://github.com/TheZupZup/Linthra/issues/441)). Linthra treats
   that as signed-out and keeps running; it never falls back to plaintext.
 * Linthra is in the application menu now
-  ([#434](https://github.com/TheZupZup/Linthra/issues/434)) — but with the
-  desktop's fallback icon, because the icon files are still to come
-  ([#436](https://github.com/TheZupZup/Linthra/issues/436)), and with no
+  ([#434](https://github.com/TheZupZup/Linthra/issues/434)) with its own icon
+  ([#436](https://github.com/TheZupZup/Linthra/issues/436)) — but with no
   software-centre listing
   ([#435](https://github.com/TheZupZup/Linthra/issues/435)). `flatpak run`
   still works and is what these debugging commands assume.
+
+  To check the icon in an installed build, list what the app exported and what
+  it installed:
+
+  ```bash
+  ls ~/.local/share/flatpak/exports/share/icons/hicolor/scalable/apps/
+  flatpak run --command=ls io.github.thezupzup.linthra \
+    /app/share/icons/hicolor/scalable/apps
+  ```
+
+  Both should show `io.github.thezupzup.linthra.svg` — the same name the
+  desktop entry's `Icon=` looks up. A launcher that still draws the generic
+  icon after that is usually caching: log out and back in, or run
+  `gtk4-update-icon-cache -f ~/.local/share/flatpak/exports/share/icons/hicolor`.
 
 To exercise those paths anyway, pass the permission to `flatpak run` for a
 single launch — it applies to that invocation only, so there is nothing to

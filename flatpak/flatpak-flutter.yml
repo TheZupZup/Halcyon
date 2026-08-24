@@ -264,9 +264,28 @@ modules:
       # into the `flatpak run io.github.thezupzup.linthra` form the host
       # launcher needs, and it only exports files whose name starts with the
       # app id — this one *is* the app id, so no `rename-desktop-file`. `Icon=`
-      # names the icon #436 will install; until then the entry appears with the
-      # desktop's fallback icon rather than a wrong one.
+      # names the icon installed immediately below.
       - install -Dm644 linux/packaging/io.github.thezupzup.linthra.desktop /app/share/applications/io.github.thezupzup.linthra.desktop
+      # Application icon (#436), installed from Linthra's canonical vector
+      # source — `tool/branding/linthra_icon.svg`, the same design
+      # `tool/branding/generate_icons.py` rasterises into the Android launcher
+      # mipmaps and the store graphics. It is copied, not redrawn: nothing here
+      # may fork the brand mark, and installing the source directly means there
+      # is no packaging-only duplicate to drift, exactly like the desktop entry
+      # above.
+      #
+      # One scalable SVG and nothing else. `hicolor` is the fallback theme every
+      # icon theme inherits from, `scalable/apps` is where an app's own
+      # resolution-independent icon belongs, and the basename *is* the icon-theme
+      # name the entry's `Icon=` looks up. A vector is sharp at every launcher
+      # size and every HiDPI scale factor by construction, so raster fallbacks
+      # would be dozens of files that can only be worse. scripts/check_linux_runner.py
+      # asserts this path, this basename and `Icon=` agree, in both manifests.
+      #
+      # flatpak-builder exports `/app/share/icons/hicolor/**` whose basename
+      # starts with the app id at `finish` time, the same rule as the desktop
+      # entry — so this needs no `rename-icon` either.
+      - install -Dm644 tool/branding/linthra_icon.svg /app/share/icons/hicolor/scalable/apps/io.github.thezupzup.linthra.svg
     sources:
       # The app's own source. flatpak-flutter's pre-processing step cannot
       # read a `dir` source (it only fetches `git` sources to inspect

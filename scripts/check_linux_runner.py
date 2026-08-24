@@ -31,6 +31,16 @@ never gets exported by flatpak-builder at all. The Flatpak manifests are
 checked for the install step that puts it in `/app/share/applications`, since
 an entry nothing installs is the same silence.
 
+The application icon (#436) is that same silence one step further out. `Icon=`
+is an icon-theme *name*, not a path, so it only resolves if a file of exactly
+that basename lands in the icon theme; install it one directory too high, or
+rename either side, and every launcher quietly falls back to a generic icon
+with nothing logged anywhere. So the manifests are checked for the install step
+that puts Linthra's canonical vector source into `hicolor/scalable/apps` under
+precisely the name `Icon=` asks for, and that source is itself checked for the
+two things that would make it unusable inside a sandbox: an absolute host path,
+or a reference to a file it does not carry.
+
 It also checks two things that are about *how* the runner builds rather than
 what it is called:
 
@@ -58,6 +68,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
+from xml.etree import ElementTree
 
 # Paths this script reads, all relative to the repository root.
 CMAKELISTS = Path("linux") / "CMakeLists.txt"
@@ -75,6 +86,35 @@ FLATPAK_TEMPLATE = FLATPAK_DIR / "flatpak-flutter.yml"
 # Where a Flatpak's desktop entry has to land: flatpak-builder exports what it
 # finds in this directory at `finish` time and nothing from anywhere else.
 DESKTOP_ENTRY_INSTALL_DIR = "/app/share/applications"
+
+# Linthra's canonical vector app icon: the source design that
+# tool/branding/generate_icons.py rasterises into the Android launcher mipmaps
+# and the store graphics. Linux packaging installs this file itself rather than
+# a copy of it, so there is no second brand mark that can drift from the first.
+ICON_SOURCE = Path("tool") / "branding" / "linthra_icon.svg"
+
+# `hicolor` is the fallback theme every icon theme inherits from, and
+# `scalable/apps` is where an application's own resolution-independent icon
+# belongs — one SVG covers every launcher size and every HiDPI scale, so no
+# raster fallbacks are installed. The basename, minus the extension, is the
+# icon-theme name the desktop entry's `Icon=` looks up.
+ICON_INSTALL_DIR = "/app/share/icons/hicolor/scalable/apps"
+ICON_EXTENSION = ".svg"
+
+SVG_ROOT_TAG = "{http://www.w3.org/2000/svg}svg"
+
+# An SVG that pulls in something it does not carry — an <image href=...>, an
+# external stylesheet or font, a `file://` or `https://` reference — renders
+# differently or not at all inside the sandbox, where none of that is
+# reachable. Internal fragment references (`fill="url(#bars)"`, the gradients
+# the mark is built from) are exactly what an SVG is supposed to do, so they
+# are not matched.
+EXTERNAL_REFERENCE_PATTERN = re.compile(
+    r"(?:href|src|xlink:href)\s*=\s*[\"']?(?!#)"
+    r"|url\(\s*[\"']?(?!#)"
+    r"|@import\b",
+    re.IGNORECASE,
+)
 
 # freedesktop's main categories for an audio player. `Audio` is only valid
 # alongside `AudioVideo`, and `Player` alone would leave the entry ungrouped in
@@ -302,6 +342,98 @@ def desktop_entry_install_problems(root: Path) -> list[str]:
     return problems
 
 
+def icon_install_problems(root: Path) -> list[str]:
+    """Disagreements between the desktop entry's `Icon=` and the installed icon.
+
+    `Icon=` names a theme entry, so the two halves are only connected by the
+    installed file's basename. Both Flatpak manifests are checked, for the same
+    reason the desktop entry's install step is: `flatpak-flutter.yml` is
+    hand-authored and `<app-id>.yml` is generated from it by
+    scripts/regenerate_flatpak_sources.sh, so an icon added to one and not
+    regenerated into the other leaves the built Flatpak with no icon while the
+    diff looks complete.
+    """
+    entry = desktop_entry(root)
+    icon_name = entry.get("Icon")
+    if icon_name is None:
+        # desktop_entry_problems() already reports the missing key; without it
+        # there is no name to hold the installed file to.
+        return []
+
+    destination = f"{ICON_INSTALL_DIR}/{icon_name}{ICON_EXTENSION}"
+    install = re.compile(
+        rf"install\s+-Dm644\s+{re.escape(str(ICON_SOURCE))}\s+{re.escape(destination)}"
+    )
+
+    problems: list[str] = []
+    if not (root / ICON_SOURCE).is_file():
+        problems.append(
+            f"{ICON_SOURCE} is missing — it is the canonical vector source the "
+            "Linux packaging installs as the application icon"
+        )
+
+    app_id = android_application_id(root)
+    for manifest in (FLATPAK_TEMPLATE, FLATPAK_DIR / f"{app_id}.yml"):
+        if install.search(_read(root, manifest)) is None:
+            problems.append(
+                f"{manifest} does not install {ICON_SOURCE} to {destination}, so "
+                f"{desktop_entry_file(root)}'s Icon={icon_name} resolves to "
+                "nothing and launchers fall back to a generic icon"
+            )
+    return problems
+
+
+def icon_source_problems(root: Path) -> list[str]:
+    """Things in the icon source that make it unusable as an installed icon.
+
+    Parsed with the standard library rather than shelling out to `xmllint` or
+    `rsvg-convert`: this check has to run wherever the rest of the checker does,
+    including a CI job that installs no extra packages for it.
+    """
+    path = root / ICON_SOURCE
+    if not path.is_file():
+        # icon_install_problems() reports the missing file once.
+        return []
+
+    problems: list[str] = []
+
+    # Well-formedness first: a broken SVG installs perfectly and then draws
+    # nothing. ElementTree also refuses an undefined entity, which is how a
+    # DOCTYPE pulling in an external subset shows up here.
+    try:
+        element = ElementTree.parse(path).getroot()
+    except ElementTree.ParseError as error:
+        return [f"{ICON_SOURCE}: not well-formed XML — {error}"]
+    if element.tag != SVG_ROOT_TAG:
+        problems.append(
+            f"{ICON_SOURCE}: root element is {element.tag!r}, not an SVG in the "
+            f"{SVG_ROOT_TAG} namespace"
+        )
+    elif element.get("viewBox") is None:
+        # Without a viewBox the drawing has no coordinate system to scale, so
+        # the file lands in `scalable/` without actually being scalable — it
+        # renders at its intrinsic size and every launcher resamples it.
+        problems.append(
+            f"{ICON_SOURCE}: no viewBox, so it does not scale — an icon in "
+            f"{ICON_INSTALL_DIR} has to render sharply at every size"
+        )
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        for match in ABSOLUTE_PATH_PATTERN.findall(line):
+            problems.append(
+                f"absolute host path in the application icon: "
+                f"{ICON_SOURCE}:{line_number}: {match}"
+            )
+        for match in EXTERNAL_REFERENCE_PATTERN.findall(line):
+            problems.append(
+                f"{ICON_SOURCE}:{line_number}: the application icon references "
+                f"something outside itself ({match.strip()!r}); it has to render "
+                "from its own contents inside the sandbox"
+            )
+    return problems
+
+
 def absolute_paths_under_linux(root: Path) -> list[str]:
     """Absolute host paths hardcoded in the committed Linux build files.
 
@@ -359,6 +491,11 @@ def check(root: Path) -> list[str]:
     # runner that drifts is reported once rather than twice.
     problems.extend(desktop_entry_problems(root))
     problems.extend(desktop_entry_install_problems(root))
+
+    # The application icon (#436): `Icon=` above is only a name, so this is
+    # what connects it to a file the built Flatpak actually contains.
+    problems.extend(icon_install_problems(root))
+    problems.extend(icon_source_problems(root))
 
     # Window metrics: a minimum larger than the default would open the window
     # already clamped, which reads as the app ignoring its own default.

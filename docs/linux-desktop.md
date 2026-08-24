@@ -360,9 +360,10 @@ workflow for building, installing and debugging it on Fedora Atomic is
 [flatpak-development.md](./flatpak-development.md). It builds, installs and
 launches with working audio, and installs the desktop entry
 (`linux/packaging/io.github.thezupzup.linthra.desktop`, shared with any future
-native package rather than Flatpak-only); icons, AppStream metadata and the
-network/filesystem/Secret Service permissions are still open sub-issues. None
-of it changes the native build on this page.
+native package rather than Flatpak-only) together with Linthra's scalable icon
+under `share/icons/hicolor/scalable/apps/io.github.thezupzup.linthra.svg`;
+AppStream metadata and the network/filesystem/Secret Service permissions are
+still open sub-issues. None of it changes the native build on this page.
 
 Decisions already taken with that destination in mind:
 
