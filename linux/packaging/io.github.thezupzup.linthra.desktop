@@ -4,16 +4,19 @@
 # that is what every desktop-integration lookup keys off: flatpak-builder only
 # exports a desktop file whose name starts with the app id, AppStream (#435)
 # will point its `<launchable type="desktop-id">` at this exact filename, and
-# the icon (#436) is installed as `<app-id>.png/.svg`, which is what makes
-# `Icon=` below resolve.
+# the icon (#436) is installed as `<app-id>.svg` in the hicolor icon theme,
+# which is what makes `Icon=` below resolve.
 # The same id is already `APPLICATION_ID` in linux/CMakeLists.txt, Android's
 # `applicationId`, and the Flatpak `app-id`; scripts/check_linux_runner.py
 # holds all of those together.
 #
 # Nothing here may name a build machine: `Exec=` is a bare command, resolved
 # from PATH (`/app/bin/linthra` inside the Flatpak, wherever a native package
-# puts it otherwise), and `Icon=` is an icon-theme name rather than a path.
-# check_linux_runner.py's absolute-path scan covers this file too.
+# puts it otherwise), and `Icon=` is an icon-theme name rather than a path — it
+# resolves to `.../icons/hicolor/scalable/apps/io.github.thezupzup.linthra.svg`,
+# installed from Linthra's canonical vector source, `tool/branding/linthra_icon.svg`.
+# check_linux_runner.py holds that filename and this `Icon=` together, and its
+# absolute-path scan covers this file too.
 #
 # The window this launches identifies itself with the same id — the runner
 # calls `g_set_prgname(APPLICATION_ID)` and registers its GtkApplication under

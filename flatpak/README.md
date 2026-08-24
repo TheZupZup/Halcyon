@@ -4,10 +4,10 @@ This is the packaging **foundation**: enough to build Linthra's native Flutter
 Linux bundle inside `flatpak-builder`, install it, launch the real
 `io.github.thezupzup.linthra` app from the application menu, and get real,
 audible local and remote playback through a fully self-contained audio
-runtime. It is deliberately not the Flathub submission — the icon and
-AppStream metadata that go with the desktop entry are still open, and so are
-the sandbox permissions; see "What's deferred" below and the comments in
-`io.github.thezupzup.linthra.yml` itself.
+runtime, with Linthra's own icon on the launcher entry. It is deliberately not
+the Flathub submission — the AppStream metadata that goes with the desktop
+entry is still open, and so are the sandbox permissions; see "What's deferred"
+below and the comments in `io.github.thezupzup.linthra.yml` itself.
 
 ## Audio runtime
 
@@ -68,6 +68,42 @@ the same sources of truth the Linux runner is held to (`AppInfo.name`,
 this directory's manifests — the hand-authored template and the generated
 manifest — actually install it, so a regeneration that was never run shows up
 as a failure rather than as a Flatpak with no menu entry.
+
+## Application icon
+
+`Icon=io.github.thezupzup.linthra` in that entry is an icon-theme **name**, not
+a path. It resolves because the `linthra` module installs a file of exactly that
+name into the icon theme:
+
+```
+install -Dm644 tool/branding/linthra_icon.svg \
+  /app/share/icons/hicolor/scalable/apps/io.github.thezupzup.linthra.svg
+```
+
+Three decisions worth stating:
+
+* **The source is Linthra's canonical vector mark, installed as-is.**
+  `tool/branding/linthra_icon.svg` is the design
+  `tool/branding/generate_icons.py` rasterises into the Android launcher
+  mipmaps and the store graphics — same squircle, same four bars, same
+  violet→orange gradient. Nothing here redraws or re-exports it, so there is no
+  packaging-only copy that can drift from the brand, exactly as with the
+  desktop entry above. Android's icon pipeline is untouched by this.
+* **One scalable SVG and no rasters.** A vector is sharp at every launcher size
+  and every HiDPI scale factor by construction, so a set of PNG fallbacks could
+  only be larger and worse. `hicolor` is the theme every icon theme inherits
+  from, and `scalable/apps` is where an application's own icon belongs.
+* **No `rename-icon`.** flatpak-builder exports `/app/share/icons/hicolor/**`
+  by the same rule it exports desktop files — the basename must start with the
+  app id — and this basename *is* the app id.
+
+`scripts/check_linux_runner.py` covers this too, offline and with no extra
+packages to install: it holds the installed basename to the entry's `Icon=`,
+requires **both** manifests to install it, and checks the SVG itself — that it
+is well-formed, that it carries a `viewBox` (a file in `scalable/` that cannot
+scale is resampled by every launcher), and that it has no absolute host path
+and no reference to anything it does not carry (an external image, stylesheet
+or font would render differently, or not at all, inside the sandbox).
 
 ## Files here
 
@@ -165,13 +201,13 @@ and the current `pubspec.lock`. Diff the result before committing.
 
 Not in this manifest — each has its own issue:
 
-* **AppStream metainfo** (#435), **scalable icon packaging** (#436) — no
-  `<app-id>.metainfo.xml` and no icon is installed, so the desktop entry's
-  `Icon=io.github.thezupzup.linthra` currently resolves to nothing and the
-  launcher falls back to a generic icon. The entry deliberately names the icon
-  anyway: #436 installs the files under exactly that name and nothing here has
-  to change when it lands. `rename-desktop-file`/`rename-icon` are not used and
-  are not needed — everything is installed under the app id already.
+* **AppStream metainfo** (#435) — no `<app-id>.metainfo.xml`, so Linthra has no
+  software-centre listing (name, summary, description, screenshots, releases).
+  The desktop entry and the icon it needs are already in place, so #435 is
+  additive: its `<launchable type="desktop-id">` and `<icon type="stock">` both
+  point at names that already resolve. `rename-desktop-file`/`rename-icon` are
+  not used and are not needed — everything is installed under the app id
+  already.
 * **Provider network access** (#440) — no permanent `--share=network`.
   #433 proved the bundled ffmpeg/libmpv can decode HTTP(S) audio using only a
   temporary, non-committed grant for that validation (see

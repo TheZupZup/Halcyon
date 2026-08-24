@@ -234,6 +234,23 @@ After regenerating, the classic `ic_launcher.*` and store assets stay
 byte-for-byte identical (verify with `sha256sum`); only the
 `ic_launcher_<id>.*` variant assets change.
 
+### Linux / Flatpak icon
+
+Linux packaging does not rasterise anything. The Flatpak installs the
+**canonical vector source itself** —
+[`tool/branding/linthra_icon.svg`](../tool/branding/linthra_icon.svg), the
+classic mark that `generate_icons.py` renders the Android assets from — as
+`share/icons/hicolor/scalable/apps/io.github.thezupzup.linthra.svg`, the
+icon-theme name the desktop entry's `Icon=` looks up
+(see [`flatpak/README.md`](../flatpak/README.md) §"Application icon").
+
+So there is one brand mark and no packaging-only copy: keep the SVG and the
+`generate_icons.py` constants in step, as the file's own header already says,
+and Linux follows Android automatically. The variant switching above is
+**Android-only** — the desktop icon is always Classic, matching the desktop's
+"one icon per installed app" model, and nothing on this page changes when the
+Linux icon does.
+
 ### F-Droid reproducibility
 
 The added assets are PNGs written deterministically by the stdlib-only generator
