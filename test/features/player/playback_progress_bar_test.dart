@@ -386,5 +386,47 @@ void main() {
       expect(find.text('1:15'), findsOneWidget);
       expect(find.text('4:00'), findsOneWidget);
     });
+
+    testWidgets('announces the same name and value as the wave',
+        (tester) async {
+      final SemanticsHandle handle = tester.ensureSemantics();
+      await _pumpBar(
+        tester,
+        position: const Duration(seconds: 75),
+        style: PlaybackProgressStyle.slider,
+      );
+
+      // Without this the fallback announced a bare percentage, with nothing
+      // saying what it measured.
+      final SemanticsNode slider = _sliderNode();
+      expect(slider.label, 'Playback position');
+      expect(slider.value, '1:15 of 4:00');
+      handle.dispose();
+    });
+
+    testWidgets('an unknown duration says so rather than implying a length',
+        (tester) async {
+      final SemanticsHandle handle = tester.ensureSemantics();
+      await _pumpBar(
+        tester,
+        duration: Duration.zero,
+        style: PlaybackProgressStyle.slider,
+      );
+
+      final SemanticsNode slider = _sliderNode();
+      expect(slider.label, 'Playback position');
+      expect(slider.value, 'Unknown');
+      handle.dispose();
+    });
   });
 }
+
+/// The Material slider's own node. [Slider] is a semantic boundary below its
+/// widget, so it is found by role rather than by widget type.
+SemanticsNode _sliderNode() => find.semantics
+    .byPredicate(
+      (SemanticsNode node) => node.flagsCollection.isSlider,
+      describeMatch: (_) => 'the seek slider',
+    )
+    .evaluate()
+    .single;

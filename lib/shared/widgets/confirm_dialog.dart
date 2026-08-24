@@ -8,6 +8,12 @@ import 'package:flutter/material.dart';
 /// "Remove", "Delete", "Delete from server") — never a vague "OK". When
 /// [destructive] is true (the default) the action button is tinted with the
 /// error colour so it reads as a deliberate, irreversible-feeling choice.
+///
+/// Keyboard users get the same care: the actions are laid out (and so traversed)
+/// Cancel then action, and the dialog opens with one of them already focused so
+/// Enter always has an obvious meaning. For a destructive dialog that is
+/// `Cancel` — the safe half of the choice — so a stray Enter or Space can never
+/// be the thing that deletes.
 Future<bool> showConfirmDialog(
   BuildContext context, {
   required String title,
@@ -25,10 +31,12 @@ Future<bool> showConfirmDialog(
         content: Text(message),
         actions: <Widget>[
           TextButton(
+            autofocus: destructive,
             onPressed: () => Navigator.of(dialogContext).pop(false),
             child: Text(cancelLabel),
           ),
           FilledButton(
+            autofocus: !destructive,
             style: destructive
                 ? FilledButton.styleFrom(
                     backgroundColor: theme.colorScheme.error,

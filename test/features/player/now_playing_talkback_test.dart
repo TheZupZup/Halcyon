@@ -357,6 +357,10 @@ void main() {
           isSlider: true,
           hasIncreaseAction: true,
           hasDecreaseAction: true,
+          // The bar is keyboard-operable like a real Slider, so it also
+          // reports as focusable and offers the focus action.
+          isFocusable: true,
+          hasFocusAction: true,
         ),
       );
 

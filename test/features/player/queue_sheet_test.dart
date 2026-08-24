@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/playlist.dart';
@@ -140,6 +141,43 @@ void main() {
       // One handle per up-next track (B and C), not the current one.
       expect(find.byIcon(Icons.drag_handle), findsNWidgets(2));
       expect(find.byType(ReorderableDragStartListener), findsNWidgets(2));
+    });
+
+    testWidgets('the drag handle is named, and the row still reads whole',
+        (tester) async {
+      final SemanticsHandle handle = tester.ensureSemantics();
+      final controller = FakePlaybackController();
+      await controller.playTracks([_track('A'), _track('B')]);
+
+      await _open(tester, controller);
+
+      // An unnamed handle is the one control on the row nothing announces.
+      final SemanticsNode row = tester.getSemantics(find.text('Song B'));
+      expect(row.label, contains('Reorder'));
+      // The row is still the tap target that plays the track, and the remove
+      // action stays its own named button beside it.
+      expect(row.flagsCollection.isButton, isTrue);
+      expect(find.byTooltip('Remove from queue'), findsOneWidget);
+
+      handle.dispose();
+    });
+
+    testWidgets('the playing row says it is the one playing', (tester) async {
+      final SemanticsHandle handle = tester.ensureSemantics();
+      final controller = FakePlaybackController();
+      await controller.playTracks([_track('A'), _track('B')]);
+
+      await _open(tester, controller);
+
+      expect(
+        tester.getSemantics(find.text('Song A')).label,
+        contains('Now playing'),
+      );
+      expect(
+        tester.getSemantics(find.text('Song B')).label,
+        isNot(contains('Now playing')),
+      );
+      handle.dispose();
     });
 
     testWidgets('dragging an upcoming track to the end lands it last',
