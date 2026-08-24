@@ -11,6 +11,11 @@ caught", built on a synthetic checkout rather than the real one: a fixture that
 can be broken is the only way to prove the checker fails when it should, and it
 keeps these tests from depending on Linthra's current version or app id.
 
+The desktop entry (#434) is tested the same way, and for the same reason: a
+`.desktop` file that names the wrong binary, the wrong icon or the wrong app id
+is still a perfectly valid desktop file, so only a comparison against the app's
+own identity catches it.
+
 One test does run against the real repository, because "the checker passes on
 the actual runner" is the thing the CI job cares about.
 
@@ -101,6 +106,34 @@ abstract final class AppInfo {{
 }}
 """
 
+DESKTOP_ENTRY = """\
+# A comment, which the reader has to skip rather than parse.
+[Desktop Entry]
+Type=Application
+Name={display_name}
+GenericName=Music Player
+Comment=An example.
+Exec={binary}
+Icon={app_id}
+Terminal=false
+Categories=AudioVideo;Audio;Player;Music;
+StartupNotify=true
+"""
+
+# Only the parts of a Flatpak manifest this checker reads. Both the
+# hand-authored template and the file generated from it are written from this,
+# because the check exists precisely to catch the two disagreeing.
+FLATPAK_MANIFEST = """\
+app-id: {app_id}
+command: {binary}
+modules:
+  - name: {binary}
+    buildsystem: simple
+    build-commands:
+      - install -d /app/bin
+      - install -Dm644 linux/packaging/{app_id}.desktop /app/share/applications/{app_id}.desktop
+"""
+
 
 def build_checkout(
     directory: Path,
@@ -110,9 +143,14 @@ def build_checkout(
     build_gradle: str | None = None,
     pubspec: str | None = None,
     app_info: str | None = None,
+    desktop_entry: str | None = None,
+    desktop_entry_name: str | None = None,
+    flatpak_manifest: str | None = None,
 ) -> Path:
     """Write a minimal, internally consistent checkout the checker can read."""
     (directory / "linux" / "runner").mkdir(parents=True, exist_ok=True)
+    (directory / "linux" / "packaging").mkdir(parents=True, exist_ok=True)
+    (directory / "flatpak").mkdir(parents=True, exist_ok=True)
     (directory / "android" / "app").mkdir(parents=True, exist_ok=True)
     (directory / "lib" / "core").mkdir(parents=True, exist_ok=True)
 
@@ -144,6 +182,24 @@ def build_checkout(
         else APP_INFO.format(display_name=DISPLAY_NAME),
         encoding="utf-8",
     )
+    packaging = directory / "linux" / "packaging"
+    (packaging / (desktop_entry_name or f"{APP_ID}.desktop")).write_text(
+        desktop_entry
+        if desktop_entry is not None
+        else DESKTOP_ENTRY.format(
+            display_name=DISPLAY_NAME, binary=BINARY, app_id=APP_ID
+        ),
+        encoding="utf-8",
+    )
+    manifest = (
+        flatpak_manifest
+        if flatpak_manifest is not None
+        else FLATPAK_MANIFEST.format(app_id=APP_ID, binary=BINARY)
+    )
+    (directory / "flatpak" / "flatpak-flutter.yml").write_text(
+        FLATPAK_MANIFEST.format(app_id=APP_ID, binary=BINARY), encoding="utf-8"
+    )
+    (directory / "flatpak" / f"{APP_ID}.yml").write_text(manifest, encoding="utf-8")
     return directory
 
 
@@ -213,6 +269,129 @@ class IdentityDriftTest(CheckoutCase):
             my_application=MY_APPLICATION.format(display_name="Other"),
         )
         self.assertEqual(len(checker.check(self.root)), 3)
+
+
+class DesktopEntryTest(CheckoutCase):
+    """The installed entry (#434) repeating the identity it launches.
+
+    Every case here installs and validates fine as a desktop file; what breaks
+    is the agreement with the app, which is exactly what nothing else notices.
+    """
+
+    def entry(self, **overrides: str) -> str:
+        fields = {
+            "display_name": DISPLAY_NAME,
+            "binary": BINARY,
+            "app_id": APP_ID,
+            **overrides,
+        }
+        return DESKTOP_ENTRY.format(**fields)
+
+    def test_the_name_must_match_app_info(self) -> None:
+        build_checkout(self.root, desktop_entry=self.entry(display_name="Other"))
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("Name=", problems[0])
+
+    def test_the_exec_must_be_the_binary_name(self) -> None:
+        # The launcher entry pointing at something that is not the installed
+        # binary: menu item present, click does nothing.
+        build_checkout(self.root, desktop_entry=self.entry(binary="otherapp"))
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("Exec=", problems[0])
+
+    def test_a_field_code_in_exec_is_rejected(self) -> None:
+        # `%U` advertises a URI handler the app does not implement.
+        build_checkout(self.root, desktop_entry=self.entry(binary=f"{BINARY} %U"))
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("Exec=", problems[0])
+
+    def test_the_icon_must_be_the_app_id(self) -> None:
+        # The icon files (#436) are installed under the app id; any other name
+        # resolves to nothing and the entry shows a fallback icon forever.
+        build_checkout(
+            self.root,
+            desktop_entry=self.entry().replace(f"Icon={APP_ID}", "Icon=exampleapp"),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("Icon=", problems[0])
+
+    def test_a_missing_key_is_reported(self) -> None:
+        build_checkout(
+            self.root,
+            desktop_entry=self.entry().replace(f"Icon={APP_ID}\n", ""),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("no Icon=", problems[0])
+
+    def test_audio_player_categories_are_required(self) -> None:
+        build_checkout(
+            self.root,
+            desktop_entry=self.entry().replace(
+                "Categories=AudioVideo;Audio;Player;Music;", "Categories=Utility;"
+            ),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("Categories", problems[0])
+
+    def test_extra_categories_are_allowed(self) -> None:
+        build_checkout(
+            self.root,
+            desktop_entry=self.entry().replace(
+                "Categories=AudioVideo;Audio;Player;Music;",
+                "Categories=AudioVideo;Audio;Player;Music;Recorder;",
+            ),
+        )
+        self.assertEqual(checker.check(self.root), [])
+
+    def test_an_entry_not_named_for_the_app_id_is_not_found(self) -> None:
+        # Flatpak exports `<app-id>.desktop` and nothing else, so a renamed
+        # file is not a cosmetic difference — it is an entry that never ships.
+        build_checkout(self.root, desktop_entry_name="exampleapp.desktop")
+        with self.assertRaises(checker.CheckError):
+            checker.check(self.root)
+
+    def test_a_file_without_the_group_header_is_an_error(self) -> None:
+        build_checkout(self.root, desktop_entry="Name=ExampleApp\n")
+        with self.assertRaises(checker.CheckError):
+            checker.check(self.root)
+
+
+class DesktopEntryInstallTest(CheckoutCase):
+    def test_a_generated_manifest_that_lost_the_install_step_is_caught(self) -> None:
+        # The realistic failure: flatpak-flutter.yml gains the install step and
+        # nobody re-runs scripts/regenerate_flatpak_sources.sh, so the manifest
+        # flatpak-builder actually consumes still ships no desktop entry.
+        build_checkout(
+            self.root,
+            flatpak_manifest=FLATPAK_MANIFEST.format(
+                app_id=APP_ID, binary=BINARY
+            ).replace(
+                f"      - install -Dm644 linux/packaging/{APP_ID}.desktop "
+                f"/app/share/applications/{APP_ID}.desktop\n",
+                "",
+            ),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn(f"flatpak/{APP_ID}.yml", problems[0])
+        self.assertIn("/app/share/applications", problems[0])
+
+    def test_installing_somewhere_flatpak_does_not_export_is_caught(self) -> None:
+        build_checkout(
+            self.root,
+            flatpak_manifest=FLATPAK_MANIFEST.format(
+                app_id=APP_ID, binary=BINARY
+            ).replace("/app/share/applications/", "/app/share/"),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("no desktop entry to export", problems[0])
 
 
 class WindowMetricsTest(CheckoutCase):

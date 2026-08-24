@@ -113,6 +113,7 @@ modules:
       - cp -r build/linux/x64/release/bundle/. /app/lib/linthra/
       - install -d /app/bin
       - ln -s ../lib/linthra/linthra /app/bin/linthra
+      - install -Dm644 linux/packaging/io.github.thezupzup.linthra.desktop /app/share/applications/io.github.thezupzup.linthra.desktop
     sources:
       - type: dir
         path: ..
