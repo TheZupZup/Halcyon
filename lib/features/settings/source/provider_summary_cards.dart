@@ -98,65 +98,76 @@ class ProviderSummaryCard extends StatelessWidget {
     final Color muted = theme.colorScheme.onSurface.withValues(alpha: 0.6);
 
     return Card(
-      child: InkWell(
-        onTap: onManage,
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  _LeadingIcon(icon: icon),
-                  const SizedBox(width: AppSpacing.md),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Row(
-                          children: <Widget>[
-                            Flexible(
-                              child: Text(
-                                title,
-                                style: theme.textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.w600,
+      // The card's text already merges into its tap target, so it announces as
+      // one thing — "Jellyfin, Connected, Signed in as …" — but without a role
+      // to go with it. Declaring the button here (the same way the hand-built
+      // play button does) is what tells a screen reader the card can be
+      // activated, rather than leaving it as a block of text that happens to
+      // respond to a tap. Nothing is added to what it says: the announcement
+      // stays exactly the title, status and detail already on screen, which is
+      // what keeps server addresses and credentials out of it.
+      child: Semantics(
+        button: true,
+        child: InkWell(
+          onTap: onManage,
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    _LeadingIcon(icon: icon),
+                    const SizedBox(width: AppSpacing.md),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Row(
+                            children: <Widget>[
+                              Flexible(
+                                child: Text(
+                                  title,
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
                               ),
-                            ),
-                            if (badgeLabel != null) ...<Widget>[
-                              const SizedBox(width: AppSpacing.sm),
-                              _Badge(label: badgeLabel!),
+                              if (badgeLabel != null) ...<Widget>[
+                                const SizedBox(width: AppSpacing.sm),
+                                _Badge(label: badgeLabel!),
+                              ],
                             ],
-                          ],
-                        ),
-                        const SizedBox(height: 3),
-                        _StatusLine(label: statusLabel, tone: statusTone),
-                        if (detail != null) ...<Widget>[
-                          const SizedBox(height: 2),
-                          Text(
-                            detail!,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: detailIsError
-                                  ? theme.colorScheme.error
-                                  : muted,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
                           ),
+                          const SizedBox(height: 3),
+                          _StatusLine(label: statusLabel, tone: statusTone),
+                          if (detail != null) ...<Widget>[
+                            const SizedBox(height: 2),
+                            Text(
+                              detail!,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: detailIsError
+                                    ? theme.colorScheme.error
+                                    : muted,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
-                  ),
+                  ],
+                ),
+                if (actions.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: AppSpacing.md),
+                  _ActionRow(actions: actions),
                 ],
-              ),
-              if (actions.isNotEmpty) ...<Widget>[
-                const SizedBox(height: AppSpacing.md),
-                _ActionRow(actions: actions),
               ],
-            ],
+            ),
           ),
         ),
       ),

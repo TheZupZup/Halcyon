@@ -361,7 +361,10 @@ class _UpNextTile extends StatelessWidget {
               index: index,
               child: const Padding(
                 padding: EdgeInsets.only(left: AppSpacing.xs),
-                child: Icon(Icons.drag_handle),
+                child: Icon(
+                  Icons.drag_handle,
+                  semanticLabel: 'Reorder',
+                ),
               ),
             ),
           ],
