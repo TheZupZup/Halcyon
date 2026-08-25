@@ -181,6 +181,19 @@ class RepositoryIntegrityTest(unittest.TestCase):
         findings = self.scan(head)
         self.assertTrue(any(f.path == ".vscode/tasks.json" for f in findings))
 
+    def test_removed_prohibited_path_still_reports_historical_commit(self) -> None:
+        path = self.repo / ".vscode" / "tasks.json"
+        path.parent.mkdir()
+        path.write_text('{}\n', encoding="utf-8")
+        git(self.repo, "add", "-f", ".vscode/tasks.json")
+        introduced = self.commit("introduce prohibited path")
+        path.unlink()
+        head = self.commit("remove prohibited path")
+        findings = self.scan(head)
+        match = next(f for f in findings if f.path == ".vscode/tasks.json")
+        self.assertEqual(match.commit, introduced)
+        self.assertIn("remains in the PR history", match.reason)
+
     def test_case_variant_ide_paths_are_blocked(self) -> None:
         for relative in (".VSCODE/tasks.json", ".Idea/workspace.xml"):
             with self.subTest(relative):

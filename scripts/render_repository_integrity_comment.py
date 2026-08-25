@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Validate a scanner artifact and render the one sticky PR comment.
+
+This program runs only from the trusted default branch. Report fields are data:
+they are strictly bounded, escaped, and never evaluated as shell or program text.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from pathlib import Path
+
+MARKER = "<!-- linthra-repository-integrity-v1 -->"
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SEVERITIES = {"blocked", "review_required"}
+FIELDS = ("path", "rule", "reason", "remediation")
+MAX_FINDINGS = 100
+MAX_FIELD_LENGTH = 2000
+
+
+def safe_text(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value or len(value) > MAX_FIELD_LENGTH:
+        raise ValueError(f"invalid {field}")
+    # Numeric entities prevent Markdown, raw HTML, mentions, and links while
+    # preserving an exact, readable representation of repository data.
+    return "".join(ch if ch.isalnum() or ch in " .,_/-:" else f"&#{ord(ch)};" for ch in value)
+
+
+def validate(payload: object, event: object) -> list[dict[str, str | None]]:
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        raise ValueError("unsupported report schema")
+    if not isinstance(event, dict):
+        raise ValueError("invalid workflow event")
+    run = event.get("workflow_run")
+    if not isinstance(run, dict):
+        raise ValueError("missing workflow run")
+    prs = run.get("pull_requests")
+    if not isinstance(prs, list) or len(prs) != 1 or not isinstance(prs[0], dict):
+        raise ValueError("workflow run must identify exactly one PR")
+    expected_pr = prs[0].get("number")
+    expected_sha = run.get("head_sha")
+    head_repo = run.get("head_repository")
+    expected_repo = head_repo.get("full_name") if isinstance(head_repo, dict) else None
+    if payload.get("pr_number") != expected_pr or payload.get("head_sha") != expected_sha or payload.get("head_repository") != expected_repo:
+        raise ValueError("report does not match the triggering PR")
+    if not isinstance(expected_sha, str) or not SHA_RE.fullmatch(expected_sha):
+        raise ValueError("invalid head SHA")
+    findings = payload.get("findings")
+    if not isinstance(findings, list) or len(findings) > MAX_FINDINGS:
+        raise ValueError("invalid findings list")
+    validated: list[dict[str, str | None]] = []
+    for raw in findings:
+        if not isinstance(raw, dict) or set(raw) != {"severity", "commit", *FIELDS}:
+            raise ValueError("invalid finding shape")
+        if raw["severity"] not in SEVERITIES:
+            raise ValueError("invalid severity")
+        commit = raw["commit"]
+        if commit is not None and (not isinstance(commit, str) or not SHA_RE.fullmatch(commit)):
+            raise ValueError("invalid commit SHA")
+        item = {field: safe_text(raw[field], field) for field in FIELDS}
+        item.update(severity=raw["severity"], commit=commit)
+        validated.append(item)
+    return validated
+
+
+def render(findings: list[dict[str, str | None]]) -> str:
+    lines = [MARKER, "## Repository integrity review", ""]
+    if not findings:
+        return "\n".join(lines + ["**CLEAN**", "", "Previously reported repository-integrity findings are resolved."])
+    blocked = any(item["severity"] == "blocked" for item in findings)
+    lines += [f"**{'BLOCKED' if blocked else 'REVIEW REQUIRED'}**", "", "Repository integrity blocked this PR." if blocked else "Repository integrity requires explicit maintainer review.", ""]
+    for number, item in enumerate(findings, 1):
+        lines += [f"### Finding {number}"]
+        if item["commit"]:
+            lines.append(f"- **Commit:** `{item['commit']}`")
+        lines += [
+            f"- **Path:** `{item['path']}`",
+            f"- **Rule:** `{item['rule']}`",
+            f"- **Explanation:** {item['reason']}",
+            f"- **How to fix:** {item['remediation']}", "",
+        ]
+    lines.append("This report describes observable repository state and history; it does not infer contributor intent.")
+    return "\n".join(lines)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument("--event", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    args = parser.parse_args()
+    if args.report.stat().st_size > 1_000_000:
+        raise ValueError("report exceeds size limit")
+    payload = json.loads(args.report.read_text(encoding="utf-8"))
+    event = json.loads(args.event.read_text(encoding="utf-8"))
+    args.output.write_text(render(validate(payload, event)), encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
