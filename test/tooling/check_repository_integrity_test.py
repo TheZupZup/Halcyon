@@ -181,6 +181,45 @@ class RepositoryIntegrityTest(unittest.TestCase):
         findings = self.scan(head)
         self.assertTrue(any(f.path == ".vscode/tasks.json" for f in findings))
 
+    def test_removed_prohibited_path_still_reports_historical_commit(self) -> None:
+        path = self.repo / ".vscode" / "tasks.json"
+        path.parent.mkdir()
+        path.write_text('{}\n', encoding="utf-8")
+        git(self.repo, "add", "-f", ".vscode/tasks.json")
+        introduced = self.commit("introduce prohibited path")
+        path.unlink()
+        head = self.commit("remove prohibited path")
+        findings = self.scan(head)
+        # The introducing commit stays attributable even though the final tree
+        # no longer carries the path. The cleanup commit is reported too, and
+        # deliberately so: removing a maintainer-controlled path is itself a
+        # repository-control change an external PR may not make.
+        attributed = {f.commit for f in findings if f.path == ".vscode/tasks.json"}
+        self.assertIn(introduced, attributed)
+        match = next(f for f in findings if f.commit == introduced)
+        self.assertEqual(match.rule, "external-maintainer-controlled-path")
+        self.assertEqual(match.severity, "blocked")
+
+    def test_rename_away_from_protected_path_is_blocked(self) -> None:
+        """Rename detection must never hide a removed maintainer-controlled path.
+
+        `git log --name-only` would report only the unprotected destination, so
+        every history query here uses --no-renames and sees the deleted source.
+        """
+        workflow = self.repo / ".github" / "workflows"
+        workflow.mkdir(parents=True)
+        (workflow / "a.yml").write_text("name: CI\non: push\njobs: {}\n", encoding="utf-8")
+        self.base = self.commit("trusted workflow")
+        docs = self.repo / "docs"
+        docs.mkdir(exist_ok=True)
+        git(self.repo, "mv", ".github/workflows/a.yml", "docs/a.txt")
+        head = self.commit("rename protected workflow away")
+        findings = self.scan(head)
+        self.assertTrue(
+            any(f.path == ".github/workflows/a.yml" for f in findings),
+            f"rename hid the protected source: {[f.path for f in findings]}",
+        )
+
     def test_case_variant_ide_paths_are_blocked(self) -> None:
         for relative in (".VSCODE/tasks.json", ".Idea/workspace.xml"):
             with self.subTest(relative):
@@ -566,6 +605,142 @@ class RepositoryIntegrityTest(unittest.TestCase):
         path.write_text('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>', encoding="utf-8")
         findings = self.scan(self.commit())
         self.assertTrue(any("SVG contains active" in f.reason for f in findings))
+
+    def test_prohibited_history_survives_cleanup_and_update_branch_merge(self) -> None:
+        """Regression for #513: an empty final diff must not erase PR history."""
+        git(self.repo, "switch", "-c", "pr")
+        payload = self.repo / "assets" / "payload.png"
+        payload.parent.mkdir()
+        payload.write_text("#!/bin/sh\necho payload\n", encoding="utf-8")
+        prohibited = self.commit("A: introduce prohibited payload")
+        payload.unlink()
+        self.commit("B: clean payload")
+
+        git(self.repo, "switch", "main")
+        (self.repo / "README.md").write_text("trusted update\n", encoding="utf-8")
+        self.base = self.commit("trusted main update")
+        git(self.repo, "switch", "pr")
+        git(self.repo, "merge", "--no-ff", "main", "-m", "C: Update branch")
+        merge = git(self.repo, "rev-parse", "HEAD")
+
+        self.assertEqual(git(self.repo, "diff", "--name-only", f"{self.base}...{merge}"), "")
+        findings = self.scan(merge)
+        historical = [finding for finding in findings if finding.commit == prohibited]
+        self.assertTrue(any(f.path == "assets/payload.png" for f in historical))
+        self.assertFalse(any(f.commit == merge for f in findings))
+
+    def test_ordinary_multi_commit_pr_passes(self) -> None:
+        (self.repo / "lib" / "first.dart").write_text("const first = 1;\n", encoding="utf-8")
+        self.commit("first")
+        (self.repo / "lib" / "second.dart").write_text("const second = 2;\n", encoding="utf-8")
+        self.assertEqual(self.scan(self.commit("second")), [])
+
+    def test_legitimate_commit_followed_by_cleanup_passes(self) -> None:
+        note = self.repo / "notes.txt"
+        note.write_text("temporary note\n", encoding="utf-8")
+        self.commit("add note")
+        note.unlink()
+        self.assertEqual(self.scan(self.commit("remove note")), [])
+
+    def test_update_branch_merge_from_trusted_main_passes(self) -> None:
+        git(self.repo, "switch", "-c", "pr")
+        (self.repo / "lib" / "feature.dart").write_text("const feature = true;\n", encoding="utf-8")
+        self.commit("feature")
+        git(self.repo, "switch", "main")
+        (self.repo / "README.md").write_text("trusted update\n", encoding="utf-8")
+        self.base = self.commit("trusted main update")
+        git(self.repo, "switch", "pr")
+        git(self.repo, "merge", "--no-ff", "main", "-m", "Update branch")
+        self.assertEqual(self.scan(git(self.repo, "rev-parse", "HEAD")), [])
+
+    def test_prohibited_commit_in_trusted_base_does_not_poison_pr(self) -> None:
+        payload = self.repo / "assets" / "legacy.png"
+        payload.parent.mkdir()
+        payload.write_text("legacy text payload\n", encoding="utf-8")
+        self.base = self.commit("trusted legacy state")
+        (self.repo / "lib" / "feature.dart").write_text("const feature = true;\n", encoding="utf-8")
+        self.assertEqual(self.scan(self.commit("unrelated feature")), [])
+
+    def test_linear_prohibited_then_cleaned_history_fails(self) -> None:
+        payload = self.repo / "assets" / "linear.png"
+        payload.parent.mkdir()
+        payload.write_text("not really an image\n", encoding="utf-8")
+        prohibited = self.commit("prohibited")
+        payload.unlink()
+        findings = self.scan(self.commit("cleanup"))
+        self.assertTrue(any(f.commit == prohibited and f.path == "assets/linear.png" for f in findings))
+
+    def test_squashed_clean_history_passes(self) -> None:
+        """A clean squash introduces no prohibited commit object to main."""
+        (self.repo / "lib" / "squashed.dart").write_text("const clean = true;\n", encoding="utf-8")
+        self.assertEqual(self.scan(self.commit("squashed clean feature")), [])
+
+    def test_pr_side_merge_reports_unique_offender_once_not_merge(self) -> None:
+        git(self.repo, "switch", "-c", "side")
+        payload = self.repo / "assets" / "side.png"
+        payload.parent.mkdir()
+        payload.write_text("not really an image\n", encoding="utf-8")
+        prohibited = self.commit("side payload")
+        git(self.repo, "switch", "-c", "pr", self.base)
+        (self.repo / "lib" / "feature.dart").write_text("const feature = true;\n", encoding="utf-8")
+        self.commit("feature")
+        git(self.repo, "merge", "--no-ff", "side", "-m", "merge side")
+        merge = git(self.repo, "rev-parse", "HEAD")
+        findings = self.scan(merge)
+        matches = [f for f in findings if f.path == "assets/side.png"]
+        self.assertEqual([f.commit for f in matches], [prohibited])
+        self.assertNotIn(merge, [f.commit for f in findings])
+
+    def test_novel_prohibited_merge_resolution_is_scanned(self) -> None:
+        git(self.repo, "switch", "-c", "side")
+        (self.repo / "lib" / "side.dart").write_text("const side = true;\n", encoding="utf-8")
+        self.commit("side")
+        git(self.repo, "switch", "-c", "pr", self.base)
+        (self.repo / "lib" / "feature.dart").write_text("const feature = true;\n", encoding="utf-8")
+        self.commit("feature")
+        git(self.repo, "merge", "--no-ff", "--no-commit", "side")
+        payload = self.repo / "assets" / "resolution.png"
+        payload.parent.mkdir()
+        payload.write_text("not really an image\n", encoding="utf-8")
+        merge = self.commit("merge with novel resolution")
+        findings = self.scan(merge)
+        self.assertTrue(
+            any(f.commit == merge and f.path == "assets/resolution.png" for f in findings)
+        )
+
+    def test_over_long_paths_stay_within_the_reporter_field_bound(self) -> None:
+        """Git accepts paths longer than the reporter's per-field limit.
+
+        Emitting one unclamped sinks the whole artifact, so the reporter fails
+        and an earlier CLEAN comment can survive a blocking revision.
+        """
+        deep = self.repo / "scripts"
+        for i in range(9):
+            deep = deep / (f"d{i}" + "x" * 247)
+        deep.mkdir(parents=True)
+        (deep / "s.sh").write_text("echo hi\n", encoding="utf-8")
+        commit = self.commit("deep protected path")
+        findings = self.scan(commit)
+        raw = next(f for f in findings if f.path.endswith("/s.sh"))
+        self.assertGreater(len(raw.path), integrity.MAX_REPORT_FIELD_CHARS)
+        emitted = raw.as_dict()
+        self.assertLessEqual(len(emitted["path"]), integrity.MAX_REPORT_FIELD_CHARS)
+        # The tail identifies the offender, so it must survive the clamp.
+        self.assertTrue(emitted["path"].endswith("/s.sh"))
+        self.assertTrue(emitted["path"].startswith("...[truncated]"))
+
+    def test_report_names_commit_path_and_reason(self) -> None:
+        path = self.repo / "assets" / "report.png"
+        path.parent.mkdir()
+        path.write_text("not really an image\n", encoding="utf-8")
+        commit = self.commit("report payload")
+        findings = self.scan(commit)
+        report = self.repo / "report.md"
+        integrity.write_report(report, findings)
+        text = report.read_text(encoding="utf-8")
+        self.assertIn(commit, text)
+        self.assertIn("assets/report.png", text)
+        self.assertIn("file extension claims PNG", text)
 
 
 class FixtureExemptionTest(unittest.TestCase):

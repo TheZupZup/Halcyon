@@ -23,7 +23,9 @@ jobs:
           python-version: "3.11"
 
       - name: Run guard tests
-        run: python3 test/tooling/check_repository_integrity_test.py
+        run: |
+          python3 test/tooling/check_repository_integrity_test.py
+          python3 test/tooling/render_repository_integrity_comment_test.py
 
   integrity:
     name: Repository integrity guard
@@ -34,6 +36,7 @@ jobs:
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PR_AUTHOR: ${{ github.event.pull_request.user.login }}
       HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
       REPO_OWNER: ${{ github.repository_owner }}
       CHECKER_PATH: scripts/check_repository_integrity.py
 
@@ -62,7 +65,15 @@ jobs:
 
           if git cat-file -e "$BASE_SHA:$CHECKER_PATH" 2>/dev/null; then
             git show "$BASE_SHA:$CHECKER_PATH" > "$checker"
-            echo "Loaded repository-integrity checker from trusted PR base."
+            if grep -q -- '--json-report' "$checker"; then
+              echo "Loaded repository-integrity checker from trusted PR base."
+            elif [ "$PR_AUTHOR" = "$REPO_OWNER" ] && [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then
+              cp "$CHECKER_PATH" "$checker"
+              echo "Bootstrap: trusted base checker predates structured reports; using repository-owner HEAD copy."
+            else
+              echo "::error::Trusted repository-integrity checker does not support the structured report interface; refusing to execute contributor-supplied checker code."
+              exit 1
+            fi
           elif [ "$PR_AUTHOR" = "$REPO_OWNER" ] && [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then
             cp "$CHECKER_PATH" "$checker"
             echo "Bootstrap: using repository-owner HEAD copy."
@@ -72,6 +83,8 @@ jobs:
           fi
 
       - name: Run repository integrity guard
+        id: scan
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -80,7 +93,19 @@ jobs:
             --head "$HEAD_SHA" \
             --pr-author "$PR_AUTHOR" \
             --repo-owner "$REPO_OWNER" \
-            --report "$RUNNER_TEMP/repository-integrity.md"
+            --report "$RUNNER_TEMP/repository-integrity.md" \
+            --json-report "$RUNNER_TEMP/repository-integrity/report.json" \
+            --pr-number "$PR_NUMBER" \
+            --head-repository "$HEAD_REPO"
+
+      - name: Upload repository integrity findings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: repository-integrity-findings
+          path: ${{ runner.temp }}/repository-integrity/report.json
+          if-no-files-found: warn
+          retention-days: 2
 
       - name: Publish repository integrity report
         if: ${{ always() }}
@@ -89,3 +114,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/repository-integrity.md" ]; then
             cat "$RUNNER_TEMP/repository-integrity.md" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Enforce repository integrity result
+        if: ${{ steps.scan.outcome != 'success' }}
+        run: exit 1
