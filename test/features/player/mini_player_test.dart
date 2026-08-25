@@ -112,9 +112,9 @@ void main() {
           overrides: [
             playbackControllerProvider.overrideWithValue(controller),
           ],
-          child: MaterialApp(
-            home: Scaffold(
-              bottomNavigationBar: MediaQuery(
+          child: const MaterialApp(
+            home: const Scaffold(
+              bottomNavigationBar: const MediaQuery(
                 data: const MediaQueryData(
                   textScaler: TextScaler.linear(2.5),
                 ),
