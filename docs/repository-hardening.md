@@ -189,6 +189,12 @@ only when all of the following hold:
 5. The live pull request, fetched by number **from this repository**, agrees:
    same number, based on this repository, same head repository, same head
    branch where the run carries one, and its head is still the scanned SHA.
+   The branch name is compared as opaque data: git accepts more than an obvious
+   character allowlist admits (`feature+test`, `feature@2`, non-ASCII names all
+   pass `git check-ref-format`), and rejecting a legitimate branch would strand
+   that pull request with a red reporter and no comment. Since the value is only
+   ever compared against the pull request's own `head.ref`, and never forms a
+   URL, a command, or a log line, no character in it can mean anything.
 
 Republishing another contributor's head commit into your own fork makes step 3
 match on the SHA, but the head repository is still your fork, so steps 4 and 5

@@ -51,7 +51,9 @@ SCANNER_EVENT = "pull_request"
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$")
-BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,255}$")
+# GitHub caps a branch name at 255 bytes. Nothing narrower is imposed: see
+# _branch below for why this value is bounded but not otherwise constrained.
+MAX_BRANCH_LENGTH = 255
 MAX_PR_NUMBER = 1_000_000
 MAX_CANDIDATES = 50
 MAX_REPORT_BYTES = 1_000_000
@@ -126,17 +128,26 @@ def _repository(value: object, field: str) -> str:
 
 
 def _branch(value: object, field: str) -> str | None:
-    """Branch names are optional; a present one must be a well-formed git ref.
+    """Branch names are optional, and are opaque equality-only data.
 
-    This value is only ever compared for equality, never placed in a URL, but
-    it is held to git's own ref rules anyway so that nothing path-shaped can be
-    carried under the name of a branch.
+    Deliberately no character allowlist. Git accepts far more than an obvious
+    one admits -- `feature+test`, `feature@2`, and non-ASCII names all pass
+    `git check-ref-format --branch` -- and rejecting a legitimate branch here
+    would leave the reporter red with no findings comment on that pull request,
+    which is the very failure this program exists to end. Reimplementing git's
+    real ref grammar would buy nothing either: this value is only ever compared
+    against the live pull request's own `head.ref`. It never forms a URL, a
+    command, or a log line, so no character in it can mean anything.
+
+    What is enforced is what a comparand needs: a string, a length bound, and no
+    ASCII control characters -- which git forbids in a ref anyway, and which are
+    the only class that could matter if this value were ever printed.
     """
     if value is None or value == "":
         return None
-    if not isinstance(value, str) or not BRANCH_RE.fullmatch(value):
+    if not isinstance(value, str) or len(value) > MAX_BRANCH_LENGTH:
         raise BindingError(f"invalid {field}")
-    if ".." in value or value.startswith("/") or value.endswith("/") or "//" in value:
+    if any(ch < " " or ch == "\x7f" for ch in value):
         raise BindingError(f"invalid {field}")
     return value
 

@@ -154,8 +154,33 @@ class ForkRecoveryTest(unittest.TestCase):
         (binding, may_write), _ = decide(event(head_branch=None), report())
         self.assertIsNone(binding.head_branch)
         self.assertTrue(may_write)
-        with self.assertRaises(binder.BindingError):
-            binder.resolve(event(head_branch="bad branch name"), report(), REPOSITORY)
+
+    def test_every_branch_name_git_accepts_is_accepted(self) -> None:
+        """A character allowlist here would strand legitimate pull requests.
+
+        Git accepts far more than an obvious allowlist admits; each of these
+        passes `git check-ref-format --branch`. Rejecting one would leave the
+        reporter red with no findings comment on that PR -- the exact failure
+        this program exists to end -- so the value is opaque and equality-only.
+        """
+        for branch in ("feature+test", "feature@2", "feature/ümlaut", "fix.v2",
+                       "user/JIRA-1_2", "release/1.0", "wip%20", "a" * 255):
+            with self.subTest(branch=branch):
+                api = Api(pulls=pull_request(head_branch=branch))
+                (binding, may_write), paths = decide(
+                    event(head_branch=branch), report(), api)
+                self.assertEqual(binding.head_branch, branch)
+                self.assertTrue(may_write)
+                # However odd the name, it never reaches an API path.
+                for path in paths.paths:
+                    self.assertNotIn(branch, path)
+
+    def test_branch_values_a_comparand_cannot_carry_are_refused(self) -> None:
+        """Only what a comparand needs: a string, a length bound, no controls."""
+        for bad in ("a" * 256, "with\nnewline", "with\x00null", "bell\x07", 7, ["x"]):
+            with self.subTest(bad=bad):
+                with self.assertRaises(binder.BindingError):
+                    binder.resolve(event(head_branch=bad), report(), REPOSITORY)
 
     def test_same_repository_run_still_binds_to_the_named_pr(self) -> None:
         """The pre-existing path must keep working, and keep winning."""
@@ -271,9 +296,6 @@ class ForkRecoveryTest(unittest.TestCase):
                     binder.resolve(event(), report(head_repository=value), REPOSITORY)
                 with self.assertRaises(binder.BindingError):
                     binder.resolve(event(), report(pr_number=value), REPOSITORY)
-                if value:  # an empty branch is simply "absent", not hostile
-                    with self.assertRaises(binder.BindingError):
-                        binder.resolve(event(head_branch=value), report(), REPOSITORY)
         api = Api()
         decide(event(), report(), api)
         # Only two repositories can ever appear, and both are GitHub-set values
