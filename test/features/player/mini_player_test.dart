@@ -98,7 +98,38 @@ void main() {
       // not the active/default provider.
       expect(find.text('Navidrome'), findsOneWidget);
     });
+    testWidgets('keeps text and controls usable at large text sizes', (
+      tester,
+    ) async {
+      final controller = FakePlaybackController(
+        initial: const PlaybackState(
+          status: PlaybackStatus.playing,
+          currentTrack: _track,
+        ),
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            playbackControllerProvider.overrideWithValue(controller),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(
+              bottomNavigationBar: MediaQuery(
+                data: MediaQueryData(
+                  textScaler: TextScaler.linear(2.5),
+                ),
+                child: MiniPlayer(),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
 
+      expect(tester.takeException(), isNull);
+      expect(find.text('Song One'), findsOneWidget);
+      expect(find.byTooltip('Pause'), findsOneWidget);
+    });
     testWidgets('play/pause delegates to the controller', (tester) async {
       final controller = FakePlaybackController(
         initial: const PlaybackState(
