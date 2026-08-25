@@ -39,6 +39,7 @@ _EXTERNAL_BLOCKED_PATHS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^\.idea/"), "IDE project configuration is maintainer-controlled"),
     (re.compile(r"(?:^|/).*\.code-workspace$", re.I), "VS Code workspace file is maintainer-controlled"),
     (re.compile(r"^\.github/workflows/"), "GitHub Actions workflows are maintainer-controlled"),
+    (re.compile(r"^\.github/actions/"), "GitHub composite actions are maintainer-controlled"),
     (re.compile(r"^(?:scripts|tool|tools)/"), "repository automation scripts are maintainer-controlled"),
     (re.compile(r"(?:^|/)CODEOWNERS$"), "code-ownership policy is maintainer-controlled"),
     (re.compile(r"^\.github/dependabot\.ya?ml$"), "dependency-update policy is maintainer-controlled"),
