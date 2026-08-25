@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/sources/local/audio_file_types.dart';
 
@@ -65,6 +67,28 @@ void main() {
           'wav',
         ]),
       );
+    });
+    test('matches the Android SAF scanner formats', () {
+      final File scanner = File(
+        'android/app/src/main/kotlin/io/github/thezupzup/linthra/'
+        'SafDocumentScanner.kt',
+      );
+      expect(scanner.existsSync(), isTrue);
+
+      final String source = scanner.readAsStringSync();
+      final RegExp listPattern = RegExp(
+        r'private val AUDIO_EXTENSIONS\s*=\s*listOf\((.*?)\)',
+        dotAll: true,
+      );
+      final RegExpMatch? listMatch = listPattern.firstMatch(source);
+      expect(listMatch, isNotNull);
+
+      final Set<String> androidExtensions = RegExp(r'"\.([^"]+)"')
+          .allMatches(listMatch!.group(1)!)
+          .map((RegExpMatch match) => match.group(1)!)
+          .toSet();
+
+      expect(androidExtensions, AudioFileTypes.supportedExtensions);
     });
   });
 
