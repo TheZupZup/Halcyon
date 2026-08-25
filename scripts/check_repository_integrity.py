@@ -14,21 +14,63 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import html
+import json
 import re
 import subprocess
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 
 @dataclass(frozen=True)
 class Finding:
+    # `commit` is the precise commit that introduced this violation, resolved by
+    # the history scan below. It is required: every finding is attributable.
+    commit: str
     path: str
     reason: str
+    severity: str = "blocked"
+    rule: str = "repository-integrity"
+    remediation: str = "Remove the prohibited change and rebuild the feature from the current clean main branch."
+
+    def as_dict(self) -> dict[str, str | None]:
+        """Render this finding for the JSON artifact, clamped to what the
+        reporter accepts. Clamping affects the report only, never the verdict."""
+        return {
+            "severity": self.severity,
+            "commit": self.commit,
+            "path": _clamp_report_field(self.path),
+            "rule": _clamp_report_field(self.rule),
+            "reason": _clamp_report_field(self.reason),
+            "remediation": _clamp_report_field(self.remediation),
+        }
 
 
 PROTECTED_IGNORE_ENTRIES = (".idea/", ".vscode/")
+
+# Must stay in step with MAX_FINDINGS in render_repository_integrity_comment.py:
+# the reporter fails closed on a longer list, which would strand a stale comment.
+MAX_REPORT_FINDINGS = 100
+
+# Must stay in step with MAX_FIELD_LENGTH in render_repository_integrity_comment.py.
+# Git accepts paths longer than this (components stay under NAME_MAX while the
+# whole path does not), and the reporter fails closed on an over-long field, so
+# an unclamped path would sink the entire artifact and strand a stale comment.
+MAX_REPORT_FIELD_CHARS = 2000
+_TRUNCATION_SUFFIX = "...[truncated]"
+
+
+def _clamp_report_field(value: str) -> str:
+    """Bound one artifact field, keeping the tail that identifies the offender.
+
+    The leading path components are the least distinguishing part of an
+    over-long path, so the end is preserved rather than the start.
+    """
+    if len(value) <= MAX_REPORT_FIELD_CHARS:
+        return value
+    keep = MAX_REPORT_FIELD_CHARS - len(_TRUNCATION_SUFFIX)
+    return _TRUNCATION_SUFFIX + value[-keep:]
 
 # Files that must be able to hold literal attack strings, because they are the
 # fixtures this guard is tested against. Only lines carrying the explicit marker
@@ -487,7 +529,7 @@ def _ignore_state(rules: list[str], entry: str) -> tuple[bool, str | None]:
 def check_ignore_policy(head: str) -> list[Finding]:
     text = blob_text(head, ".gitignore")
     if text is None:
-        return [Finding(".gitignore", "required repository .gitignore is missing")]
+        return [Finding(head, ".gitignore", "required repository .gitignore is missing")]
     rules = _ignore_rules(text)
 
     findings: list[Finding] = []
@@ -498,23 +540,24 @@ def check_ignore_policy(head: str) -> list[Finding]:
         if negated_by is not None:
             findings.append(
                 Finding(
+                    head,
                     ".gitignore",
                     f"required ignore entry `{entry}` is re-enabled by `{negated_by}`",
                 )
             )
         else:
             findings.append(
-                Finding(".gitignore", f"required ignore entry `{entry}` was removed")
+                Finding(head, ".gitignore", f"required ignore entry `{entry}` was removed")
             )
     return findings
 
 
-def check_external_paths(files: list[str]) -> list[Finding]:
+def check_external_paths(commit: str, files: list[str]) -> list[Finding]:
     findings: list[Finding] = []
     for path in files:
         for pattern, reason in EXTERNAL_BLOCKED_PATHS:
             if pattern.search(path):
-                findings.append(Finding(path, reason))
+                findings.append(Finding(commit, path, reason))
                 break
     return findings
 
@@ -526,7 +569,7 @@ def check_symlinks(head: str, files: list[str], external: bool) -> list[Finding]
     for path in files:
         if git_mode(head, path) == "120000":
             findings.append(
-                Finding(path, "external PR introduces or modifies a Git symlink")
+                Finding(head, path, "external PR introduces or modifies a Git symlink")
             )
     return findings
 
@@ -544,7 +587,7 @@ def check_asset_modes(head: str, files: list[str]) -> list[Finding]:
             continue
         if git_mode(head, path) == "100755":
             findings.append(
-                Finding(path, "asset file is committed with the executable bit set")
+                Finding(head, path, "asset file is committed with the executable bit set")
             )
     return findings
 
@@ -565,12 +608,12 @@ def check_asset_magic(head: str, files: list[str]) -> list[Finding]:
             # that is pure text is a polyglot candidate regardless of how well
             # it fakes a header, so reject it before the format check.
             findings.append(
-                Finding(path, f"file extension claims {label} but the file is entirely text")
+                Finding(head, path, f"file extension claims {label} but the file is entirely text")
             )
             continue
         if not is_valid(data):
             findings.append(
-                Finding(path, f"file extension claims {label} but the file is not a valid {label}")
+                Finding(head, path, f"file extension claims {label} but the file is not a valid {label}")
             )
     return findings
 
@@ -614,7 +657,7 @@ def check_active_svg(head: str, files: list[str]) -> list[Finding]:
             continue
         text = blob_text(head, path)
         if text is not None and svg_is_active(text):
-            findings.append(Finding(path, "SVG contains active/external executable content"))
+            findings.append(Finding(head, path, "SVG contains active/external executable content"))
     return findings
 
 
@@ -647,11 +690,11 @@ def asset_execution_finding(path: str, text: str) -> Finding | None:
     normalised = re.sub(r"\\\r?\n", "", "".join(scannable))
     for line in re.split(r"[\r\n]", normalised):
         if _EXECUTABLE_ASSET_RE.search(line):
-            return Finding(path, "text invokes or marks an asset file as executable")
+            return Finding("", path, "text invokes or marks an asset file as executable")
         for match in _NUMERIC_CHMOD_ASSET_RE.finditer(line):
             permission_digits = match.group("mode")[-3:]
             if any(int(digit) & 1 for digit in permission_digits):
-                return Finding(path, "text invokes or marks an asset file as executable")
+                return Finding("", path, "text invokes or marks an asset file as executable")
     return None
 
 
@@ -663,35 +706,132 @@ def check_asset_execution(head: str, files: list[str]) -> list[Finding]:
             continue
         finding = asset_execution_finding(path, data.decode("utf-8", "surrogateescape"))
         if finding is not None:
-            findings.append(finding)
+            findings.append(Finding(head, finding.path, finding.reason))
     return findings
 
 
 def dedupe(findings: list[Finding]) -> list[Finding]:
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, str]] = set()
     result: list[Finding] = []
     for finding in findings:
-        key = (finding.path, finding.reason)
+        key = (finding.commit, finding.path, finding.reason)
         if key not in seen:
             seen.add(key)
             result.append(finding)
     return result
 
 
+def actionable(finding: Finding) -> Finding:
+    """Attach a stable rule id and a concrete remediation to a raw finding.
+
+    Attribution is not reconstructed here: the history scan already resolved the
+    exact commit that introduced the violation, so this only maps the low-level
+    reason onto deterministic, actionable guidance for the PR comment.
+    """
+    reason = finding.reason.lower()
+    if "executable bit" in reason:
+        rule, remediation = "asset-executable-mode", "Remove the executable permission from the asset and recommit the mode change."
+    elif "file extension claims" in reason:
+        rule, remediation = "invalid-disguised-asset", "Replace the invalid asset with a real file of the declared asset type."
+    elif "svg contains" in reason:
+        rule, remediation = "active-svg-content", "Remove scripts, event handlers, foreign objects, and external active references from the SVG."
+    elif "invokes or marks an asset" in reason:
+        rule, remediation = "asset-execution-command", "Remove commands that execute the asset or grant it executable permission."
+    elif "gitignore" in reason or "ignore entry" in reason:
+        rule, remediation = "protected-ignore-policy", "Restore the required .idea/ and .vscode/ ignore rules without later negations."
+    elif "symlink" in reason:
+        rule, remediation = "external-symlink", "Remove the Git symlink or move the repository-control change to a maintainer-owned PR."
+    elif "maintainer-controlled" in reason:
+        rule, remediation = "external-maintainer-controlled-path", "Recreate or rebase the legitimate feature work onto a clean main history, or move this repository-control change to a maintainer-owned PR."
+    else:
+        rule, remediation = finding.rule, finding.remediation
+    return replace(finding, rule=rule, remediation=remediation)
+
+
+def resolve_commit(revision: str) -> str:
+    value = run_git("rev-parse", "--verify", f"{revision}^{{commit}}")
+    assert isinstance(value, str)
+    return value.strip()
+
+
+def commit_parents(commit: str) -> list[str]:
+    value = run_git("show", "-s", "--format=%P", commit)
+    assert isinstance(value, str)
+    return value.strip().split()
+
+
+def changed_files_between(old: str, new: str) -> list[str]:
+    raw = run_git(
+        "-c", "core.quotePath=false", "diff", "--name-only", "-z",
+        "--no-renames", old, new, "--",
+    )
+    assert isinstance(raw, str)
+    return [item for item in raw.split("\0") if item]
+
+
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def commit_introduced_files(commit: str) -> list[str]:
+    """Paths whose state was introduced by this commit rather than a parent.
+
+    For an ordinary commit this is its parent diff. For a merge, only paths
+    different from *every* parent are merge-introduced. That catches novel
+    conflict resolutions without blaming an Update-branch merge for content
+    copied unchanged from either the PR or trusted-main parent.
+    """
+    parents = commit_parents(commit)
+    if not parents:
+        return changed_files_between(EMPTY_TREE, commit)
+    changed_by_parent = [set(changed_files_between(parent, commit)) for parent in parents]
+    return sorted(set.intersection(*changed_by_parent))
+
+
+def introduced_commits(base: str, head: str) -> list[str]:
+    # A GitHub PR must share ancestry with its trusted base. Refuse unrelated
+    # histories rather than broadening the scan to an entire foreign history.
+    merge_base = run_git("merge-base", base, head)
+    assert isinstance(merge_base, str)
+    if not merge_base.strip():
+        raise IntegrityError("PR head has no merge base with the trusted base")
+    raw = run_git("rev-list", "--reverse", "--topo-order", head, "--not", base)
+    assert isinstance(raw, str)
+    return raw.split()
+
+
+def scan_tree(commit: str, files: list[str], external: bool, *, check_ignore: bool) -> list[Finding]:
+    findings: list[Finding] = []
+    if check_ignore:
+        findings.extend(check_ignore_policy(commit))
+    if external:
+        findings.extend(check_external_paths(commit, files))
+    findings.extend(check_symlinks(commit, files, external))
+    findings.extend(check_asset_modes(commit, files))
+    findings.extend(check_asset_magic(commit, files))
+    findings.extend(check_active_svg(commit, files))
+    findings.extend(check_asset_execution(commit, files))
+    return findings
+
+
 def scan(base: str, head: str, pr_author: str, repo_owner: str) -> list[Finding]:
-    files = changed_files(base, head)
+    base = resolve_commit(base)
+    head = resolve_commit(head)
     external = is_external(pr_author, repo_owner)
 
     findings: list[Finding] = []
-    findings.extend(check_ignore_policy(head))
-    if external:
-        findings.extend(check_external_paths(files))
-    findings.extend(check_symlinks(head, files, external))
-    findings.extend(check_asset_modes(head, files))
-    findings.extend(check_asset_magic(head, files))
-    findings.extend(check_active_svg(head, files))
-    findings.extend(check_asset_execution(head, files))
-    return dedupe(findings)
+    for commit in introduced_commits(base, head):
+        files = commit_introduced_files(commit)
+        findings.extend(scan_tree(commit, files, external, check_ignore=".gitignore" in files))
+
+    # Preserve the final-tree check as defense in depth, but do not attribute a
+    # historical violation to a later merge merely because it remains present
+    # there. Historical findings are the more precise explanation.
+    files = changed_files(base, head)
+    historical_keys = {(finding.path, finding.reason) for finding in findings}
+    for finding in scan_tree(head, files, external, check_ignore=".gitignore" in files):
+        if (finding.path, finding.reason) not in historical_keys:
+            findings.append(finding)
+    return [actionable(finding) for finding in dedupe(findings)]
 
 
 def write_report(path: Path, findings: list[Finding]) -> None:
@@ -703,11 +843,36 @@ def write_report(path: Path, findings: list[Finding]) -> None:
             return
         out.write("### Blocked findings\n\n")
         for finding in findings:
-            out.write(f"- `{finding.path}` — {finding.reason}\n")
+            out.write(
+                f"- commit `{finding.commit}` — `{finding.path}` — {finding.reason}\n"
+            )
         out.write(
             "\nThese checks fail closed. Repository-control changes must be "
             "performed from a trusted maintainer-controlled branch.\n"
         )
+
+
+def write_json_report(path: Path, findings: list[Finding], *, pr_number: int,
+                      head: str, head_repository: str) -> None:
+    """Write the machine-readable artifact the trusted reporter consumes.
+
+    The list is capped to the bound the reporter enforces. Without the cap a PR
+    with more findings than that bound produces an artifact its own reporter
+    rejects, so the sticky comment silently goes stale while the guard is
+    blocking. Truncation is a reporting concern only: it never affects the
+    verdict, which is computed from the complete finding list.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    reported = findings[:MAX_REPORT_FINDINGS]
+    payload = {
+        "schema_version": 1,
+        "pr_number": pr_number,
+        "head_sha": head,
+        "head_repository": head_repository,
+        "truncated": len(findings) - len(reported),
+        "findings": [finding.as_dict() for finding in reported],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -717,6 +882,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pr-author", required=True)
     parser.add_argument("--repo-owner", required=True)
     parser.add_argument("--report", required=True)
+    parser.add_argument("--json-report", required=True)
+    parser.add_argument("--pr-number", required=True, type=int)
+    parser.add_argument("--head-repository", required=True)
     args = parser.parse_args(argv)
 
     for stream in (sys.stdout, sys.stderr):
@@ -729,11 +897,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     write_report(Path(args.report), findings)
+    write_json_report(Path(args.json_report), findings, pr_number=args.pr_number,
+                      head=args.head, head_repository=args.head_repository)
 
     if findings:
         print("Repository integrity guard blocked the PR:")
         for finding in findings:
-            print(f"  {finding.path}: {finding.reason}")
+            print(f"  {finding.commit} {finding.path}: {finding.reason}")
         return 1
 
     print("Repository integrity guard passed.")
