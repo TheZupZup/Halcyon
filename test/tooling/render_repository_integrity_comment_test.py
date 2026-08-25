@@ -36,29 +36,57 @@ EVENT = {"workflow_run": {"head_sha": SHA, "head_repository": {"full_name": "for
 
 class ReporterTest(unittest.TestCase):
     def test_one_violation_is_actionable(self) -> None:
-        body = reporter.render(reporter.validate(payload([finding()]), EVENT))
+        body = reporter.render(*reporter.validate(payload([finding()]), EVENT))
         self.assertIn("**BLOCKED**", body)
         self.assertIn("**How to fix:** remove the prohibited path", body)
         self.assertIn(SHA, body)
 
     def test_multiple_findings_are_one_comment(self) -> None:
-        body = reporter.render(reporter.validate(payload([finding("one"), finding("two")]), EVENT))
+        body = reporter.render(*reporter.validate(payload([finding("one"), finding("two")]), EVENT))
         self.assertEqual(body.count(reporter.MARKER), 1)
         self.assertIn("Finding 1", body)
         self.assertIn("Finding 2", body)
 
     def test_resolved_is_clean_with_same_marker(self) -> None:
-        body = reporter.render(reporter.validate(payload([]), EVENT))
+        body = reporter.render(*reporter.validate(payload([]), EVENT))
         self.assertTrue(body.startswith(reporter.MARKER))
         self.assertIn("**CLEAN**", body)
 
     def test_markup_and_html_are_inert(self) -> None:
         hostile = finding("</details> @everyone [click](javascript:alert(1)) `x`")
-        body = reporter.render(reporter.validate(payload([hostile]), EVENT))
+        body = reporter.render(*reporter.validate(payload([hostile]), EVENT))
         self.assertNotIn("</details>", body)
         self.assertNotIn("@everyone", body)
         self.assertNotIn("(javascript:alert", body)
         self.assertIn("&#60;", body)
+
+    def test_truncated_findings_are_reported_not_silently_dropped(self) -> None:
+        """The scanner caps the artifact at MAX_FINDINGS; the cap must be visible.
+
+        Producing more than the reporter accepts used to fail validation, which
+        left a stale sticky comment while the guard was blocking.
+        """
+        capped = payload([finding(f"scripts/x{i}.sh") for i in range(reporter.MAX_FINDINGS)])
+        capped["truncated"] = 7
+        findings, truncated = reporter.validate(capped, EVENT)
+        self.assertEqual(truncated, 7)
+        body = reporter.render(findings, truncated)
+        self.assertIn("**BLOCKED**", body)
+        self.assertIn("7 further finding(s) were withheld", body)
+        self.assertIn("all of them block this PR", body)
+
+    def test_truncated_count_is_validated(self) -> None:
+        for bad in (-1, "3", 1.5, True, None):
+            with self.subTest(bad=bad):
+                bogus = payload([finding()])
+                bogus["truncated"] = bad
+                with self.assertRaises(ValueError):
+                    reporter.validate(bogus, EVENT)
+
+    def test_absent_truncated_defaults_to_zero(self) -> None:
+        findings, truncated = reporter.validate(payload([finding()]), EVENT)
+        self.assertEqual(truncated, 0)
+        self.assertNotIn("withheld", reporter.render(findings, truncated))
 
     def test_report_binding_and_shape_are_fail_closed(self) -> None:
         bad = payload([finding()])
@@ -88,6 +116,16 @@ class ReporterTest(unittest.TestCase):
         # repository security surface scanner.
         blocked_trigger = "pull_request" + "_target"
         self.assertNotIn(blocked_trigger, writer)
+
+    def test_reporter_binds_to_the_scanner_workflow_identity(self) -> None:
+        """Display name alone is contributor-forgeable; bind the file path too."""
+        writer = (ROOT / ".github/workflows/repository-integrity-reporter.yml").read_text()
+        self.assertIn(
+            "github.event.workflow_run.path == '.github/workflows/repository-integrity.yml'",
+            writer,
+        )
+        self.assertIn("github.event.workflow_run.event == 'pull_request'", writer)
+        self.assertIn("github.event.workflow_run.pull_requests[0] != null", writer)
 
     def test_untrusted_fields_are_never_inserted_into_commands(self) -> None:
         writer = (ROOT / ".github/workflows/repository-integrity-reporter.yml").read_text()

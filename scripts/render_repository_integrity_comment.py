@@ -27,7 +27,7 @@ def safe_text(value: object, field: str) -> str:
     return "".join(ch if ch.isalnum() or ch in " .,_/-:" else f"&#{ord(ch)};" for ch in value)
 
 
-def validate(payload: object, event: object) -> list[dict[str, str | None]]:
+def validate(payload: object, event: object) -> tuple[list[dict[str, str | None]], int]:
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
         raise ValueError("unsupported report schema")
     if not isinstance(event, dict):
@@ -49,6 +49,9 @@ def validate(payload: object, event: object) -> list[dict[str, str | None]]:
     findings = payload.get("findings")
     if not isinstance(findings, list) or len(findings) > MAX_FINDINGS:
         raise ValueError("invalid findings list")
+    truncated = payload.get("truncated", 0)
+    if not isinstance(truncated, int) or isinstance(truncated, bool) or truncated < 0:
+        raise ValueError("invalid truncated count")
     validated: list[dict[str, str | None]] = []
     for raw in findings:
         if not isinstance(raw, dict) or set(raw) != {"severity", "commit", *FIELDS}:
@@ -61,10 +64,10 @@ def validate(payload: object, event: object) -> list[dict[str, str | None]]:
         item = {field: safe_text(raw[field], field) for field in FIELDS}
         item.update(severity=raw["severity"], commit=commit)
         validated.append(item)
-    return validated
+    return validated, truncated
 
 
-def render(findings: list[dict[str, str | None]]) -> str:
+def render(findings: list[dict[str, str | None]], truncated: int = 0) -> str:
     lines = [MARKER, "## Repository integrity review", ""]
     if not findings:
         return "\n".join(lines + ["**CLEAN**", "", "Previously reported repository-integrity findings are resolved."])
@@ -80,6 +83,10 @@ def render(findings: list[dict[str, str | None]]) -> str:
             f"- **Explanation:** {item['reason']}",
             f"- **How to fix:** {item['remediation']}", "",
         ]
+    if truncated > 0:
+        lines.append(f"{truncated} further finding(s) were withheld from this comment. "
+                     "The check output lists every finding; all of them block this PR.")
+        lines.append("")
     lines.append("This report describes observable repository state and history; it does not infer contributor intent.")
     return "\n".join(lines)
 
@@ -94,7 +101,8 @@ def main() -> int:
         raise ValueError("report exceeds size limit")
     payload = json.loads(args.report.read_text(encoding="utf-8"))
     event = json.loads(args.event.read_text(encoding="utf-8"))
-    args.output.write_text(render(validate(payload, event)), encoding="utf-8")
+    findings, truncated = validate(payload, event)
+    args.output.write_text(render(findings, truncated), encoding="utf-8")
     return 0
 
 

@@ -7,6 +7,12 @@ on:
 
 # This trusted workflow never checks out the PR head. Its sole write permission
 # is posting an issue-style comment on the PR identified by workflow_run.
+#
+# The `workflows:` filter above matches on display name only, which a
+# contributor could copy onto an unrelated workflow to have it upload a forged
+# findings artifact. The job below therefore also binds to the scanner's
+# immutable file path, and to runs that carry a populated `pull_requests` array
+# (empty for fork-originated runs).
 permissions:
   actions: read
   contents: read
@@ -14,7 +20,10 @@ permissions:
 
 jobs:
   report:
-    if: ${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.pull_requests[0] != null }}
+    if: >-
+      ${{ github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.path == '.github/workflows/repository-integrity.yml'
+      && github.event.workflow_run.pull_requests[0] != null }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout trusted default branch reporter

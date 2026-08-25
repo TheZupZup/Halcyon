@@ -47,6 +47,10 @@ class Finding:
 
 PROTECTED_IGNORE_ENTRIES = (".idea/", ".vscode/")
 
+# Must stay in step with MAX_FINDINGS in render_repository_integrity_comment.py:
+# the reporter fails closed on a longer list, which would strand a stale comment.
+MAX_REPORT_FINDINGS = 100
+
 # Files that must be able to hold literal attack strings, because they are the
 # fixtures this guard is tested against. Only lines carrying the explicit marker
 # below are exempted, and only inside these exact paths.
@@ -829,13 +833,23 @@ def write_report(path: Path, findings: list[Finding]) -> None:
 
 def write_json_report(path: Path, findings: list[Finding], *, pr_number: int,
                       head: str, head_repository: str) -> None:
+    """Write the machine-readable artifact the trusted reporter consumes.
+
+    The list is capped to the bound the reporter enforces. Without the cap a PR
+    with more findings than that bound produces an artifact its own reporter
+    rejects, so the sticky comment silently goes stale while the guard is
+    blocking. Truncation is a reporting concern only: it never affects the
+    verdict, which is computed from the complete finding list.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    reported = findings[:MAX_REPORT_FINDINGS]
     payload = {
         "schema_version": 1,
         "pr_number": pr_number,
         "head_sha": head,
         "head_repository": head_repository,
-        "findings": [finding.as_dict() for finding in findings],
+        "truncated": len(findings) - len(reported),
+        "findings": [finding.as_dict() for finding in reported],
     }
     path.write_text(json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
 
