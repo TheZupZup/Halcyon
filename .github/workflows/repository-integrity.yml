@@ -1,0 +1,91 @@
+name: Repository integrity
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    name: Repository integrity guard tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Run guard tests
+        run: python3 test/tooling/check_repository_integrity_test.py
+
+  integrity:
+    name: Repository integrity guard
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+      HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      REPO_OWNER: ${{ github.repository_owner }}
+      CHECKER_PATH: scripts/check_repository_integrity.py
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Load trusted integrity checker
+        shell: bash
+        run: |
+          set -euo pipefail
+          checker="$RUNNER_TEMP/check_repository_integrity.py"
+
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --quiet origin "$BASE_SHA" 2>/dev/null || true
+          fi
+
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::Base commit $BASE_SHA is unavailable; refusing to evaluate repository integrity on incomplete history."
+            exit 1
+          fi
+
+          if git cat-file -e "$BASE_SHA:$CHECKER_PATH" 2>/dev/null; then
+            git show "$BASE_SHA:$CHECKER_PATH" > "$checker"
+            echo "Loaded repository-integrity checker from trusted PR base."
+          elif [ "$PR_AUTHOR" = "$REPO_OWNER" ] && [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then
+            cp "$CHECKER_PATH" "$checker"
+            echo "Bootstrap: using repository-owner HEAD copy."
+          else
+            echo "::error::Trusted repository-integrity checker is missing from the PR base."
+            exit 1
+          fi
+
+      - name: Run repository integrity guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/check_repository_integrity.py" \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --pr-author "$PR_AUTHOR" \
+            --repo-owner "$REPO_OWNER" \
+            --report "$RUNNER_TEMP/repository-integrity.md"
+
+      - name: Publish repository integrity report
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/repository-integrity.md" ]; then
+            cat "$RUNNER_TEMP/repository-integrity.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
