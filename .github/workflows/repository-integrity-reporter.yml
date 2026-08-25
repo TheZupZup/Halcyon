@@ -42,30 +42,45 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
+      # The guard job does not run on draft pull requests, so those runs upload
+      # no artifact at all, and a reporter with nothing to report must not go
+      # red. That is the ONLY suppressed case, and it is established by asking
+      # the Actions API what this run uploaded rather than by tolerating a
+      # failed download: a download error, an expired artifact, or a scan that
+      # died before uploading would otherwise all read as "nothing to report"
+      # and finish green, leaving an earlier sticky verdict standing over a
+      # scan whose result was never rendered.
+      - name: Check whether the scanner uploaded findings
+        id: artifact
+        uses: actions/github-script@v8
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        with:
+          script: |
+            const run_id = Number.parseInt(process.env.RUN_ID, 10);
+            if (!Number.isSafeInteger(run_id) || run_id < 1) {
+              throw new Error('invalid triggering run id');
+            }
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              { owner: context.repo.owner, repo: context.repo.repo, run_id, per_page: 100 }
+            );
+            const present = artifacts.some(a => a.name === 'repository-integrity-findings');
+            if (!present) {
+              core.notice('The scanner run uploaded no findings artifact; there is nothing to report.');
+            }
+            core.setOutput('present', String(present));
+
+      # The artifact is known to exist by this point, so a failed download is a
+      # real failure and is deliberately left to fail the job.
       - name: Download scanner report only
-        continue-on-error: true
+        if: ${{ steps.artifact.outputs.present == 'true' }}
         uses: actions/download-artifact@v8
         with:
           name: repository-integrity-findings
           path: ${{ runner.temp }}/repository-integrity
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
-
-      # The guard job does not run on draft pull requests, so those runs upload
-      # no artifact at all. That is not a reporter failure and must not turn the
-      # job red; it is recorded and the run stops here. Anything else about the
-      # artifact -- malformed, unbindable, mismatched -- still fails the job.
-      - name: Require a findings artifact
-        id: artifact
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f "$RUNNER_TEMP/repository-integrity/report.json" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::The scanner run produced no findings artifact; there is nothing to report."
-          fi
 
       - name: Bind the report to a pull request
         id: bind

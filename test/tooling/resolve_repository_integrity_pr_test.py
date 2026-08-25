@@ -295,11 +295,26 @@ class TrustBoundaryTest(unittest.TestCase):
         self.assertIn("github.event.workflow_run.repository.full_name == github.repository",
                       self.reporter)
 
-    def test_a_run_without_an_artifact_reports_nothing_and_stays_green(self) -> None:
-        """Draft pull requests skip the guard job, so no artifact is uploaded."""
+    def test_only_a_genuinely_absent_artifact_is_suppressed(self) -> None:
+        """Draft pull requests skip the guard job, so no artifact is uploaded.
+
+        Tolerating a failed download instead would swallow every other reason
+        the report can be missing -- a transport error, an expired artifact, a
+        scan that died before uploading -- and finish green, leaving an earlier
+        sticky verdict standing over a scan that was never rendered. Absence is
+        therefore established from the Actions API, before downloading.
+        """
+        self.assertIn("listWorkflowRunArtifacts", self.reporter)
+        self.assertIn("a.name === 'repository-integrity-findings'", self.reporter)
         self.assertIn("steps.artifact.outputs.present == 'true'", self.reporter)
-        self.assertIn('if [ -f "$RUNNER_TEMP/repository-integrity/report.json" ]',
-                      self.reporter)
+        # Nothing in the reporter may swallow a failure. Matched per line so a
+        # comment mentioning the key cannot satisfy or defeat the assertion.
+        self.assertEqual(
+            [line for line in self.reporter.splitlines()
+             if line.strip().startswith("continue-on-error")], [])
+        # The check must precede the download it guards.
+        self.assertLess(self.reporter.index("listWorkflowRunArtifacts"),
+                        self.reporter.index("uses: actions/download-artifact"))
 
     def test_reporter_downloads_only_this_run_and_binds_before_writing(self) -> None:
         self.assertIn("run-id: ${{ github.event.workflow_run.id }}", self.reporter)
