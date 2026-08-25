@@ -1,0 +1,69 @@
+name: Repository integrity reporter
+
+on:
+  workflow_run:
+    workflows: [Repository integrity]
+    types: [completed]
+
+# This trusted workflow never checks out the PR head. Its sole write permission
+# is posting an issue-style comment on the PR identified by workflow_run.
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+jobs:
+  report:
+    if: ${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.pull_requests[0] != null }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout trusted default branch reporter
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Download scanner report only
+        uses: actions/download-artifact@v7
+        with:
+          name: repository-integrity-findings
+          path: ${{ runner.temp }}/repository-integrity
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate and render report as inert data
+        run: |
+          python3 scripts/render_repository_integrity_comment.py \
+            --report "$RUNNER_TEMP/repository-integrity/report.json" \
+            --event "$GITHUB_EVENT_PATH" \
+            --output "$RUNNER_TEMP/repository-integrity/comment.md"
+
+      - name: Create or update the sticky PR comment
+        uses: actions/github-script@v8
+        env:
+          COMMENT_PATH: ${{ runner.temp }}/repository-integrity/comment.md
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- linthra-repository-integrity-v1 -->';
+            const body = fs.readFileSync(process.env.COMMENT_PATH, 'utf8');
+            const issue_number = Number.parseInt(process.env.PR_NUMBER, 10);
+            if (!Number.isSafeInteger(issue_number) || issue_number < 1 || !body.startsWith(marker)) {
+              throw new Error('validated comment binding is invalid');
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner, repo: context.repo.repo, issue_number, per_page: 100
+            });
+            const prior = comments.find(comment =>
+              comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(marker));
+            if (prior) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: prior.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number, body
+              });
+            }

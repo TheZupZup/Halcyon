@@ -14,11 +14,12 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import html
+import json
 import re
 import subprocess
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 
@@ -26,6 +27,20 @@ from pathlib import Path
 class Finding:
     path: str
     reason: str
+    severity: str = "blocked"
+    commit: str | None = None
+    rule: str = "repository-integrity"
+    remediation: str = "Remove the prohibited change and rebuild the feature from the current clean main branch."
+
+    def as_dict(self) -> dict[str, str | None]:
+        return {
+            "severity": self.severity,
+            "commit": self.commit,
+            "path": self.path,
+            "rule": self.rule,
+            "reason": self.reason,
+            "remediation": self.remediation,
+        }
 
 
 PROTECTED_IGNORE_ENTRIES = (".idea/", ".vscode/")
@@ -405,6 +420,40 @@ def changed_files(base: str, head: str) -> list[str]:
     return [item for item in raw.split("\0") if item]
 
 
+def commits_touching_paths(base: str, head: str) -> list[tuple[str, str]]:
+    """Return every path touched by every commit the PR would introduce."""
+    raw = run_git(
+        "-c", "core.quotePath=false", "log", "--reverse", "--format=%x1e%H",
+        "--name-only", "-z", f"{base}..{head}", "--",
+    )
+    assert isinstance(raw, str)
+    result: list[tuple[str, str]] = []
+    for record in raw.split("\x1e"):
+        fields = [field for field in record.strip("\0\n").split("\0") if field]
+        if not fields:
+            continue
+        commit = fields[0].strip()
+        result.extend((commit, path.strip()) for path in fields[1:] if path.strip())
+    return result
+
+
+def historical_external_findings(base: str, head: str) -> list[Finding]:
+    findings: list[Finding] = []
+    for commit, path in commits_touching_paths(base, head):
+        for pattern, reason in EXTERNAL_BLOCKED_PATHS:
+            if pattern.search(path):
+                findings.append(Finding(
+                    path=path,
+                    reason=(f"Commit {commit[:12]} modifies a maintainer-controlled surface. "
+                            f"{reason}. The commit remains in the PR history even if a later commit removes the path."),
+                    commit=commit,
+                    rule="external-maintainer-controlled-path",
+                    remediation="Recreate or rebase the legitimate feature work onto a clean main history, or move this repository-control change to a maintainer-owned PR.",
+                ))
+                break
+    return findings
+
+
 def blob_bytes(head: str, path: str) -> bytes | None:
     try:
         value = run_git("show", f"{head}:{path}", text=False)
@@ -678,20 +727,44 @@ def dedupe(findings: list[Finding]) -> list[Finding]:
     return result
 
 
+def actionable(finding: Finding, commits_by_path: dict[str, str]) -> Finding:
+    reason = finding.reason.lower()
+    if "executable bit" in reason:
+        rule, remediation = "asset-executable-mode", "Remove the executable permission from the asset and recommit the mode change."
+    elif "file extension claims" in reason:
+        rule, remediation = "invalid-disguised-asset", "Replace the invalid asset with a real file of the declared asset type."
+    elif "svg contains" in reason:
+        rule, remediation = "active-svg-content", "Remove scripts, event handlers, foreign objects, and external active references from the SVG."
+    elif "invokes or marks an asset" in reason:
+        rule, remediation = "asset-execution-command", "Remove commands that execute the asset or grant it executable permission."
+    elif "gitignore" in reason or "ignore entry" in reason:
+        rule, remediation = "protected-ignore-policy", "Restore the required .idea/ and .vscode/ ignore rules without later negations."
+    elif "symlink" in reason:
+        rule, remediation = "external-symlink", "Remove the Git symlink or move the repository-control change to a maintainer-owned PR."
+    else:
+        rule, remediation = finding.rule, finding.remediation
+    return replace(finding, commit=finding.commit or commits_by_path.get(finding.path),
+                   rule=rule, remediation=remediation)
+
+
 def scan(base: str, head: str, pr_author: str, repo_owner: str) -> list[Finding]:
     files = changed_files(base, head)
+    history = commits_touching_paths(base, head)
+    commits_by_path: dict[str, str] = {}
+    for commit, path in history:
+        commits_by_path.setdefault(path, commit)
     external = is_external(pr_author, repo_owner)
 
     findings: list[Finding] = []
     findings.extend(check_ignore_policy(head))
     if external:
-        findings.extend(check_external_paths(files))
+        findings.extend(historical_external_findings(base, head))
     findings.extend(check_symlinks(head, files, external))
     findings.extend(check_asset_modes(head, files))
     findings.extend(check_asset_magic(head, files))
     findings.extend(check_active_svg(head, files))
     findings.extend(check_asset_execution(head, files))
-    return dedupe(findings)
+    return dedupe([actionable(finding, commits_by_path) for finding in findings])
 
 
 def write_report(path: Path, findings: list[Finding]) -> None:
@@ -703,11 +776,25 @@ def write_report(path: Path, findings: list[Finding]) -> None:
             return
         out.write("### Blocked findings\n\n")
         for finding in findings:
-            out.write(f"- `{finding.path}` — {finding.reason}\n")
+            commit = f" (commit `{finding.commit}`)" if finding.commit else ""
+            out.write(f"- `{finding.path}`{commit} — {finding.reason}\n")
         out.write(
             "\nThese checks fail closed. Repository-control changes must be "
             "performed from a trusted maintainer-controlled branch.\n"
         )
+
+
+def write_json_report(path: Path, findings: list[Finding], *, pr_number: int,
+                      head: str, head_repository: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "pr_number": pr_number,
+        "head_sha": head,
+        "head_repository": head_repository,
+        "findings": [finding.as_dict() for finding in findings],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -717,6 +804,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pr-author", required=True)
     parser.add_argument("--repo-owner", required=True)
     parser.add_argument("--report", required=True)
+    parser.add_argument("--json-report", required=True)
+    parser.add_argument("--pr-number", required=True, type=int)
+    parser.add_argument("--head-repository", required=True)
     args = parser.parse_args(argv)
 
     for stream in (sys.stdout, sys.stderr):
@@ -729,6 +819,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     write_report(Path(args.report), findings)
+    write_json_report(Path(args.json_report), findings, pr_number=args.pr_number,
+                      head=args.head, head_repository=args.head_repository)
 
     if findings:
         print("Repository integrity guard blocked the PR:")
