@@ -102,6 +102,15 @@ class ReporterTest(unittest.TestCase):
         withheld = int(body.split(" further finding(s)")[0].rsplit("\n", 1)[-1])
         self.assertEqual(shown + withheld, reporter.MAX_FINDINGS + 5)
 
+    def test_field_at_the_exact_bound_is_accepted(self) -> None:
+        """The producer clamps to exactly this bound, so it must validate."""
+        exact = payload([finding("p" * reporter.MAX_FIELD_LENGTH)])
+        findings, _ = reporter.validate(exact, EVENT)
+        self.assertEqual(len(findings), 1)
+        over = payload([finding("p" * (reporter.MAX_FIELD_LENGTH + 1))])
+        with self.assertRaises(ValueError):
+            reporter.validate(over, EVENT)
+
     def test_truncated_count_is_validated(self) -> None:
         for bad in (-1, "3", 1.5, True, None):
             with self.subTest(bad=bad):

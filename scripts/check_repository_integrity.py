@@ -35,13 +35,15 @@ class Finding:
     remediation: str = "Remove the prohibited change and rebuild the feature from the current clean main branch."
 
     def as_dict(self) -> dict[str, str | None]:
+        """Render this finding for the JSON artifact, clamped to what the
+        reporter accepts. Clamping affects the report only, never the verdict."""
         return {
             "severity": self.severity,
             "commit": self.commit,
-            "path": self.path,
-            "rule": self.rule,
-            "reason": self.reason,
-            "remediation": self.remediation,
+            "path": _clamp_report_field(self.path),
+            "rule": _clamp_report_field(self.rule),
+            "reason": _clamp_report_field(self.reason),
+            "remediation": _clamp_report_field(self.remediation),
         }
 
 
@@ -50,6 +52,25 @@ PROTECTED_IGNORE_ENTRIES = (".idea/", ".vscode/")
 # Must stay in step with MAX_FINDINGS in render_repository_integrity_comment.py:
 # the reporter fails closed on a longer list, which would strand a stale comment.
 MAX_REPORT_FINDINGS = 100
+
+# Must stay in step with MAX_FIELD_LENGTH in render_repository_integrity_comment.py.
+# Git accepts paths longer than this (components stay under NAME_MAX while the
+# whole path does not), and the reporter fails closed on an over-long field, so
+# an unclamped path would sink the entire artifact and strand a stale comment.
+MAX_REPORT_FIELD_CHARS = 2000
+_TRUNCATION_SUFFIX = "...[truncated]"
+
+
+def _clamp_report_field(value: str) -> str:
+    """Bound one artifact field, keeping the tail that identifies the offender.
+
+    The leading path components are the least distinguishing part of an
+    over-long path, so the end is preserved rather than the start.
+    """
+    if len(value) <= MAX_REPORT_FIELD_CHARS:
+        return value
+    keep = MAX_REPORT_FIELD_CHARS - len(_TRUNCATION_SUFFIX)
+    return _TRUNCATION_SUFFIX + value[-keep:]
 
 # Files that must be able to hold literal attack strings, because they are the
 # fixtures this guard is tested against. Only lines carrying the explicit marker

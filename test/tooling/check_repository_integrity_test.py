@@ -708,6 +708,27 @@ class RepositoryIntegrityTest(unittest.TestCase):
             any(f.commit == merge and f.path == "assets/resolution.png" for f in findings)
         )
 
+    def test_over_long_paths_stay_within_the_reporter_field_bound(self) -> None:
+        """Git accepts paths longer than the reporter's per-field limit.
+
+        Emitting one unclamped sinks the whole artifact, so the reporter fails
+        and an earlier CLEAN comment can survive a blocking revision.
+        """
+        deep = self.repo / "scripts"
+        for i in range(9):
+            deep = deep / (f"d{i}" + "x" * 247)
+        deep.mkdir(parents=True)
+        (deep / "s.sh").write_text("echo hi\n", encoding="utf-8")
+        commit = self.commit("deep protected path")
+        findings = self.scan(commit)
+        raw = next(f for f in findings if f.path.endswith("/s.sh"))
+        self.assertGreater(len(raw.path), integrity.MAX_REPORT_FIELD_CHARS)
+        emitted = raw.as_dict()
+        self.assertLessEqual(len(emitted["path"]), integrity.MAX_REPORT_FIELD_CHARS)
+        # The tail identifies the offender, so it must survive the clamp.
+        self.assertTrue(emitted["path"].endswith("/s.sh"))
+        self.assertTrue(emitted["path"].startswith("...[truncated]"))
+
     def test_report_names_commit_path_and_reason(self) -> None:
         path = self.repo / "assets" / "report.png"
         path.parent.mkdir()
