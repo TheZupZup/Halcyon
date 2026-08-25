@@ -63,7 +63,15 @@ def png_blob() -> bytes:
 
 
 def pdf_blob() -> bytes:
-    return b"%PDF-1.7\n" + bytes(24) + b"\ntrailer\n%%EOF\n"
+    """Entirely ASCII, as a standards-compliant PDF is allowed to be."""
+    return (
+        b"%PDF-1.4\n"
+        b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+        b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+        b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n"
+        b"xref\n0 4\n0000000000 65535 f \n"
+        b"trailer<</Size 4/Root 1 0 R>>\nstartxref\n0\n%%EOF\n"
+    )
 
 
 def ico_blob() -> bytes:
@@ -207,6 +215,16 @@ class RepositoryIntegrityTest(unittest.TestCase):
         (self.repo / "docs").mkdir()
         (self.repo / "docs" / "ok.pdf").write_bytes(pdf_blob())
         (self.repo / "docs" / "ok.ico").write_bytes(ico_blob())
+        findings = self.scan(self.commit())
+        self.assertEqual(findings, [])
+
+    def test_ascii_only_pdf_is_not_flagged_as_text(self) -> None:
+        """A valid PDF may contain no binary at all; the backstop must not fire."""
+        path = self.repo / "docs" / "ascii.pdf"
+        path.parent.mkdir()
+        blob = pdf_blob()
+        self.assertNotIn(b"\x00", blob, "fixture must be genuinely ASCII-only")
+        path.write_bytes(blob)
         findings = self.scan(self.commit())
         self.assertEqual(findings, [])
 
@@ -422,6 +440,19 @@ class RepositoryIntegrityTest(unittest.TestCase):
         )
         findings = self.scan(self.commit())
         self.assertTrue(any("SVG contains active" in f.reason for f in findings))
+
+    def test_svg_text_node_mentioning_a_scheme_is_not_flagged(self) -> None:
+        """Prose is not a URL: the normalised pass is anchored to href."""
+        path = self.repo / "assets" / "prose.svg"
+        path.parent.mkdir()
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg">'
+            '<text>Use java&#x09;script: for this</text>'
+            '<text>java&#x0a;script:</text><rect width="1" height="1"/></svg>',
+            encoding="utf-8",
+        )
+        findings = self.scan(self.commit())
+        self.assertEqual(findings, [])
 
     def test_svg_text_split_across_lines_is_not_flagged(self) -> None:
         """Control stripping must not join unrelated tokens into a false match."""

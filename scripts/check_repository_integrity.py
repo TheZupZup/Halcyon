@@ -229,6 +229,13 @@ def _valid_ico(data: bytes) -> bool:
     return count > 0 and len(data) >= 6 + 16 * count
 
 
+# PDF is deliberately absent: a standards-compliant PDF can be entirely ASCII —
+# objects, xref table, trailer and %%EOF — so the binary backstop would reject
+# legitimate documents. Its structural validator carries the weight instead.
+BINARY_ASSET_SUFFIXES = frozenset(
+    {".woff", ".woff2", ".ttf", ".otf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico"}
+)
+
 ASSET_VALIDATORS: dict[str, tuple[str, "Callable[[bytes], bool]"]] = {
     ".woff2": ("WOFF2", lambda data: _valid_woff(data, b"wOF2", 48)),
     ".woff": ("WOFF", lambda data: _valid_woff(data, b"wOFF", 44)),
@@ -494,7 +501,8 @@ def check_asset_magic(head: str, files: list[str]) -> list[Finding]:
         data = blob_bytes(head, path)
         if data is None:
             continue
-        if data and b"\x00" not in data:
+        suffix = Path(path).suffix.lower()
+        if suffix in BINARY_ASSET_SUFFIXES and data and b"\x00" not in data:
             # Every real asset in these formats carries binary content. A file
             # that is pure text is a polyglot candidate regardless of how well
             # it fakes a header, so reject it before the format check.
@@ -510,14 +518,14 @@ def check_asset_magic(head: str, files: list[str]) -> list[Finding]:
 
 
 # URL parsers strip ASCII tabs and newlines from anywhere inside a URL before
-# resolving the scheme, so `java&#x09;script:` is a live javascript: URL. Only
-# the scheme patterns are re-checked against the stripped text: removing control
-# characters from the whole document could otherwise join unrelated tokens into
-# a match that no parser would ever see.
+# resolving the scheme, so `java&#x09;script:` is a live javascript: URL. This
+# pass is anchored to URL-bearing attributes on purpose: control characters are
+# removed from the whole document to find it, and a bare scheme match would then
+# also fire on ordinary prose in a `<text>` or `<desc>` node, where nothing ever
+# parses it as a URL.
 ACTIVE_SVG_SCHEME_RE = re.compile(
     r"""(?ix)
-    javascript\s*:
-    |(?:href|xlink:href)\s*=\s*["']?\s*(?:javascript:|data:text/html)
+    (?:href|xlink:href)\s*=\s*["']?\s*(?:javascript:|data:text/html)
     """
 )
 
