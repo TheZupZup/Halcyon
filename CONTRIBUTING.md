@@ -130,21 +130,22 @@ before opening an issue.
 
 ## About contributor funding
 
-Right now, contributing to Linthra is voluntary and I can't promise payment for
-a PR.
+Contributing to Linthra is voluntary. A contribution, merged pull request, or
+other project participation does not create any entitlement to project revenue,
+sponsorships, donations, ownership, equity, royalties, or future compensation.
 
-But I also don't want Linthra to become successful one day while I keep all the
-support for myself and other people are helping me build it.
+Project funds remain under the stewardship and control of the project
+maintainer and may be used for development, infrastructure, distribution,
+testing, services, hardware, or other project needs.
 
-If Linthra starts receiving enough recurring donations or sponsorships, my plan
-is to open a public contributor sponsorship page and put part of that money back
-toward the people who help the project.
+Linthra may choose to reward contributors through bounties, grants, sponsorships,
+or paid work when funding permits. Any compensation is discretionary unless it
+has been explicitly agreed separately for specific paid work.
 
-I don't have a formula for that yet because the money does not exist yet. If we
-get there, I want to figure it out openly and keep it fair.
-
-Basically, if Linthra grows because people help me, I want the people who helped
-it grow to be part of that success too.
+Open-source contribution and compensation are separate. Contributions remain
+licensed under Linthra's project license, while financial arrangements, when
+there are any, are handled separately and do not arise automatically from
+contributing code or other work.
 
 ## License
 
