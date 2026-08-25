@@ -35,7 +35,13 @@ For every PR, including maintainer PRs:
   against a self-describing field — a declared length that must equal the real
   file size, or a redundant field derived from another
 - active/executable SVG content such as `<script>`, any `on*=` event handler,
-  `javascript:` URLs, `foreignObject`, or external executable references
+  `javascript:` URLs, `foreignObject`, or external executable references. The
+  scan runs over the raw source, the entity-decoded text, and a URL-normalised
+  form, since an XML parser resolves `java&#x73;cript:` and a URL parser then
+  discards embedded tabs and newlines
+- asset files committed with the executable bit set. The text scan only sees an
+  invocation someone wrote down; a payload committed already-executable needs
+  none
 - text that invokes an asset such as `.woff2`, `.png`, or `.pdf` through
   Node/Python/shell interpreters, or marks one executable with `chmod +x`
 

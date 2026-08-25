@@ -167,14 +167,30 @@ def _valid_gif(data: bytes) -> bool:
     return False
 
 
-def _valid_webp(data: bytes) -> bool:
-    """Declared RIFF length plus a chunk chain that lands exactly on the end.
+_VP8_KEYFRAME_START_CODE = b"\x9d\x01\x2a"
 
-    Checking only the fourcc is not enough: the required bytes can be parked
-    inside a JavaScript comment (`RIFF/*xxWEBPVP8 */=0;...`). Requiring the
-    declared length to match and the chunk walk to consume the file exactly
-    removes the space such a payload needs.
+
+def _valid_vp8_payload(fourcc: bytes, payload: bytes) -> bool:
+    """Check the image chunk's own bitstream signature.
+
+    Self-consistent chunk lengths are not enough on their own: a payload can
+    declare honest sizes and still be script, provided it opens with `*/` to
+    close a comment covering the header. The bitstream signatures below occupy
+    exactly those bytes, so the payload can be a real frame or valid script,
+    not both.
     """
+    if fourcc == b"VP8 ":
+        return len(payload) >= 10 and payload[3:6] == _VP8_KEYFRAME_START_CODE
+    if fourcc == b"VP8L":
+        return len(payload) >= 5 and payload[0] == 0x2F
+    if fourcc == b"VP8X":
+        return len(payload) >= 10
+    return True
+
+
+def _valid_webp(data: bytes) -> bool:
+    """Declared RIFF length, a chunk chain landing exactly on the end, and a
+    real image bitstream inside the image chunk."""
     if len(data) < 16 or data[:4] != b"RIFF" or data[8:12] != b"WEBP":
         return False
     if int.from_bytes(data[4:8], "little") != len(data) - 8:
@@ -187,12 +203,30 @@ def _valid_webp(data: bytes) -> bool:
         if not all(0x20 <= byte <= 0x7E for byte in fourcc):
             return False
         size = int.from_bytes(data[pos + 4 : pos + 8], "little")
+        payload = data[pos + 8 : pos + 8 + size]
+        if len(payload) != size:
+            return False
+        if fourcc in (b"VP8 ", b"VP8L", b"VP8X"):
+            if not _valid_vp8_payload(fourcc, payload):
+                return False
+            saw_image = True
         pos += 8 + size + (size & 1)
         if pos > len(data):
             return False
-        if fourcc in (b"VP8 ", b"VP8L", b"VP8X"):
-            saw_image = True
     return saw_image and pos == len(data)
+
+
+def _valid_pdf(data: bytes) -> bool:
+    if len(data) < 32 or not data.startswith(b"%PDF-"):
+        return False
+    return b"%%EOF" in data[-2048:]
+
+
+def _valid_ico(data: bytes) -> bool:
+    if len(data) < 6 or data[:2] != b"\x00\x00" or data[2:4] not in (b"\x01\x00", b"\x02\x00"):
+        return False
+    count = int.from_bytes(data[4:6], "little")
+    return count > 0 and len(data) >= 6 + 16 * count
 
 
 ASSET_VALIDATORS: dict[str, tuple[str, "Callable[[bytes], bool]"]] = {
@@ -205,7 +239,16 @@ ASSET_VALIDATORS: dict[str, tuple[str, "Callable[[bytes], bool]"]] = {
     ".jpeg": ("JPEG", _valid_jpeg),
     ".gif": ("GIF", _valid_gif),
     ".webp": ("WEBP", _valid_webp),
+    ".pdf": ("PDF", _valid_pdf),
+    ".ico": ("ICO", _valid_ico),
 }
+
+# Extensions the guard treats as inert assets. Nothing here should ever carry
+# the executable bit, so the mode is checked independently of the contents.
+ASSET_SUFFIXES = frozenset(
+    {".woff", ".woff2", ".ttf", ".otf", ".eot", ".png", ".jpg", ".jpeg",
+     ".gif", ".webp", ".ico", ".pdf", ".svg"}
+)
 
 
 def _split_literal(*parts: str) -> str:
@@ -423,6 +466,24 @@ def check_symlinks(head: str, files: list[str], external: bool) -> list[Finding]
     return findings
 
 
+def check_asset_modes(head: str, files: list[str]) -> list[Finding]:
+    """Assets are inert data; the executable bit is the thing that runs them.
+
+    The text scan only catches an interpreter or a literal `chmod +x` written
+    into a file. It cannot see a payload committed already-executable, which
+    needs no invocation written down anywhere.
+    """
+    findings: list[Finding] = []
+    for path in files:
+        if Path(path).suffix.lower() not in ASSET_SUFFIXES:
+            continue
+        if git_mode(head, path) == "100755":
+            findings.append(
+                Finding(path, "asset file is committed with the executable bit set")
+            )
+    return findings
+
+
 def check_asset_magic(head: str, files: list[str]) -> list[Finding]:
     findings: list[Finding] = []
     for path in files:
@@ -448,18 +509,36 @@ def check_asset_magic(head: str, files: list[str]) -> list[Finding]:
     return findings
 
 
+# URL parsers strip ASCII tabs and newlines from anywhere inside a URL before
+# resolving the scheme, so `java&#x09;script:` is a live javascript: URL. Only
+# the scheme patterns are re-checked against the stripped text: removing control
+# characters from the whole document could otherwise join unrelated tokens into
+# a match that no parser would ever see.
+ACTIVE_SVG_SCHEME_RE = re.compile(
+    r"""(?ix)
+    javascript\s*:
+    |(?:href|xlink:href)\s*=\s*["']?\s*(?:javascript:|data:text/html)
+    """
+)
+
+_URL_CONTROL_CHARS = dict.fromkeys(b"\x00\x09\x0a\x0d")
+
+
 def svg_is_active(text: str) -> bool:
-    """Match active content on the raw source and on its decoded form.
+    """Match active content on the raw source, its decoded form, and its
+    URL-normalised form.
 
     An XML parser resolves character references before acting on an attribute,
-    so `java&#x73;cript:` becomes `javascript:` at the point it matters. Scanning
-    only raw bytes misses that; scanning both catches the encoded form without
-    losing anything the raw scan already caught.
+    and a URL parser then discards embedded tabs and newlines. Each layer is
+    checked because a payload only has to survive all of them once.
     """
     if ACTIVE_SVG_RE.search(text):
         return True
     decoded = html.unescape(text)
-    return decoded != text and bool(ACTIVE_SVG_RE.search(decoded))
+    if decoded != text and ACTIVE_SVG_RE.search(decoded):
+        return True
+    normalised = decoded.translate(_URL_CONTROL_CHARS)
+    return normalised != decoded and bool(ACTIVE_SVG_SCHEME_RE.search(normalised))
 
 
 def check_active_svg(head: str, files: list[str]) -> list[Finding]:
@@ -531,6 +610,7 @@ def scan(base: str, head: str, pr_author: str, repo_owner: str) -> list[Finding]
     if external:
         findings.extend(check_external_paths(files))
     findings.extend(check_symlinks(head, files, external))
+    findings.extend(check_asset_modes(head, files))
     findings.extend(check_asset_magic(head, files))
     findings.extend(check_active_svg(head, files))
     findings.extend(check_asset_execution(head, files))
