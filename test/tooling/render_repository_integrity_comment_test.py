@@ -127,6 +127,16 @@ class ReporterTest(unittest.TestCase):
         self.assertIn("github.event.workflow_run.event == 'pull_request'", writer)
         self.assertIn("github.event.workflow_run.pull_requests[0] != null", writer)
 
+    def test_superseded_reports_do_not_overwrite_a_newer_result(self) -> None:
+        """Out-of-order synchronize runs must not restore an older verdict."""
+        writer = (ROOT / ".github/workflows/repository-integrity-reporter.yml").read_text()
+        self.assertIn("getWorkflowRun", writer)
+        self.assertIn("pr.head.sha !== run.head_sha", writer)
+        # The guard must precede both write paths, or it guards nothing.
+        guard = writer.index("pr.head.sha !== run.head_sha")
+        self.assertLess(guard, writer.index("updateComment"))
+        self.assertLess(guard, writer.index("createComment"))
+
     def test_untrusted_fields_are_never_inserted_into_commands(self) -> None:
         writer = (ROOT / ".github/workflows/repository-integrity-reporter.yml").read_text()
         self.assertNotIn("${{ github.event.workflow_run.head", writer)

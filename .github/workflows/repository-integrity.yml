@@ -100,7 +100,7 @@ jobs:
 
       - name: Upload repository integrity findings
         if: ${{ always() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: repository-integrity-findings
           path: ${{ runner.temp }}/repository-integrity/report.json
