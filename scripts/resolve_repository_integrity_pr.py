@@ -218,6 +218,18 @@ def resolve(event: object, payload: object, repository: str) -> Binding:
 
     # The artifact must describe the exact head this run scanned. An artifact
     # produced by any other run cannot satisfy both of these.
+    #
+    # `workflow_run.head_sha` on a `pull_request` run is the raw PR head commit,
+    # which is what the scanner writes into the artifact from
+    # `github.event.pull_request.head.sha`, so these are the same value.
+    # Confirmed on this repository's own runs: run 32902865997 reports
+    # 68c58bc2f6c396858923356e144acf0c6d648cfe with that commit's own subject as
+    # its head_commit.message, and run 32887057547 reports
+    # a9ecac5b6a94159c590ccb51e09f5a00ac14f796, exactly PR #513's head.sha.
+    #
+    # Not to be confused with `github.sha` / GITHUB_SHA -- what checkout resolves
+    # by default -- which IS the synthetic merge revision on `pull_request`. The
+    # scanner does not rely on it: it pins `ref: ...pull_request.head.sha`.
     if head_sha != run.head_sha:
         raise BindingError("report head SHA does not match the triggering run")
     if head_repository != run.head_repository:
