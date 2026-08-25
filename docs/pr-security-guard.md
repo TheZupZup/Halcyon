@@ -1,5 +1,26 @@
 # PR security surface guard
 
+## Repository-integrity history
+
+The separate `.github/workflows/repository-integrity.yml` gate also inspects
+the commits a pull request would add to the target branch. A clean final diff
+is not sufficient: adding a prohibited asset or repository trust-surface
+change and deleting it in a later commit remains blocked because the offending
+commit would still enter history.
+
+The history boundary is deliberately narrow. The checker enumerates commits
+reachable from the PR head but not from the trusted base SHA, so commits already
+reachable from `main` are never reclassified. Each ordinary commit is checked
+against its parent. For a merge commit, only a path whose result differs from
+every parent is considered merge-introduced; this catches a novel conflict
+resolution without treating an ordinary GitHub **Update branch** merge as if
+it authored all the legitimate changes imported from `main`.
+
+Reports name the full offending commit SHA, path, and reason. The workflow uses
+a full-history checkout and loads the checker itself from the trusted base, so
+missing ancestry or an unreadable commit fails closed rather than silently
+falling back to the final tree.
+
 `.github/workflows/pr-security-review.yml` decides whether a pull request
 crosses a trust boundary that deserves an explicit maintainer security review,
 and hard-rejects a small set of unusually powerful additions. The classifier
