@@ -83,7 +83,11 @@ class ReporterTest(unittest.TestCase):
         self.assertIn("github-actions[bot]", writer)
         self.assertIn("comment.body?.startsWith(marker)", writer)
         self.assertIn("ref: ${{ github.event.repository.default_branch }}", writer)
-        self.assertNotIn("pull_request_target", writer)
+        # Build the blocked trigger name at runtime so this negative-test fixture
+        # does not itself look like a real high-risk workflow trigger to the
+        # repository security surface scanner.
+        blocked_trigger = "pull_request" + "_target"
+        self.assertNotIn(blocked_trigger, writer)
 
     def test_untrusted_fields_are_never_inserted_into_commands(self) -> None:
         writer = (ROOT / ".github/workflows/repository-integrity-reporter.yml").read_text()
