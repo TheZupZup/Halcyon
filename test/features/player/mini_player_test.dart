@@ -113,12 +113,12 @@ void main() {
             playbackControllerProvider.overrideWithValue(controller),
           ],
           child: const MaterialApp(
-            home: const Scaffold(
-              bottomNavigationBar: const MediaQuery(
-                data: const MediaQueryData(
+            home: Scaffold(
+              bottomNavigationBar: MediaQuery(
+                data: MediaQueryData(
                   textScaler: TextScaler.linear(2.5),
                 ),
-                child: const MiniPlayer(),
+                child: MiniPlayer(),
               ),
             ),
           ),
