@@ -217,8 +217,14 @@ requests, so those runs upload no artifact and there is genuinely nothing to
 report. That is told apart from every other reason the report can be missing —
 a transport error, an expired artifact, a permissions failure, a scan that died
 before uploading — by reading the run's artifact list and then the guard job's
-conclusion from the Actions API, before downloading anything. Only a guard job
-that was actually skipped counts as nothing to report. Tolerating a failed
+conclusion from the Actions API, before downloading anything. A skipped guard
+job is not by itself proof of a draft: the scanner workflow file comes from the
+merge ref, which is why the scanner loads its checker from the trusted base
+rather than from the pull request, and that same contributor can keep the guard
+job's name while setting its condition to false. Suppression therefore also
+requires the pull request's own `draft` flag, read from the pull request the
+run's head actually belongs to, resolved under the same head-repository
+association rule and the same one-candidate constraint the binder uses. Tolerating a failed
 download instead would read all of those as "nothing to report" and finish
 green, leaving an earlier sticky verdict standing over a scan whose result was
 never rendered.

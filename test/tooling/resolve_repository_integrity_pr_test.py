@@ -491,6 +491,29 @@ class TrustBoundaryTest(unittest.TestCase):
         self.assertIn("guard?.conclusion !== 'skipped'", self.reporter)
         self.assertLess(self.reporter.index("guard?.conclusion !== 'skipped'"),
                         self.reporter.index("core.setOutput('present', 'false')"))
+
+    def test_a_skipped_guard_job_alone_cannot_suppress_the_report(self) -> None:
+        """A skipped job is contributor-controlled; the draft flag is not.
+
+        The scanner workflow file comes from the merge ref, which is why the
+        scanner loads its checker from the trusted base instead of the PR. That
+        same contributor can keep the guard job's name and set its condition to
+        false, producing a `skipped` conclusion on a non-draft PR. Suppression
+        must therefore rest on the pull request's own draft flag.
+        """
+        self.assertIn("candidate.draft !== true", self.reporter)
+        # The draft check has to gate the suppression, not follow it.
+        self.assertLess(self.reporter.index("candidate.draft !== true"),
+                        self.reporter.index("core.setOutput('present', 'false')"))
+        # The PR it reads the flag from is resolved under the binder's own
+        # constraints: fork association, this repository as base, one candidate.
+        self.assertIn("listPullRequestsAssociatedWithCommit", self.reporter)
+        self.assertIn("candidates.length !== 1", self.reporter)
+        self.assertIn("candidate.head?.repo?.full_name === headRepository", self.reporter)
+        # Same head-repository association rule the binder uses, so the two
+        # cannot disagree about which pull request a run's head belongs to.
+        self.assertIn("owner: match[1], repo: match[2], commit_sha: run.head_sha",
+                      self.reporter)
         self.assertIn("steps.artifact.outputs.present == 'true'", self.reporter)
         # The job name the reporter looks for must be the one the scanner uses.
         self.assertIn("name: Repository integrity guard\n", self.scanner)

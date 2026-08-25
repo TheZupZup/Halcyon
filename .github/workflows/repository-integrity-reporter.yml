@@ -81,7 +81,46 @@ jobs:
                 `(job conclusion: ${guard?.conclusion ?? 'job not found'}), but none is ` +
                 'available. Refusing to leave an earlier result standing unreported.');
             }
-            core.notice('The scanner guard job was skipped, as it is on draft pull requests; there is nothing to report.');
+            // A skipped guard job is NOT proof of a draft. The scanner workflow
+            // file is contributor-controlled at the merge ref -- which is why
+            // the scanner loads its checker from the trusted base rather than
+            // from the PR -- so a contributor can keep the job's name and set
+            // its condition to false, producing this same `skipped` conclusion
+            // on a non-draft PR and suppressing the report. The authoritative
+            // signal is the pull request's own draft flag, so that is what is
+            // read, from the pull request this run's head actually belongs to.
+            const { data: run } = await github.rest.actions.getWorkflowRun(common);
+            const headRepository = run.head_repository?.full_name;
+            const match = /^([A-Za-z0-9._-]{1,100})\/([A-Za-z0-9._-]{1,100})$/.exec(
+              headRepository ?? '');
+            if (!match || !/^[0-9a-f]{40}$/.test(run.head_sha ?? '')) {
+              throw new Error('triggering run does not identify a head to resolve');
+            }
+            // Asked of the head repository: a fork's head commit is not in this
+            // repository's commit list. Both names are GitHub-set, and the
+            // candidates are constrained below exactly as the binder does it.
+            const associated = await github.paginate(
+              github.rest.repos.listPullRequestsAssociatedWithCommit,
+              { owner: match[1], repo: match[2], commit_sha: run.head_sha, per_page: 100 });
+            const candidates = associated.filter(candidate =>
+              candidate.base?.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`
+              && candidate.head?.repo?.full_name === headRepository);
+            if (candidates.length !== 1) {
+              throw new Error(
+                `${candidates.length} pull requests match this run's head; cannot confirm ` +
+                'the skipped guard job was a draft, and will not suppress the report.');
+            }
+            const { data: candidate } = await github.rest.pulls.get({
+              owner: context.repo.owner, repo: context.repo.repo,
+              pull_number: candidates[0].number
+            });
+            if (candidate.draft !== true) {
+              throw new Error(
+                `The scanner guard job was skipped but PR #${candidate.number} is not a ` +
+                'draft, so the report was suppressed by something other than the draft ' +
+                'condition. Refusing to leave an earlier result standing unreported.');
+            }
+            core.notice(`PR #${candidate.number} is a draft, so the scanner guard job did not run; there is nothing to report.`);
             core.setOutput('present', 'false');
 
       # The artifact is known to exist by this point, so a failed download is a
