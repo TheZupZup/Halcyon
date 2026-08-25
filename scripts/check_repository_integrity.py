@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import html
 import re
 import subprocess
 import sys
@@ -114,26 +115,84 @@ def _valid_jpeg(data: bytes) -> bool:
     return data[3] in _JPEG_MARKERS and b"\xff\xd9" in data
 
 
+def _skip_gif_sub_blocks(data: bytes, pos: int) -> int:
+    """Walk a chain of length-prefixed sub-blocks; -1 if it runs off the end."""
+    while pos < len(data):
+        size = data[pos]
+        pos += 1
+        if size == 0:
+            return pos
+        pos += size
+    return -1
+
+
 def _valid_gif(data: bytes) -> bool:
-    """Header plus a logical screen descriptor with a non-zero canvas."""
-    if len(data) < 13 or data[:6] not in (b"GIF87a", b"GIF89a"):
+    """Walk the whole block structure through to the trailer.
+
+    A header check is not enough: `GIF89a=0;` parses as a header with non-zero
+    canvas dimensions *and* as JavaScript. Requiring the block chain to resolve
+    exactly onto the trailer leaves no room for a trailing script.
+    """
+    if len(data) < 14 or data[:6] not in (b"GIF87a", b"GIF89a"):
         return False
-    width = int.from_bytes(data[6:8], "little")
-    height = int.from_bytes(data[8:10], "little")
-    return width != 0 and height != 0
+    if int.from_bytes(data[6:8], "little") == 0 or int.from_bytes(data[8:10], "little") == 0:
+        return False
+
+    flags = data[10]
+    pos = 13
+    if flags & 0x80:
+        pos += 3 * (1 << ((flags & 0x07) + 1))
+
+    while 0 <= pos < len(data):
+        block = data[pos]
+        pos += 1
+        if block == 0x3B:
+            return pos == len(data)
+        if block == 0x21:
+            if pos >= len(data):
+                return False
+            pos = _skip_gif_sub_blocks(data, pos + 1)
+        elif block == 0x2C:
+            if pos + 9 > len(data):
+                return False
+            local = data[pos + 8]
+            pos += 9
+            if local & 0x80:
+                pos += 3 * (1 << ((local & 0x07) + 1))
+            if pos >= len(data):
+                return False
+            pos = _skip_gif_sub_blocks(data, pos + 1)
+        else:
+            return False
+    return False
 
 
 def _valid_webp(data: bytes) -> bool:
-    """RIFF/WEBP container followed by a real VP8 chunk fourcc.
+    """Declared RIFF length plus a chunk chain that lands exactly on the end.
 
-    The declared RIFF size is deliberately not required to match the file size:
-    a truncated-but-genuine image is a broken asset, not a disguised script, and
-    this guard is not an image linter. The fourcc is what a script cannot fake
-    while still being a script.
+    Checking only the fourcc is not enough: the required bytes can be parked
+    inside a JavaScript comment (`RIFF/*xxWEBPVP8 */=0;...`). Requiring the
+    declared length to match and the chunk walk to consume the file exactly
+    removes the space such a payload needs.
     """
     if len(data) < 16 or data[:4] != b"RIFF" or data[8:12] != b"WEBP":
         return False
-    return data[12:16] in (b"VP8 ", b"VP8L", b"VP8X")
+    if int.from_bytes(data[4:8], "little") != len(data) - 8:
+        return False
+
+    pos = 12
+    saw_image = False
+    while pos + 8 <= len(data):
+        fourcc = data[pos : pos + 4]
+        if not all(0x20 <= byte <= 0x7E for byte in fourcc):
+            return False
+        size = int.from_bytes(data[pos + 4 : pos + 8], "little")
+        pos += 8 + size + (size & 1)
+        if pos > len(data):
+            return False
+        if fourcc in (b"VP8 ", b"VP8L", b"VP8X"):
+            saw_image = True
+    return saw_image and pos == len(data)
 
 
 ASSET_VALIDATORS: dict[str, tuple[str, "Callable[[bytes], bool]"]] = {
@@ -279,6 +338,22 @@ def _ignore_rules(text: str) -> list[str]:
     return rules
 
 
+def _negation_reenables(pattern: str, name: str) -> bool:
+    """Whether a `!` rule re-enables `name`, using Git's matching semantics.
+
+    Python's fnmatch has no notion of `**/`, so `!**/.vscode/` — which Git
+    applies at every depth including the root — would otherwise slip through.
+    """
+    pattern = pattern.strip().strip("/")
+    if not pattern:
+        return False
+    candidates = {pattern}
+    while pattern.startswith("**/"):
+        pattern = pattern[3:]
+        candidates.add(pattern)
+    return any(fnmatch.fnmatch(name, candidate) for candidate in candidates)
+
+
 def _ignore_state(rules: list[str], entry: str) -> tuple[bool, str | None]:
     """Resolve whether `entry` ends up ignored, the way Git resolves it.
 
@@ -292,8 +367,7 @@ def _ignore_state(rules: list[str], entry: str) -> tuple[bool, str | None]:
     negated_by: str | None = None
     for rule in rules:
         if rule.startswith("!"):
-            pattern = rule[1:].strip().strip("/")
-            if pattern and fnmatch.fnmatch(name, pattern):
+            if _negation_reenables(rule[1:], name):
                 ignored = False
                 negated_by = rule
         elif rule.strip("/") == name:
@@ -359,11 +433,33 @@ def check_asset_magic(head: str, files: list[str]) -> list[Finding]:
         data = blob_bytes(head, path)
         if data is None:
             continue
+        if data and b"\x00" not in data:
+            # Every real asset in these formats carries binary content. A file
+            # that is pure text is a polyglot candidate regardless of how well
+            # it fakes a header, so reject it before the format check.
+            findings.append(
+                Finding(path, f"file extension claims {label} but the file is entirely text")
+            )
+            continue
         if not is_valid(data):
             findings.append(
                 Finding(path, f"file extension claims {label} but the file is not a valid {label}")
             )
     return findings
+
+
+def svg_is_active(text: str) -> bool:
+    """Match active content on the raw source and on its decoded form.
+
+    An XML parser resolves character references before acting on an attribute,
+    so `java&#x73;cript:` becomes `javascript:` at the point it matters. Scanning
+    only raw bytes misses that; scanning both catches the encoded form without
+    losing anything the raw scan already caught.
+    """
+    if ACTIVE_SVG_RE.search(text):
+        return True
+    decoded = html.unescape(text)
+    return decoded != text and bool(ACTIVE_SVG_RE.search(decoded))
 
 
 def check_active_svg(head: str, files: list[str]) -> list[Finding]:
@@ -372,7 +468,7 @@ def check_active_svg(head: str, files: list[str]) -> list[Finding]:
         if Path(path).suffix.lower() != ".svg":
             continue
         text = blob_text(head, path)
-        if text is not None and ACTIVE_SVG_RE.search(text):
+        if text is not None and svg_is_active(text):
             findings.append(Finding(path, "SVG contains active/external executable content"))
     return findings
 

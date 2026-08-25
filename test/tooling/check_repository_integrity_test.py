@@ -34,6 +34,22 @@ MARKED_PAYLOAD_LINE = f"{ASSET_EXECUTION_PAYLOAD.strip()}  # {integrity.FIXTURE_
 PREFIXED_SCRIPT_PAYLOAD = b"=0;\nglobal.p=require('child_process');p.exec('id');\n"
 
 
+def gif_blob() -> bytes:
+    """A minimal but structurally complete 1x1 GIF, trailer included."""
+    header = b"GIF89a" + (1).to_bytes(2, "little") + (1).to_bytes(2, "little") + bytes([0x80, 0, 0])
+    global_color_table = b"\x00\x00\x00\xff\xff\xff"
+    descriptor = b"\x2c" + bytes(8) + b"\x00"
+    image = b"\x02" + b"\x02\x4c\x01" + b"\x00"
+    return header + global_color_table + descriptor + image + b"\x3b"
+
+
+def webp_blob() -> bytes:
+    """A minimal RIFF/WEBP container whose declared length matches exactly."""
+    payload = bytes(16)
+    body = b"WEBP" + b"VP8 " + len(payload).to_bytes(4, "little") + payload
+    return b"RIFF" + len(body).to_bytes(4, "little") + body
+
+
 def woff2_blob(num_tables: int = 1) -> bytes:
     """A structurally valid WOFF2 header padded out to its declared length."""
     body = bytes(64)
@@ -121,7 +137,7 @@ class RepositoryIntegrityTest(unittest.TestCase):
         path.parent.mkdir(parents=True)
         path.write_text("global.r=require; console.log('not a font');\n", encoding="utf-8")
         findings = self.scan(self.commit())
-        self.assertTrue(any("not a valid WOFF2" in f.reason for f in findings))
+        self.assertTrue(any(f.path.endswith("bad.woff2") for f in findings))
 
     def test_valid_woff2_passes_structural_check(self) -> None:
         path = self.repo / "public" / "fonts" / "ok.woff2"
@@ -136,7 +152,7 @@ class RepositoryIntegrityTest(unittest.TestCase):
         path.parent.mkdir(parents=True)
         path.write_bytes(b"wOF2" + PREFIXED_SCRIPT_PAYLOAD)
         findings = self.scan(self.commit())
-        self.assertTrue(any("not a valid WOFF2" in f.reason for f in findings))
+        self.assertTrue(any(f.path.endswith("sneaky.woff2") for f in findings))
 
     def test_script_appended_to_a_real_font_is_blocked(self) -> None:
         path = self.repo / "public" / "fonts" / "trailer.woff2"
@@ -150,15 +166,45 @@ class RepositoryIntegrityTest(unittest.TestCase):
         path.parent.mkdir()
         path.write_bytes(b"\x89PNG\r\n\x1a\n" + PREFIXED_SCRIPT_PAYLOAD)
         findings = self.scan(self.commit())
-        self.assertTrue(any("not a valid PNG" in f.reason for f in findings))
+        self.assertTrue(any(f.path.endswith("bad.png") for f in findings))
 
-    def test_truncated_but_genuine_webp_is_not_flagged(self) -> None:
-        """Broken assets are not this guard's business; disguised ones are."""
+    def test_valid_gif_and_webp_pass(self) -> None:
+        (self.repo / "assets").mkdir()
+        (self.repo / "assets" / "ok.gif").write_bytes(gif_blob())
+        (self.repo / "assets" / "ok.webp").write_bytes(webp_blob())
+        findings = self.scan(self.commit())
+        self.assertEqual(findings, [])
+
+    def test_gif_javascript_polyglot_is_blocked(self) -> None:
+        """`GIF89a=0;` is both a plausible header and executable JavaScript."""
+        path = self.repo / "assets" / "poly.gif"
+        path.parent.mkdir()
+        path.write_bytes(b"GIF89a=0;console.log('EXEC')")
+        findings = self.scan(self.commit())
+        self.assertTrue(any("poly.gif" in f.path for f in findings))
+
+    def test_webp_javascript_polyglot_is_blocked(self) -> None:
+        """The fourcc can be parked inside a JavaScript comment."""
+        path = self.repo / "assets" / "poly.webp"
+        path.parent.mkdir()
+        path.write_bytes(b"RIFF/*xxWEBPVP8 */=0;console.log('EXEC')")
+        findings = self.scan(self.commit())
+        self.assertTrue(any("poly.webp" in f.path for f in findings))
+
+    def test_text_only_asset_is_blocked(self) -> None:
+        """Backstop: real assets in these formats always carry binary content."""
+        path = self.repo / "assets" / "text.png"
+        path.parent.mkdir()
+        path.write_bytes(b"just plain text pretending to be an image\n")
+        findings = self.scan(self.commit())
+        self.assertTrue(any("entirely text" in f.reason for f in findings))
+
+    def test_truncated_webp_is_blocked(self) -> None:
         path = self.repo / "assets" / "short.webp"
         path.parent.mkdir()
         path.write_bytes(b"RIFF" + (9999).to_bytes(4, "little") + b"WEBPVP8 " + bytes(32))
         findings = self.scan(self.commit())
-        self.assertEqual(findings, [])
+        self.assertTrue(any("short.webp" in f.path for f in findings))
 
     def test_asset_execution_command_is_blocked(self) -> None:
         path = self.repo / "docs" / "note.txt"
@@ -224,6 +270,17 @@ class RepositoryIntegrityTest(unittest.TestCase):
         findings = self.scan(self.commit())
         self.assertTrue(any("re-enabled by" in f.reason for f in findings))
 
+    def test_recursive_glob_negation_is_blocked(self) -> None:
+        """Git applies `**/` at every depth, including the repository root."""
+        (self.repo / ".gitignore").write_text(".idea/\n.vscode/\n!**/.vscode/\n", encoding="utf-8")
+        findings = self.scan(self.commit())
+        self.assertTrue(any("re-enabled by" in f.reason for f in findings))
+
+    def test_catch_all_negation_is_blocked(self) -> None:
+        (self.repo / ".gitignore").write_text(".idea/\n.vscode/\n!*\n", encoding="utf-8")
+        findings = self.scan(self.commit())
+        self.assertTrue(any("re-enabled by" in f.reason for f in findings))
+
     def test_negation_before_the_entry_is_harmless(self) -> None:
         """Order matters: the positive entry comes last, so it wins."""
         (self.repo / ".gitignore").write_text(".idea/\n!.vscode/\n.vscode/\n", encoding="utf-8")
@@ -257,6 +314,41 @@ class RepositoryIntegrityTest(unittest.TestCase):
         )
         findings = self.scan(self.commit())
         self.assertTrue(any("SVG contains active" in f.reason for f in findings))
+
+    def test_entity_encoded_javascript_url_is_blocked(self) -> None:
+        """An XML parser resolves `java&#x73;cript:` before the link is used."""
+        path = self.repo / "assets" / "entity.svg"
+        path.parent.mkdir()
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg">'
+            '<a href="java&#x73;cript:alert(1)"><rect width="1" height="1"/></a></svg>',
+            encoding="utf-8",
+        )
+        findings = self.scan(self.commit())
+        self.assertTrue(any("SVG contains active" in f.reason for f in findings))
+
+    def test_decimal_entity_encoded_javascript_url_is_blocked(self) -> None:
+        path = self.repo / "assets" / "decimal.svg"
+        path.parent.mkdir()
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg">'
+            '<a href="java&#115;cript:alert(1)"><rect width="1" height="1"/></a></svg>',
+            encoding="utf-8",
+        )
+        findings = self.scan(self.commit())
+        self.assertTrue(any("SVG contains active" in f.reason for f in findings))
+
+    def test_svg_with_harmless_entities_passes(self) -> None:
+        """Decoding must not turn ordinary escaped text into a false positive."""
+        path = self.repo / "assets" / "amp.svg"
+        path.parent.mkdir()
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg">'
+            '<title>Tools &amp; Settings &#8212; v1</title><rect width="1" height="1"/></svg>',
+            encoding="utf-8",
+        )
+        findings = self.scan(self.commit())
+        self.assertEqual(findings, [])
 
     def test_inert_svg_passes(self) -> None:
         path = self.repo / "assets" / "ok.svg"
