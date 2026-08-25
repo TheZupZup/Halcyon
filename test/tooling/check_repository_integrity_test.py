@@ -181,6 +181,45 @@ class RepositoryIntegrityTest(unittest.TestCase):
         findings = self.scan(head)
         self.assertTrue(any(f.path == ".vscode/tasks.json" for f in findings))
 
+    def test_removed_prohibited_path_still_reports_historical_commit(self) -> None:
+        path = self.repo / ".vscode" / "tasks.json"
+        path.parent.mkdir()
+        path.write_text('{}\n', encoding="utf-8")
+        git(self.repo, "add", "-f", ".vscode/tasks.json")
+        introduced = self.commit("introduce prohibited path")
+        path.unlink()
+        head = self.commit("remove prohibited path")
+        findings = self.scan(head)
+        # The introducing commit stays attributable even though the final tree
+        # no longer carries the path. The cleanup commit is reported too, and
+        # deliberately so: removing a maintainer-controlled path is itself a
+        # repository-control change an external PR may not make.
+        attributed = {f.commit for f in findings if f.path == ".vscode/tasks.json"}
+        self.assertIn(introduced, attributed)
+        match = next(f for f in findings if f.commit == introduced)
+        self.assertEqual(match.rule, "external-maintainer-controlled-path")
+        self.assertEqual(match.severity, "blocked")
+
+    def test_rename_away_from_protected_path_is_blocked(self) -> None:
+        """Rename detection must never hide a removed maintainer-controlled path.
+
+        `git log --name-only` would report only the unprotected destination, so
+        every history query here uses --no-renames and sees the deleted source.
+        """
+        workflow = self.repo / ".github" / "workflows"
+        workflow.mkdir(parents=True)
+        (workflow / "a.yml").write_text("name: CI\non: push\njobs: {}\n", encoding="utf-8")
+        self.base = self.commit("trusted workflow")
+        docs = self.repo / "docs"
+        docs.mkdir(exist_ok=True)
+        git(self.repo, "mv", ".github/workflows/a.yml", "docs/a.txt")
+        head = self.commit("rename protected workflow away")
+        findings = self.scan(head)
+        self.assertTrue(
+            any(f.path == ".github/workflows/a.yml" for f in findings),
+            f"rename hid the protected source: {[f.path for f in findings]}",
+        )
+
     def test_case_variant_ide_paths_are_blocked(self) -> None:
         for relative in (".VSCODE/tasks.json", ".Idea/workspace.xml"):
             with self.subTest(relative):
@@ -668,6 +707,27 @@ class RepositoryIntegrityTest(unittest.TestCase):
         self.assertTrue(
             any(f.commit == merge and f.path == "assets/resolution.png" for f in findings)
         )
+
+    def test_over_long_paths_stay_within_the_reporter_field_bound(self) -> None:
+        """Git accepts paths longer than the reporter's per-field limit.
+
+        Emitting one unclamped sinks the whole artifact, so the reporter fails
+        and an earlier CLEAN comment can survive a blocking revision.
+        """
+        deep = self.repo / "scripts"
+        for i in range(9):
+            deep = deep / (f"d{i}" + "x" * 247)
+        deep.mkdir(parents=True)
+        (deep / "s.sh").write_text("echo hi\n", encoding="utf-8")
+        commit = self.commit("deep protected path")
+        findings = self.scan(commit)
+        raw = next(f for f in findings if f.path.endswith("/s.sh"))
+        self.assertGreater(len(raw.path), integrity.MAX_REPORT_FIELD_CHARS)
+        emitted = raw.as_dict()
+        self.assertLessEqual(len(emitted["path"]), integrity.MAX_REPORT_FIELD_CHARS)
+        # The tail identifies the offender, so it must survive the clamp.
+        self.assertTrue(emitted["path"].endswith("/s.sh"))
+        self.assertTrue(emitted["path"].startswith("...[truncated]"))
 
     def test_report_names_commit_path_and_reason(self) -> None:
         path = self.repo / "assets" / "report.png"

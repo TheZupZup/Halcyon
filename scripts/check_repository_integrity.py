@@ -14,22 +14,63 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import html
+import json
 import re
 import subprocess
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 
 @dataclass(frozen=True)
 class Finding:
+    # `commit` is the precise commit that introduced this violation, resolved by
+    # the history scan below. It is required: every finding is attributable.
     commit: str
     path: str
     reason: str
+    severity: str = "blocked"
+    rule: str = "repository-integrity"
+    remediation: str = "Remove the prohibited change and rebuild the feature from the current clean main branch."
+
+    def as_dict(self) -> dict[str, str | None]:
+        """Render this finding for the JSON artifact, clamped to what the
+        reporter accepts. Clamping affects the report only, never the verdict."""
+        return {
+            "severity": self.severity,
+            "commit": self.commit,
+            "path": _clamp_report_field(self.path),
+            "rule": _clamp_report_field(self.rule),
+            "reason": _clamp_report_field(self.reason),
+            "remediation": _clamp_report_field(self.remediation),
+        }
 
 
 PROTECTED_IGNORE_ENTRIES = (".idea/", ".vscode/")
+
+# Must stay in step with MAX_FINDINGS in render_repository_integrity_comment.py:
+# the reporter fails closed on a longer list, which would strand a stale comment.
+MAX_REPORT_FINDINGS = 100
+
+# Must stay in step with MAX_FIELD_LENGTH in render_repository_integrity_comment.py.
+# Git accepts paths longer than this (components stay under NAME_MAX while the
+# whole path does not), and the reporter fails closed on an over-long field, so
+# an unclamped path would sink the entire artifact and strand a stale comment.
+MAX_REPORT_FIELD_CHARS = 2000
+_TRUNCATION_SUFFIX = "...[truncated]"
+
+
+def _clamp_report_field(value: str) -> str:
+    """Bound one artifact field, keeping the tail that identifies the offender.
+
+    The leading path components are the least distinguishing part of an
+    over-long path, so the end is preserved rather than the start.
+    """
+    if len(value) <= MAX_REPORT_FIELD_CHARS:
+        return value
+    keep = MAX_REPORT_FIELD_CHARS - len(_TRUNCATION_SUFFIX)
+    return _TRUNCATION_SUFFIX + value[-keep:]
 
 # Files that must be able to hold literal attack strings, because they are the
 # fixtures this guard is tested against. Only lines carrying the explicit marker
@@ -680,6 +721,33 @@ def dedupe(findings: list[Finding]) -> list[Finding]:
     return result
 
 
+def actionable(finding: Finding) -> Finding:
+    """Attach a stable rule id and a concrete remediation to a raw finding.
+
+    Attribution is not reconstructed here: the history scan already resolved the
+    exact commit that introduced the violation, so this only maps the low-level
+    reason onto deterministic, actionable guidance for the PR comment.
+    """
+    reason = finding.reason.lower()
+    if "executable bit" in reason:
+        rule, remediation = "asset-executable-mode", "Remove the executable permission from the asset and recommit the mode change."
+    elif "file extension claims" in reason:
+        rule, remediation = "invalid-disguised-asset", "Replace the invalid asset with a real file of the declared asset type."
+    elif "svg contains" in reason:
+        rule, remediation = "active-svg-content", "Remove scripts, event handlers, foreign objects, and external active references from the SVG."
+    elif "invokes or marks an asset" in reason:
+        rule, remediation = "asset-execution-command", "Remove commands that execute the asset or grant it executable permission."
+    elif "gitignore" in reason or "ignore entry" in reason:
+        rule, remediation = "protected-ignore-policy", "Restore the required .idea/ and .vscode/ ignore rules without later negations."
+    elif "symlink" in reason:
+        rule, remediation = "external-symlink", "Remove the Git symlink or move the repository-control change to a maintainer-owned PR."
+    elif "maintainer-controlled" in reason:
+        rule, remediation = "external-maintainer-controlled-path", "Recreate or rebase the legitimate feature work onto a clean main history, or move this repository-control change to a maintainer-owned PR."
+    else:
+        rule, remediation = finding.rule, finding.remediation
+    return replace(finding, rule=rule, remediation=remediation)
+
+
 def resolve_commit(revision: str) -> str:
     value = run_git("rev-parse", "--verify", f"{revision}^{{commit}}")
     assert isinstance(value, str)
@@ -763,7 +831,7 @@ def scan(base: str, head: str, pr_author: str, repo_owner: str) -> list[Finding]
     for finding in scan_tree(head, files, external, check_ignore=".gitignore" in files):
         if (finding.path, finding.reason) not in historical_keys:
             findings.append(finding)
-    return dedupe(findings)
+    return [actionable(finding) for finding in dedupe(findings)]
 
 
 def write_report(path: Path, findings: list[Finding]) -> None:
@@ -784,6 +852,29 @@ def write_report(path: Path, findings: list[Finding]) -> None:
         )
 
 
+def write_json_report(path: Path, findings: list[Finding], *, pr_number: int,
+                      head: str, head_repository: str) -> None:
+    """Write the machine-readable artifact the trusted reporter consumes.
+
+    The list is capped to the bound the reporter enforces. Without the cap a PR
+    with more findings than that bound produces an artifact its own reporter
+    rejects, so the sticky comment silently goes stale while the guard is
+    blocking. Truncation is a reporting concern only: it never affects the
+    verdict, which is computed from the complete finding list.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    reported = findings[:MAX_REPORT_FINDINGS]
+    payload = {
+        "schema_version": 1,
+        "pr_number": pr_number,
+        "head_sha": head,
+        "head_repository": head_repository,
+        "truncated": len(findings) - len(reported),
+        "findings": [finding.as_dict() for finding in reported],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", required=True)
@@ -791,6 +882,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pr-author", required=True)
     parser.add_argument("--repo-owner", required=True)
     parser.add_argument("--report", required=True)
+    parser.add_argument("--json-report", required=True)
+    parser.add_argument("--pr-number", required=True, type=int)
+    parser.add_argument("--head-repository", required=True)
     args = parser.parse_args(argv)
 
     for stream in (sys.stdout, sys.stderr):
@@ -803,6 +897,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     write_report(Path(args.report), findings)
+    write_json_report(Path(args.json_report), findings, pr_number=args.pr_number,
+                      head=args.head, head_repository=args.head_repository)
 
     if findings:
         print("Repository integrity guard blocked the PR:")
