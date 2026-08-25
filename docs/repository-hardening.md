@@ -35,7 +35,13 @@ For every PR, including maintainer PRs:
   against a self-describing field — a declared length that must equal the real
   file size, or a redundant field derived from another
 - active/executable SVG content such as `<script>`, any `on*=` event handler,
-  `javascript:` URLs, `foreignObject`, or external executable references
+  `javascript:` URLs, `foreignObject`, or external executable references. The
+  scan runs over the raw source, the entity-decoded text, and a URL-normalised
+  form, since an XML parser resolves `java&#x73;cript:` and a URL parser then
+  discards embedded tabs and newlines
+- asset files committed with the executable bit set. The text scan only sees an
+  invocation someone wrote down; a payload committed already-executable needs
+  none
 - text that invokes an asset such as `.woff2`, `.png`, or `.pdf` through
   Node/Python/shell interpreters, or marks one executable with `chmod +x`
 
@@ -60,6 +66,39 @@ assert against remain detectable.
 Prefer this marker over path-wide exclusions: `test/` and `test/tooling/` stay
 fully scanned, because executable test infrastructure is itself a security
 surface.
+
+## Where the asset checks stop
+
+Container validation raises the cost of disguising an executable as an asset;
+it does not close the class. The honest boundary:
+
+- **Binary formats** (WOFF/WOFF2, TrueType/OpenType, PNG, JPEG, GIF, WEBP, ICO)
+  are validated structurally end to end — declared lengths must match, chunk and
+  block chains must land exactly on the end of the file, and an image must carry
+  a real bitstream signature. Polyglots against these are hard.
+- **PDF is different.** A shell reads a file line by line and continues past
+  errors, so only the opening lines decide what runs. No amount of trailing
+  xref, trailer or object structure prevents a payload on line two, and a
+  genuine PDF is itself "runnable" that way as a series of failing commands.
+  Parsing the object graph would buy nothing here, so the PDF check is a
+  deliberate sanity layer only.
+
+For WEBP the arithmetic happens to close the polyglot class outright. A file
+that is also JavaScript needs bytes 4-7 to open a comment (`/*` or `//`), and
+both begin `0x2F`, which little-endian makes the declared RIFF length odd. The
+chunk chain after the 12-byte header always consumes an even number of bytes,
+since every chunk is 8 + payload + pad-to-even. So the file size is even while
+`declared + 8` is odd, and no such file can pass. This is why later requests to
+validate the frame bitstream more deeply were declined: a minimal frame may be a
+corrupt image, but it cannot be an executable one.
+
+What actually defends a disguised asset is denying it an execution path:
+
+- assets may not carry the executable bit
+- no file in the repository may invoke one through an interpreter
+- IDE and container auto-run surfaces are maintainer-controlled
+
+Treat those three as the real control, and the format validators as depth.
 
 ## Required GitHub ruleset for `main`
 

@@ -44,9 +44,63 @@ def gif_blob() -> bytes:
 
 
 def webp_blob() -> bytes:
-    """A minimal RIFF/WEBP container whose declared length matches exactly."""
-    payload = bytes(16)
+    """A minimal RIFF/WEBP container: declared length exact, real VP8 keyframe
+    start code in the payload."""
+    payload = b"\x00\x00\x00" + b"\x9d\x01\x2a" + bytes(10)
     body = b"WEBP" + b"VP8 " + len(payload).to_bytes(4, "little") + payload
+    return b"RIFF" + len(body).to_bytes(4, "little") + body
+
+
+def script_webp_blob() -> bytes:
+    """Honest RIFF and chunk lengths, JavaScript in the image payload."""
+    payload = b'*/=0;console.log("EXEC")/*' + b"A" * 40 + b"*/"
+    body = b"WEBP" + b"VP8 " + len(payload).to_bytes(4, "little") + payload
+    return b"RIFF" + len(body).to_bytes(4, "little") + body
+
+
+def png_blob() -> bytes:
+    return b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + bytes(20)
+
+
+def pdf_blob() -> bytes:
+    """Entirely ASCII, as a standards-compliant PDF is allowed to be."""
+    return (
+        b"%PDF-1.4\n"
+        b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+        b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+        b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n"
+        b"xref\n0 4\n0000000000 65535 f \n"
+        b"trailer<</Size 4/Root 1 0 R>>\nstartxref\n0\n%%EOF\n"
+    )
+
+
+def ico_blob() -> bytes:
+    """One directory entry pointing at real image bytes."""
+    image = bytes(40)
+    entry = (
+        b"\x10\x10\x00\x00"
+        + (1).to_bytes(2, "little")
+        + (32).to_bytes(2, "little")
+        + len(image).to_bytes(4, "little")
+        + (22).to_bytes(4, "little")
+    )
+    return b"\x00\x00\x01\x00" + (1).to_bytes(2, "little") + entry + image
+
+
+def vp8x_only_webp_blob() -> bytes:
+    """Extended header with no image frame — well-formed, but not an image."""
+    payload = b"*/" + bytes(8) + b'console.log("EXEC")/*' + b"A" * 21 + b"*/"
+    body = b"WEBP" + b"VP8X" + len(payload).to_bytes(4, "little") + payload
+    return b"RIFF" + len(body).to_bytes(4, "little") + body
+
+
+def animated_webp_blob() -> bytes:
+    """ANMF wrapping a real VP8 frame: the frame is nested, not top level."""
+    frame = b"\x00\x00\x00" + b"\x9d\x01\x2a" + bytes(10)
+    inner = b"VP8 " + len(frame).to_bytes(4, "little") + frame
+    anmf = bytes(16) + inner
+    vp8x = b"VP8X" + (10).to_bytes(4, "little") + bytes(10)
+    body = b"WEBP" + vp8x + b"ANMF" + len(anmf).to_bytes(4, "little") + anmf
     return b"RIFF" + len(body).to_bytes(4, "little") + body
 
 
@@ -172,6 +226,81 @@ class RepositoryIntegrityTest(unittest.TestCase):
         (self.repo / "assets").mkdir()
         (self.repo / "assets" / "ok.gif").write_bytes(gif_blob())
         (self.repo / "assets" / "ok.webp").write_bytes(webp_blob())
+        findings = self.scan(self.commit())
+        self.assertEqual(findings, [])
+
+    def test_webp_with_honest_lengths_but_script_payload_is_blocked(self) -> None:
+        """Self-consistent chunk lengths are not proof of an image."""
+        path = self.repo / "assets" / "sizes.webp"
+        path.parent.mkdir()
+        path.write_bytes(script_webp_blob())
+        findings = self.scan(self.commit())
+        self.assertTrue(any("sizes.webp" in f.path for f in findings))
+
+    def test_vp8x_without_an_image_frame_is_blocked(self) -> None:
+        """VP8X is the extended header, not image data."""
+        path = self.repo / "assets" / "hdr.webp"
+        path.parent.mkdir()
+        path.write_bytes(vp8x_only_webp_blob())
+        findings = self.scan(self.commit())
+        self.assertTrue(any("hdr.webp" in f.path for f in findings))
+
+    def test_animated_webp_with_nested_frame_passes(self) -> None:
+        """A real animation carries its frame inside ANMF, not at top level."""
+        path = self.repo / "assets" / "anim.webp"
+        path.parent.mkdir()
+        path.write_bytes(animated_webp_blob())
+        findings = self.scan(self.commit())
+        self.assertEqual(findings, [])
+
+    def test_ico_with_empty_directory_entry_is_blocked(self) -> None:
+        path = self.repo / "assets" / "hollow.ico"
+        path.parent.mkdir()
+        path.write_bytes(b"\x00\x00\x01\x00\x01\x00" + bytes(16))
+        findings = self.scan(self.commit())
+        self.assertTrue(any("hollow.ico" in f.path for f in findings))
+
+    def test_valid_pdf_and_ico_pass(self) -> None:
+        (self.repo / "docs").mkdir()
+        (self.repo / "docs" / "ok.pdf").write_bytes(pdf_blob())
+        (self.repo / "docs" / "ok.ico").write_bytes(ico_blob())
+        findings = self.scan(self.commit())
+        self.assertEqual(findings, [])
+
+    def test_ascii_only_pdf_is_not_flagged_as_text(self) -> None:
+        """A valid PDF may contain no binary at all; the backstop must not fire."""
+        path = self.repo / "docs" / "ascii.pdf"
+        path.parent.mkdir()
+        blob = pdf_blob()
+        self.assertNotIn(b"\x00", blob, "fixture must be genuinely ASCII-only")
+        path.write_bytes(blob)
+        findings = self.scan(self.commit())
+        self.assertEqual(findings, [])
+
+    def test_shell_script_named_pdf_is_blocked(self) -> None:
+        # A benign script body on purpose: what is under test is that the file
+        # is not a PDF, not what the script does. A real download-and-execute
+        # string here would be flagged by the PR security surface scanner, which
+        # reads this file too.
+        path = self.repo / "docs" / "payload.pdf"
+        path.parent.mkdir()
+        path.write_text("#!/bin/sh\necho hello\n", encoding="utf-8")
+        findings = self.scan(self.commit())
+        self.assertTrue(any("payload.pdf" in f.path for f in findings))
+
+    def test_executable_asset_is_blocked(self) -> None:
+        """The executable bit runs a payload without any invocation in text."""
+        path = self.repo / "assets" / "run.png"
+        path.parent.mkdir()
+        path.write_bytes(png_blob())
+        os.chmod(path, 0o755)
+        findings = self.scan(self.commit())
+        self.assertTrue(any("executable bit" in f.reason for f in findings))
+
+    def test_ordinary_asset_mode_passes(self) -> None:
+        path = self.repo / "assets" / "plain.png"
+        path.parent.mkdir()
+        path.write_bytes(png_blob())
         findings = self.scan(self.commit())
         self.assertEqual(findings, [])
 
@@ -337,6 +466,55 @@ class RepositoryIntegrityTest(unittest.TestCase):
         )
         findings = self.scan(self.commit())
         self.assertTrue(any("SVG contains active" in f.reason for f in findings))
+
+    def test_tab_encoded_javascript_scheme_is_blocked(self) -> None:
+        """URL parsing discards embedded tabs before resolving the scheme."""
+        path = self.repo / "assets" / "tab.svg"
+        path.parent.mkdir()
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg">'
+            '<a href="java&#x09;script:alert(1)"><rect width="1" height="1"/></a></svg>',
+            encoding="utf-8",
+        )
+        findings = self.scan(self.commit())
+        self.assertTrue(any("SVG contains active" in f.reason for f in findings))
+
+    def test_newline_encoded_javascript_scheme_is_blocked(self) -> None:
+        path = self.repo / "assets" / "nl.svg"
+        path.parent.mkdir()
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg">'
+            '<a href="java&#x0a;script:alert(1)"><rect width="1" height="1"/></a></svg>',
+            encoding="utf-8",
+        )
+        findings = self.scan(self.commit())
+        self.assertTrue(any("SVG contains active" in f.reason for f in findings))
+
+    def test_svg_text_node_mentioning_a_scheme_is_not_flagged(self) -> None:
+        """Prose is not a URL: the normalised pass is anchored to href."""
+        path = self.repo / "assets" / "prose.svg"
+        path.parent.mkdir()
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg">'
+            '<text>Use java&#x09;script: for this</text>'
+            '<text>java&#x0a;script:</text><rect width="1" height="1"/></svg>',
+            encoding="utf-8",
+        )
+        findings = self.scan(self.commit())
+        self.assertEqual(findings, [])
+
+    def test_svg_text_split_across_lines_is_not_flagged(self) -> None:
+        """Control stripping must not join unrelated tokens into a false match."""
+        path = self.repo / "assets" / "split.svg"
+        path.parent.mkdir()
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg">\n'
+            '<desc>java</desc>\n<desc>script: release notes</desc>\n'
+            '<rect width="1" height="1"/></svg>',
+            encoding="utf-8",
+        )
+        findings = self.scan(self.commit())
+        self.assertEqual(findings, [])
 
     def test_svg_with_harmless_entities_passes(self) -> None:
         """Decoding must not turn ordinary escaped text into a false positive."""
