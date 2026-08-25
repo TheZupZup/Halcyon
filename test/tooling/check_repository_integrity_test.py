@@ -75,7 +75,33 @@ def pdf_blob() -> bytes:
 
 
 def ico_blob() -> bytes:
-    return b"\x00\x00\x01\x00\x01\x00" + bytes(16) + bytes(32)
+    """One directory entry pointing at real image bytes."""
+    image = bytes(40)
+    entry = (
+        b"\x10\x10\x00\x00"
+        + (1).to_bytes(2, "little")
+        + (32).to_bytes(2, "little")
+        + len(image).to_bytes(4, "little")
+        + (22).to_bytes(4, "little")
+    )
+    return b"\x00\x00\x01\x00" + (1).to_bytes(2, "little") + entry + image
+
+
+def vp8x_only_webp_blob() -> bytes:
+    """Extended header with no image frame — well-formed, but not an image."""
+    payload = b"*/" + bytes(8) + b'console.log("EXEC")/*' + b"A" * 21 + b"*/"
+    body = b"WEBP" + b"VP8X" + len(payload).to_bytes(4, "little") + payload
+    return b"RIFF" + len(body).to_bytes(4, "little") + body
+
+
+def animated_webp_blob() -> bytes:
+    """ANMF wrapping a real VP8 frame: the frame is nested, not top level."""
+    frame = b"\x00\x00\x00" + b"\x9d\x01\x2a" + bytes(10)
+    inner = b"VP8 " + len(frame).to_bytes(4, "little") + frame
+    anmf = bytes(16) + inner
+    vp8x = b"VP8X" + (10).to_bytes(4, "little") + bytes(10)
+    body = b"WEBP" + vp8x + b"ANMF" + len(anmf).to_bytes(4, "little") + anmf
+    return b"RIFF" + len(body).to_bytes(4, "little") + body
 
 
 def woff2_blob(num_tables: int = 1) -> bytes:
@@ -210,6 +236,29 @@ class RepositoryIntegrityTest(unittest.TestCase):
         path.write_bytes(script_webp_blob())
         findings = self.scan(self.commit())
         self.assertTrue(any("sizes.webp" in f.path for f in findings))
+
+    def test_vp8x_without_an_image_frame_is_blocked(self) -> None:
+        """VP8X is the extended header, not image data."""
+        path = self.repo / "assets" / "hdr.webp"
+        path.parent.mkdir()
+        path.write_bytes(vp8x_only_webp_blob())
+        findings = self.scan(self.commit())
+        self.assertTrue(any("hdr.webp" in f.path for f in findings))
+
+    def test_animated_webp_with_nested_frame_passes(self) -> None:
+        """A real animation carries its frame inside ANMF, not at top level."""
+        path = self.repo / "assets" / "anim.webp"
+        path.parent.mkdir()
+        path.write_bytes(animated_webp_blob())
+        findings = self.scan(self.commit())
+        self.assertEqual(findings, [])
+
+    def test_ico_with_empty_directory_entry_is_blocked(self) -> None:
+        path = self.repo / "assets" / "hollow.ico"
+        path.parent.mkdir()
+        path.write_bytes(b"\x00\x00\x01\x00\x01\x00" + bytes(16))
+        findings = self.scan(self.commit())
+        self.assertTrue(any("hollow.ico" in f.path for f in findings))
 
     def test_valid_pdf_and_ico_pass(self) -> None:
         (self.repo / "docs").mkdir()

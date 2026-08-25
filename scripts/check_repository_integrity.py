@@ -188,45 +188,93 @@ def _valid_vp8_payload(fourcc: bytes, payload: bytes) -> bool:
     return True
 
 
+def _walk_webp_chunks(data: bytes, pos: int, end: int) -> tuple[bool, bool]:
+    """Walk the chunk chain in [pos, end).
+
+    Returns (structure_is_sound, a_real_frame_was_seen). The two are separate
+    because `VP8X` is only the extended-file header — it announces features and
+    carries no image data, so a file holding nothing but `VP8X` is not an image
+    however well-formed its chunk lengths are.
+    """
+    saw_frame = False
+    while pos + 8 <= end:
+        fourcc = data[pos : pos + 4]
+        if not all(0x20 <= byte <= 0x7E for byte in fourcc):
+            return False, saw_frame
+        size = int.from_bytes(data[pos + 4 : pos + 8], "little")
+        start = pos + 8
+        stop = start + size
+        if stop > end:
+            return False, saw_frame
+        payload = data[start:stop]
+
+        if fourcc in (b"VP8 ", b"VP8L"):
+            if not _valid_vp8_payload(fourcc, payload):
+                return False, saw_frame
+            saw_frame = True
+        elif fourcc == b"VP8X":
+            if len(payload) < 10:
+                return False, saw_frame
+        elif fourcc == b"ANMF":
+            # An animation frame nests its own chunk chain after a 16-byte header.
+            if len(payload) < 16:
+                return False, saw_frame
+            sound, nested = _walk_webp_chunks(data, start + 16, stop)
+            if not sound:
+                return False, saw_frame
+            saw_frame = saw_frame or nested
+
+        pos = stop + (size & 1)
+    return pos == end, saw_frame
+
+
 def _valid_webp(data: bytes) -> bool:
-    """Declared RIFF length, a chunk chain landing exactly on the end, and a
-    real image bitstream inside the image chunk."""
+    """Declared RIFF length, a chunk chain landing exactly on the end, and at
+    least one real VP8/VP8L frame — nested inside ANMF for animations."""
     if len(data) < 16 or data[:4] != b"RIFF" or data[8:12] != b"WEBP":
         return False
     if int.from_bytes(data[4:8], "little") != len(data) - 8:
         return False
-
-    pos = 12
-    saw_image = False
-    while pos + 8 <= len(data):
-        fourcc = data[pos : pos + 4]
-        if not all(0x20 <= byte <= 0x7E for byte in fourcc):
-            return False
-        size = int.from_bytes(data[pos + 4 : pos + 8], "little")
-        payload = data[pos + 8 : pos + 8 + size]
-        if len(payload) != size:
-            return False
-        if fourcc in (b"VP8 ", b"VP8L", b"VP8X"):
-            if not _valid_vp8_payload(fourcc, payload):
-                return False
-            saw_image = True
-        pos += 8 + size + (size & 1)
-        if pos > len(data):
-            return False
-    return saw_image and pos == len(data)
+    sound, saw_frame = _walk_webp_chunks(data, 12, len(data))
+    return sound and saw_frame
 
 
 def _valid_pdf(data: bytes) -> bool:
+    """A deliberately shallow check — see the note below.
+
+    Structural PDF validation cannot rule out a shell polyglot. A shell reads a
+    file line by line and carries on past errors, so only the opening lines
+    decide what runs; no amount of trailing xref, trailer or object structure
+    prevents a payload on line two. A genuine PDF is itself "runnable" that way,
+    as a series of failing commands. Parsing the object graph would therefore
+    buy nothing against the attack it appears to address.
+
+    What actually defends a disguised PDF is denying it an execution path: the
+    executable-bit check in `check_asset_modes`, and the text scan that catches
+    anything in the repository invoking it. This function is the cheap sanity
+    layer — it rejects a bare script with no PDF header at all — and the limit
+    is documented rather than papered over.
+    """
     if len(data) < 32 or not data.startswith(b"%PDF-"):
         return False
     return b"%%EOF" in data[-2048:]
 
 
 def _valid_ico(data: bytes) -> bool:
+    """Header, directory, and every entry pointing at real image bytes."""
     if len(data) < 6 or data[:2] != b"\x00\x00" or data[2:4] not in (b"\x01\x00", b"\x02\x00"):
         return False
     count = int.from_bytes(data[4:6], "little")
-    return count > 0 and len(data) >= 6 + 16 * count
+    directory_end = 6 + 16 * count
+    if count == 0 or len(data) < directory_end:
+        return False
+    for index in range(count):
+        entry = 6 + 16 * index
+        size = int.from_bytes(data[entry + 8 : entry + 12], "little")
+        offset = int.from_bytes(data[entry + 12 : entry + 16], "little")
+        if size == 0 or offset < directory_end or offset + size > len(data):
+            return False
+    return True
 
 
 # PDF is deliberately absent: a standards-compliant PDF can be entirely ASCII —

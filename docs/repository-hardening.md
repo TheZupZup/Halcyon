@@ -67,6 +67,30 @@ Prefer this marker over path-wide exclusions: `test/` and `test/tooling/` stay
 fully scanned, because executable test infrastructure is itself a security
 surface.
 
+## Where the asset checks stop
+
+Container validation raises the cost of disguising an executable as an asset;
+it does not close the class. The honest boundary:
+
+- **Binary formats** (WOFF/WOFF2, TrueType/OpenType, PNG, JPEG, GIF, WEBP, ICO)
+  are validated structurally end to end — declared lengths must match, chunk and
+  block chains must land exactly on the end of the file, and an image must carry
+  a real bitstream signature. Polyglots against these are hard.
+- **PDF is different.** A shell reads a file line by line and continues past
+  errors, so only the opening lines decide what runs. No amount of trailing
+  xref, trailer or object structure prevents a payload on line two, and a
+  genuine PDF is itself "runnable" that way as a series of failing commands.
+  Parsing the object graph would buy nothing here, so the PDF check is a
+  deliberate sanity layer only.
+
+What actually defends a disguised asset is denying it an execution path:
+
+- assets may not carry the executable bit
+- no file in the repository may invoke one through an interpreter
+- IDE and container auto-run surfaces are maintainer-controlled
+
+Treat those three as the real control, and the format validators as depth.
+
 ## Required GitHub ruleset for `main`
 
 Create or update a branch ruleset targeting `main` and configure all of the
