@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
 import sys
 import unittest
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -337,6 +339,97 @@ class ForkRecoveryTest(unittest.TestCase):
         original = copy.deepcopy(payload)
         binder.resolve(payload, report(), REPOSITORY)
         self.assertEqual(payload, original)
+
+
+class FakeResponse:
+    def __init__(self, payload: object, link: str | None) -> None:
+        self._payload = payload
+        self.status = 200
+        self.headers = {"Link": link}
+
+    def read(self, _limit: int) -> bytes:
+        return json.dumps(self._payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+
+class PaginationTest(unittest.TestCase):
+    """Collections must be read whole, or 'exactly one' decides on a partial set.
+
+    The association endpoint pages at 30 by default and advertises the rest
+    through a `Link: rel="next"` header, confirmed against the live API. An
+    unpaginated read can miss the pull request being resolved, and can hide a
+    second match from the ambiguity check.
+    """
+
+    def open_pages(self, pages: list[tuple[object, str | None]]):
+        requested: list[str] = []
+
+        def opener(request, timeout=None):
+            requested.append(request.full_url)
+            return FakeResponse(*pages[len(requested) - 1])
+
+        return opener, requested
+
+    def test_all_pages_are_followed_and_concatenated(self) -> None:
+        nxt = f"{binder.API_ROOT}/repositories/1247002105/commits/x/pulls?page=2"
+        opener, requested = self.open_pages([
+            ([{"number": 1}, {"number": 2}], f'<{nxt}>; rel="next"'),
+            ([{"number": 3}], None),
+        ])
+        binder._OPENER = opener
+        try:
+            result = binder.api_get("/repos/o/r/commits/x/pulls", "t")
+        finally:
+            binder._OPENER = urllib.request.urlopen
+        self.assertEqual([entry["number"] for entry in result], [1, 2, 3])
+        self.assertIn("per_page=100", requested[0])
+        self.assertEqual(requested[1], nxt)
+
+    def test_a_single_resource_is_not_paginated(self) -> None:
+        opener, requested = self.open_pages([(pull_request(), None)])
+        binder._OPENER = opener
+        try:
+            result = binder.api_get(f"/repos/{REPOSITORY}/pulls/{PR_NUMBER}", "t")
+        finally:
+            binder._OPENER = urllib.request.urlopen
+        self.assertEqual(result["number"], PR_NUMBER)
+        self.assertEqual(len(requested), 1)
+
+    def test_an_oversized_collection_fails_closed(self) -> None:
+        opener, _ = self.open_pages([([{"number": n} for n in range(200)], None)])
+        binder._OPENER = opener
+        try:
+            with self.assertRaises(binder.BindingError):
+                binder.api_get("/repos/o/r/commits/x/pulls", "t")
+        finally:
+            binder._OPENER = urllib.request.urlopen
+
+    def test_pagination_cannot_be_walked_off_the_api_host(self) -> None:
+        for hostile in (
+            "https://api.github.com.attacker.test/repos/o/r/pulls",
+            "https://attacker.test/repos/o/r/pulls",
+            "http://api.github.com/repos/o/r/pulls",
+        ):
+            with self.subTest(hostile):
+                with self.assertRaises(binder.BindingError):
+                    binder._next_page(f'<{hostile}>; rel="next"')
+        self.assertIsNone(binder._next_page(None))
+        self.assertIsNone(binder._next_page('<https://x/y>; rel="last"'))
+
+    def test_endless_pagination_fails_closed(self) -> None:
+        loop = f"{binder.API_ROOT}/repositories/1/pulls?page=2"
+        opener, _ = self.open_pages([([{"number": 1}], f'<{loop}>; rel="next"')] * 20)
+        binder._OPENER = opener
+        try:
+            with self.assertRaises(binder.BindingError):
+                binder.api_get("/repos/o/r/commits/x/pulls", "t")
+        finally:
+            binder._OPENER = urllib.request.urlopen
 
 
 class TrustBoundaryTest(unittest.TestCase):

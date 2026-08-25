@@ -178,7 +178,12 @@ only when all of the following hold:
    `workflow_run.head_sha` and `workflow_run.head_repository.full_name`, both
    set by GitHub from the pull request that started the run.
 4. Exactly one pull request has that head commit *and* that head repository.
-   More than one, or none, is refused rather than guessed. This association
+   More than one, or none, is refused rather than guessed. The association
+   response is read whole: the endpoint pages at 30 by default and advertises
+   the rest through a `Link: rel="next"` header, so an unpaginated read could
+   both miss the pull request being resolved and hide a second match from this
+   very check, deciding "exactly one" against a set that was silently cut
+   short. Accumulation is bounded, and exceeding the bound fails closed. This association
    query must be asked of the **head** repository: a fork's head commit is not
    in the base repository's commit list, so
    `/repos/{base}/commits/{fork_sha}/pulls` answers `[]` for exactly the fork

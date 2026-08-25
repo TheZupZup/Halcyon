@@ -55,7 +55,12 @@ REPO_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$")
 # _branch below for why this value is bounded but not otherwise constrained.
 MAX_BRANCH_LENGTH = 255
 MAX_PR_NUMBER = 1_000_000
-MAX_CANDIDATES = 50
+# A commit realistically has one associated pull request. The bound exists so a
+# pathological or hostile response cannot be read unbounded; exceeding it fails
+# closed rather than selecting from a set that was silently cut short.
+MAX_CANDIDATES = 100
+_PAGE_SIZE = 100
+_MAX_PAGES = 4
 MAX_REPORT_BYTES = 1_000_000
 MAX_EVENT_BYTES = 5_000_000
 API_ROOT = "https://api.github.com"
@@ -311,9 +316,34 @@ def verify_pull_request(pull_request: object, binding: Binding) -> bool:
     return head_sha == binding.head_sha
 
 
-def api_get(path: str, token: str) -> object:
+# Swappable so the pagination below can be exercised without a network.
+_OPENER = urllib.request.urlopen
+
+_NEXT_LINK = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
+
+
+def _next_page(link_header: str | None) -> str | None:
+    """The `rel="next"` URL, required to stay on the API host.
+
+    GitHub answers with an absolute URL under a different path shape than the
+    one requested (`/repositories/{id}/...`), so it is followed as given rather
+    than reconstructed -- but only ever after confirming the host, so a
+    redirected or spoofed header cannot walk this request off api.github.com.
+    """
+    if not link_header:
+        return None
+    match = _NEXT_LINK.search(link_header)
+    if not match:
+        return None
+    url = match.group(1)
+    if not url.startswith(API_ROOT + "/"):
+        raise BindingError("GitHub API pagination pointed off the API host")
+    return url
+
+
+def _read_page(url: str, token: str) -> tuple[object, str | None]:
     request = urllib.request.Request(
-        API_ROOT + path,
+        url,
         headers={
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
@@ -321,10 +351,37 @@ def api_get(path: str, token: str) -> object:
             "Authorization": "Bearer " + token,
         },
     )
-    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 - fixed https root
+    with _OPENER(request, timeout=30) as response:  # noqa: S310 - fixed https root
         if response.status != 200:
-            raise BindingError(f"GitHub API returned {response.status} for {path}")
-        return json.loads(response.read(MAX_REPORT_BYTES).decode("utf-8"))
+            raise BindingError(f"GitHub API returned {response.status} for {url}")
+        payload = json.loads(response.read(MAX_REPORT_BYTES).decode("utf-8"))
+    return payload, _next_page(response.headers.get("Link"))
+
+
+def api_get(path: str, token: str) -> object:
+    """Fetch one API resource, following pagination when it is a collection.
+
+    Collections must be read whole. The commit-to-PR association endpoint pages
+    at 30 by default, so an unpaginated read could miss the pull request being
+    resolved -- reporting zero matches on a PR that is present -- and could hide
+    a second match from the ambiguity check, deciding "exactly one" against a
+    set that was silently cut short. Accumulation is bounded, and exceeding the
+    bound fails closed rather than selecting from a truncated set.
+    """
+    url = API_ROOT + path + ("&" if "?" in path else "?") + f"per_page={_PAGE_SIZE}"
+    collected: list[object] | None = None
+    for _ in range(_MAX_PAGES):
+        payload, url = _read_page(url, token)
+        if not isinstance(payload, list):
+            return payload  # a single resource is never paginated
+        collected = payload if collected is None else collected + payload
+        if len(collected) > MAX_CANDIDATES:
+            raise BindingError(
+                f"GitHub returned more than {MAX_CANDIDATES} results for {path}; "
+                "refusing to select from a set this large")
+        if url is None:
+            return collected
+    raise BindingError(f"GitHub pagination for {path} did not terminate")
 
 
 def _read_json(path: Path, limit: int, label: str) -> object:
