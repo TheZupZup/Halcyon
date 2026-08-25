@@ -12,9 +12,11 @@ commit (or be pinned as a required workflow by a repository ruleset).
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,15 +59,93 @@ EXTERNAL_BLOCKED_PATHS: tuple[tuple[re.Pattern[str], str], ...] = _EXTERNAL_BLOC
     for path in sorted(SELF_TEST_FIXTURE_PATHS)
 )
 
-ASSET_MAGIC: dict[str, tuple[bytes, ...]] = {
-    ".woff2": (b"wOF2",),
-    ".woff": (b"wOFF",),
-    ".ttf": (b"\x00\x01\x00\x00", b"true", b"typ1"),
-    ".otf": (b"OTTO",),
-    ".png": (b"\x89PNG\r\n\x1a\n",),
-    ".jpg": (b"\xff\xd8\xff",),
-    ".jpeg": (b"\xff\xd8\xff",),
-    ".gif": (b"GIF87a", b"GIF89a"),
+def _u16(data: bytes, offset: int) -> int:
+    return int.from_bytes(data[offset : offset + 2], "big")
+
+
+def _u32(data: bytes, offset: int) -> int:
+    return int.from_bytes(data[offset : offset + 4], "big")
+
+
+# A magic prefix alone is worthless here: `wOF2` followed by JavaScript is still
+# four valid bytes. Each validator below checks a self-describing structural
+# field — a declared length that must equal the real file size, or a redundant
+# field derived from another — so appended or substituted script breaks it.
+
+
+def _valid_woff(data: bytes, signature: bytes, header_size: int) -> bool:
+    """WOFF/WOFF2 declare their own total length and a zeroed reserved field."""
+    if len(data) < header_size or not data.startswith(signature):
+        return False
+    if _u32(data, 8) != len(data):
+        return False
+    return _u16(data, 12) != 0 and _u16(data, 14) == 0
+
+
+def _valid_sfnt(data: bytes) -> bool:
+    """TrueType/OpenType: searchRange and friends are derived from numTables."""
+    if len(data) < 12 or data[:4] not in (b"\x00\x01\x00\x00", b"true", b"typ1", b"OTTO"):
+        return False
+    num_tables = _u16(data, 4)
+    if num_tables == 0 or len(data) < 12 + 16 * num_tables:
+        return False
+    entry_selector = num_tables.bit_length() - 1
+    search_range = (1 << entry_selector) * 16
+    return (
+        _u16(data, 6) == search_range
+        and _u16(data, 8) == entry_selector
+        and _u16(data, 10) == num_tables * 16 - search_range
+    )
+
+
+def _valid_png(data: bytes) -> bool:
+    """The 8-byte signature must be followed by a well-formed 13-byte IHDR."""
+    if len(data) < 33 or not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return False
+    return _u32(data, 8) == 13 and data[12:16] == b"IHDR"
+
+
+_JPEG_MARKERS = frozenset(range(0xC0, 0xFF)) - {0xD8, 0xD9}
+
+
+def _valid_jpeg(data: bytes) -> bool:
+    if len(data) < 4 or not data.startswith(b"\xff\xd8\xff"):
+        return False
+    return data[3] in _JPEG_MARKERS and b"\xff\xd9" in data
+
+
+def _valid_gif(data: bytes) -> bool:
+    """Header plus a logical screen descriptor with a non-zero canvas."""
+    if len(data) < 13 or data[:6] not in (b"GIF87a", b"GIF89a"):
+        return False
+    width = int.from_bytes(data[6:8], "little")
+    height = int.from_bytes(data[8:10], "little")
+    return width != 0 and height != 0
+
+
+def _valid_webp(data: bytes) -> bool:
+    """RIFF/WEBP container followed by a real VP8 chunk fourcc.
+
+    The declared RIFF size is deliberately not required to match the file size:
+    a truncated-but-genuine image is a broken asset, not a disguised script, and
+    this guard is not an image linter. The fourcc is what a script cannot fake
+    while still being a script.
+    """
+    if len(data) < 16 or data[:4] != b"RIFF" or data[8:12] != b"WEBP":
+        return False
+    return data[12:16] in (b"VP8 ", b"VP8L", b"VP8X")
+
+
+ASSET_VALIDATORS: dict[str, tuple[str, "Callable[[bytes], bool]"]] = {
+    ".woff2": ("WOFF2", lambda data: _valid_woff(data, b"wOF2", 48)),
+    ".woff": ("WOFF", lambda data: _valid_woff(data, b"wOFF", 44)),
+    ".ttf": ("TrueType", _valid_sfnt),
+    ".otf": ("OpenType", _valid_sfnt),
+    ".png": ("PNG", _valid_png),
+    ".jpg": ("JPEG", _valid_jpeg),
+    ".jpeg": ("JPEG", _valid_jpeg),
+    ".gif": ("GIF", _valid_gif),
+    ".webp": ("WEBP", _valid_webp),
 }
 
 
@@ -116,7 +196,7 @@ ACTIVE_SVG_RE = re.compile(
     r"""(?ix)
     <\s*script\b
     |javascript\s*:
-    |\bon(?:load|error|click|mouseover|focus)\s*=
+    |\bon[a-z][a-z0-9_:-]*\s*=
     |<\s*foreignObject\b
     |(?:href|xlink:href)\s*=\s*["']\s*(?:https?:|data:text/html)
     """
@@ -189,20 +269,62 @@ def is_external(pr_author: str, repo_owner: str) -> bool:
     return pr_author.casefold() != repo_owner.casefold()
 
 
+def _ignore_rules(text: str) -> list[str]:
+    rules: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        rules.append(line[1:] if line.startswith("\\") else line)
+    return rules
+
+
+def _ignore_state(rules: list[str], entry: str) -> tuple[bool, str | None]:
+    """Resolve whether `entry` ends up ignored, the way Git resolves it.
+
+    Git applies the *last* matching rule, so a later `!.vscode/` re-enables a
+    directory an earlier `.vscode/` ignored. Checking only for the presence of
+    the positive entry misses that. Negations are matched as globs, since
+    `!.vs*` re-enables the directory just as surely as `!.vscode/`.
+    """
+    name = entry.strip("/")
+    ignored = False
+    negated_by: str | None = None
+    for rule in rules:
+        if rule.startswith("!"):
+            pattern = rule[1:].strip().strip("/")
+            if pattern and fnmatch.fnmatch(name, pattern):
+                ignored = False
+                negated_by = rule
+        elif rule.strip("/") == name:
+            ignored = True
+            negated_by = None
+    return ignored, negated_by
+
+
 def check_ignore_policy(head: str) -> list[Finding]:
     text = blob_text(head, ".gitignore")
     if text is None:
         return [Finding(".gitignore", "required repository .gitignore is missing")]
-    entries = {
-        line.strip()
-        for line in text.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    }
-    return [
-        Finding(".gitignore", f"required ignore entry `{entry}` was removed")
-        for entry in PROTECTED_IGNORE_ENTRIES
-        if entry not in entries
-    ]
+    rules = _ignore_rules(text)
+
+    findings: list[Finding] = []
+    for entry in PROTECTED_IGNORE_ENTRIES:
+        ignored, negated_by = _ignore_state(rules, entry)
+        if ignored:
+            continue
+        if negated_by is not None:
+            findings.append(
+                Finding(
+                    ".gitignore",
+                    f"required ignore entry `{entry}` is re-enabled by `{negated_by}`",
+                )
+            )
+        else:
+            findings.append(
+                Finding(".gitignore", f"required ignore entry `{entry}` was removed")
+            )
+    return findings
 
 
 def check_external_paths(files: list[str]) -> list[Finding]:
@@ -230,24 +352,16 @@ def check_symlinks(head: str, files: list[str], external: bool) -> list[Finding]
 def check_asset_magic(head: str, files: list[str]) -> list[Finding]:
     findings: list[Finding] = []
     for path in files:
-        suffix = Path(path).suffix.lower()
-        if suffix == ".webp":
-            data = blob_bytes(head, path)
-            if data is None:
-                continue
-            if not (len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"):
-                findings.append(Finding(path, "file extension is .webp but content is not WEBP"))
+        entry = ASSET_VALIDATORS.get(Path(path).suffix.lower())
+        if entry is None:
             continue
-
-        expected = ASSET_MAGIC.get(suffix)
-        if expected is None:
-            continue
+        label, is_valid = entry
         data = blob_bytes(head, path)
         if data is None:
             continue
-        if not any(data.startswith(prefix) for prefix in expected):
+        if not is_valid(data):
             findings.append(
-                Finding(path, f"file extension is {suffix} but file signature does not match")
+                Finding(path, f"file extension claims {label} but the file is not a valid {label}")
             )
     return findings
 

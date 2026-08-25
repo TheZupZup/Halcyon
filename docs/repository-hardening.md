@@ -26,10 +26,15 @@ For external contributor PRs:
 
 For every PR, including maintainer PRs:
 
-- removal of `.idea/` or `.vscode/` from the root `.gitignore`
+- removal of `.idea/` or `.vscode/` from the root `.gitignore`, including a
+  later `!` rule that re-enables one of them (Git applies the last matching
+  rule, so presence of the entry alone proves nothing)
 - files whose extension claims WOFF/WOFF2/TTF/OTF/PNG/JPEG/GIF/WEBP but whose
-  file signature does not match
-- active/executable SVG content such as `<script>`, event handlers,
+  contents are not structurally that format. A magic prefix is not enough:
+  `wOF2` followed by JavaScript is four valid bytes, so each format is checked
+  against a self-describing field — a declared length that must equal the real
+  file size, or a redundant field derived from another
+- active/executable SVG content such as `<script>`, any `on*=` event handler,
   `javascript:` URLs, `foreignObject`, or external executable references
 - text that invokes an asset such as `.woff2`, `.png`, or `.pdf` through
   Node/Python/shell interpreters, or marks one executable with `chmod +x`
