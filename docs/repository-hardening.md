@@ -83,6 +83,15 @@ it does not close the class. The honest boundary:
   Parsing the object graph would buy nothing here, so the PDF check is a
   deliberate sanity layer only.
 
+For WEBP the arithmetic happens to close the polyglot class outright. A file
+that is also JavaScript needs bytes 4-7 to open a comment (`/*` or `//`), and
+both begin `0x2F`, which little-endian makes the declared RIFF length odd. The
+chunk chain after the 12-byte header always consumes an even number of bytes,
+since every chunk is 8 + payload + pad-to-even. So the file size is even while
+`declared + 8` is odd, and no such file can pass. This is why later requests to
+validate the frame bitstream more deeply were declined: a minimal frame may be a
+corrupt image, but it cannot be an executable one.
+
 What actually defends a disguised asset is denying it an execution path:
 
 - assets may not carry the executable bit
