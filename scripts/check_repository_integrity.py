@@ -24,6 +24,7 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class Finding:
+    commit: str
     path: str
     reason: str
 
@@ -487,7 +488,7 @@ def _ignore_state(rules: list[str], entry: str) -> tuple[bool, str | None]:
 def check_ignore_policy(head: str) -> list[Finding]:
     text = blob_text(head, ".gitignore")
     if text is None:
-        return [Finding(".gitignore", "required repository .gitignore is missing")]
+        return [Finding(head, ".gitignore", "required repository .gitignore is missing")]
     rules = _ignore_rules(text)
 
     findings: list[Finding] = []
@@ -498,23 +499,24 @@ def check_ignore_policy(head: str) -> list[Finding]:
         if negated_by is not None:
             findings.append(
                 Finding(
+                    head,
                     ".gitignore",
                     f"required ignore entry `{entry}` is re-enabled by `{negated_by}`",
                 )
             )
         else:
             findings.append(
-                Finding(".gitignore", f"required ignore entry `{entry}` was removed")
+                Finding(head, ".gitignore", f"required ignore entry `{entry}` was removed")
             )
     return findings
 
 
-def check_external_paths(files: list[str]) -> list[Finding]:
+def check_external_paths(commit: str, files: list[str]) -> list[Finding]:
     findings: list[Finding] = []
     for path in files:
         for pattern, reason in EXTERNAL_BLOCKED_PATHS:
             if pattern.search(path):
-                findings.append(Finding(path, reason))
+                findings.append(Finding(commit, path, reason))
                 break
     return findings
 
@@ -526,7 +528,7 @@ def check_symlinks(head: str, files: list[str], external: bool) -> list[Finding]
     for path in files:
         if git_mode(head, path) == "120000":
             findings.append(
-                Finding(path, "external PR introduces or modifies a Git symlink")
+                Finding(head, path, "external PR introduces or modifies a Git symlink")
             )
     return findings
 
@@ -544,7 +546,7 @@ def check_asset_modes(head: str, files: list[str]) -> list[Finding]:
             continue
         if git_mode(head, path) == "100755":
             findings.append(
-                Finding(path, "asset file is committed with the executable bit set")
+                Finding(head, path, "asset file is committed with the executable bit set")
             )
     return findings
 
@@ -565,12 +567,12 @@ def check_asset_magic(head: str, files: list[str]) -> list[Finding]:
             # that is pure text is a polyglot candidate regardless of how well
             # it fakes a header, so reject it before the format check.
             findings.append(
-                Finding(path, f"file extension claims {label} but the file is entirely text")
+                Finding(head, path, f"file extension claims {label} but the file is entirely text")
             )
             continue
         if not is_valid(data):
             findings.append(
-                Finding(path, f"file extension claims {label} but the file is not a valid {label}")
+                Finding(head, path, f"file extension claims {label} but the file is not a valid {label}")
             )
     return findings
 
@@ -614,7 +616,7 @@ def check_active_svg(head: str, files: list[str]) -> list[Finding]:
             continue
         text = blob_text(head, path)
         if text is not None and svg_is_active(text):
-            findings.append(Finding(path, "SVG contains active/external executable content"))
+            findings.append(Finding(head, path, "SVG contains active/external executable content"))
     return findings
 
 
@@ -647,11 +649,11 @@ def asset_execution_finding(path: str, text: str) -> Finding | None:
     normalised = re.sub(r"\\\r?\n", "", "".join(scannable))
     for line in re.split(r"[\r\n]", normalised):
         if _EXECUTABLE_ASSET_RE.search(line):
-            return Finding(path, "text invokes or marks an asset file as executable")
+            return Finding("", path, "text invokes or marks an asset file as executable")
         for match in _NUMERIC_CHMOD_ASSET_RE.finditer(line):
             permission_digits = match.group("mode")[-3:]
             if any(int(digit) & 1 for digit in permission_digits):
-                return Finding(path, "text invokes or marks an asset file as executable")
+                return Finding("", path, "text invokes or marks an asset file as executable")
     return None
 
 
@@ -663,34 +665,104 @@ def check_asset_execution(head: str, files: list[str]) -> list[Finding]:
             continue
         finding = asset_execution_finding(path, data.decode("utf-8", "surrogateescape"))
         if finding is not None:
-            findings.append(finding)
+            findings.append(Finding(head, finding.path, finding.reason))
     return findings
 
 
 def dedupe(findings: list[Finding]) -> list[Finding]:
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, str]] = set()
     result: list[Finding] = []
     for finding in findings:
-        key = (finding.path, finding.reason)
+        key = (finding.commit, finding.path, finding.reason)
         if key not in seen:
             seen.add(key)
             result.append(finding)
     return result
 
 
+def resolve_commit(revision: str) -> str:
+    value = run_git("rev-parse", "--verify", f"{revision}^{{commit}}")
+    assert isinstance(value, str)
+    return value.strip()
+
+
+def commit_parents(commit: str) -> list[str]:
+    value = run_git("show", "-s", "--format=%P", commit)
+    assert isinstance(value, str)
+    return value.strip().split()
+
+
+def changed_files_between(old: str, new: str) -> list[str]:
+    raw = run_git(
+        "-c", "core.quotePath=false", "diff", "--name-only", "-z",
+        "--no-renames", old, new, "--",
+    )
+    assert isinstance(raw, str)
+    return [item for item in raw.split("\0") if item]
+
+
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def commit_introduced_files(commit: str) -> list[str]:
+    """Paths whose state was introduced by this commit rather than a parent.
+
+    For an ordinary commit this is its parent diff. For a merge, only paths
+    different from *every* parent are merge-introduced. That catches novel
+    conflict resolutions without blaming an Update-branch merge for content
+    copied unchanged from either the PR or trusted-main parent.
+    """
+    parents = commit_parents(commit)
+    if not parents:
+        return changed_files_between(EMPTY_TREE, commit)
+    changed_by_parent = [set(changed_files_between(parent, commit)) for parent in parents]
+    return sorted(set.intersection(*changed_by_parent))
+
+
+def introduced_commits(base: str, head: str) -> list[str]:
+    # A GitHub PR must share ancestry with its trusted base. Refuse unrelated
+    # histories rather than broadening the scan to an entire foreign history.
+    merge_base = run_git("merge-base", base, head)
+    assert isinstance(merge_base, str)
+    if not merge_base.strip():
+        raise IntegrityError("PR head has no merge base with the trusted base")
+    raw = run_git("rev-list", "--reverse", "--topo-order", head, "--not", base)
+    assert isinstance(raw, str)
+    return raw.split()
+
+
+def scan_tree(commit: str, files: list[str], external: bool, *, check_ignore: bool) -> list[Finding]:
+    findings: list[Finding] = []
+    if check_ignore:
+        findings.extend(check_ignore_policy(commit))
+    if external:
+        findings.extend(check_external_paths(commit, files))
+    findings.extend(check_symlinks(commit, files, external))
+    findings.extend(check_asset_modes(commit, files))
+    findings.extend(check_asset_magic(commit, files))
+    findings.extend(check_active_svg(commit, files))
+    findings.extend(check_asset_execution(commit, files))
+    return findings
+
+
 def scan(base: str, head: str, pr_author: str, repo_owner: str) -> list[Finding]:
-    files = changed_files(base, head)
+    base = resolve_commit(base)
+    head = resolve_commit(head)
     external = is_external(pr_author, repo_owner)
 
     findings: list[Finding] = []
-    findings.extend(check_ignore_policy(head))
-    if external:
-        findings.extend(check_external_paths(files))
-    findings.extend(check_symlinks(head, files, external))
-    findings.extend(check_asset_modes(head, files))
-    findings.extend(check_asset_magic(head, files))
-    findings.extend(check_active_svg(head, files))
-    findings.extend(check_asset_execution(head, files))
+    for commit in introduced_commits(base, head):
+        files = commit_introduced_files(commit)
+        findings.extend(scan_tree(commit, files, external, check_ignore=".gitignore" in files))
+
+    # Preserve the final-tree check as defense in depth, but do not attribute a
+    # historical violation to a later merge merely because it remains present
+    # there. Historical findings are the more precise explanation.
+    files = changed_files(base, head)
+    historical_keys = {(finding.path, finding.reason) for finding in findings}
+    for finding in scan_tree(head, files, external, check_ignore=".gitignore" in files):
+        if (finding.path, finding.reason) not in historical_keys:
+            findings.append(finding)
     return dedupe(findings)
 
 
@@ -703,7 +775,9 @@ def write_report(path: Path, findings: list[Finding]) -> None:
             return
         out.write("### Blocked findings\n\n")
         for finding in findings:
-            out.write(f"- `{finding.path}` — {finding.reason}\n")
+            out.write(
+                f"- commit `{finding.commit}` — `{finding.path}` — {finding.reason}\n"
+            )
         out.write(
             "\nThese checks fail closed. Repository-control changes must be "
             "performed from a trusted maintainer-controlled branch.\n"
@@ -733,7 +807,7 @@ def main(argv: list[str] | None = None) -> int:
     if findings:
         print("Repository integrity guard blocked the PR:")
         for finding in findings:
-            print(f"  {finding.path}: {finding.reason}")
+            print(f"  {finding.commit} {finding.path}: {finding.reason}")
         return 1
 
     print("Repository integrity guard passed.")
