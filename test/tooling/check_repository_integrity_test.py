@@ -34,6 +34,11 @@ MARKED_PAYLOAD_LINE = f"{ASSET_EXECUTION_PAYLOAD.strip()}  # {integrity.FIXTURE_
 PREFIXED_SCRIPT_PAYLOAD = b"=0;\nglobal.p=require('child_process');p.exec('id');\n"
 
 
+def asset_command(*parts: str) -> str:
+    """Assemble attack fixtures without making this source self-match."""
+    return "".join(parts)
+
+
 def gif_blob() -> bytes:
     """A minimal but structurally complete 1x1 GIF, trailer included."""
     header = b"GIF89a" + (1).to_bytes(2, "little") + (1).to_bytes(2, "little") + bytes([0x80, 0, 0])
@@ -175,6 +180,22 @@ class RepositoryIntegrityTest(unittest.TestCase):
         head = git(self.repo, "rev-parse", "HEAD")
         findings = self.scan(head)
         self.assertTrue(any(f.path == ".vscode/tasks.json" for f in findings))
+
+    def test_case_variant_ide_paths_are_blocked(self) -> None:
+        for relative in (".VSCODE/tasks.json", ".Idea/workspace.xml"):
+            with self.subTest(relative):
+                path = self.repo / relative
+                path.parent.mkdir()
+                path.write_text("{}\n", encoding="utf-8")
+                findings = self.scan(self.commit(relative))
+                self.assertTrue(any(f.path == relative for f in findings))
+                self.base = git(self.repo, "rev-parse", "HEAD")
+
+    def test_similarly_named_ide_path_is_allowed(self) -> None:
+        path = self.repo / ".vscode-notes" / "readme.txt"
+        path.parent.mkdir()
+        path.write_text("notes\n", encoding="utf-8")
+        self.assertEqual(self.scan(self.commit()), [])
 
     def test_owner_can_change_maintainer_controlled_path(self) -> None:
         path = self.repo / ".vscode" / "extensions.json"
@@ -553,6 +574,60 @@ class FixtureExemptionTest(unittest.TestCase):
     def test_payload_is_detected_at_an_ordinary_path(self) -> None:
         finding = integrity.asset_execution_finding("docs/note.txt", ASSET_EXECUTION_PAYLOAD)
         self.assertIsNotNone(finding)
+
+    def test_shell_source_commands_for_assets_are_detected(self) -> None:
+        for command in (
+            asset_command("source assets/payload.", "png"),
+            asset_command(". assets/payload.", "woff2"),
+        ):
+            with self.subTest(command):
+                self.assertIsNotNone(
+                    integrity.asset_execution_finding("docs/note.txt", command)
+                )
+
+    def test_dot_used_as_an_argument_is_not_asset_execution(self) -> None:
+        self.assertIsNone(
+            integrity.asset_execution_finding(
+                "docs/note.txt", asset_command("jq . assets/data.", "png")
+            )
+        )
+
+        self.assertIsNone(
+            integrity.asset_execution_finding(
+                "docs/note.txt", asset_command("source config.", "env")
+            )
+        )
+
+    def test_numeric_chmod_that_grants_execute_is_detected(self) -> None:
+        for mode in ("755", "775", "700", "0755", "0711"):
+            with self.subTest(mode):
+                command = asset_command("chmod ", mode, " assets/payload.", "png")
+                self.assertIsNotNone(
+                    integrity.asset_execution_finding("docs/note.txt", command)
+                )
+
+    def test_numeric_chmod_without_execute_is_allowed(self) -> None:
+        for mode in ("644", "664", "600", "0444", "0000"):
+            with self.subTest(mode):
+                command = asset_command("chmod ", mode, " assets/image.", "png")
+                self.assertIsNone(
+                    integrity.asset_execution_finding("docs/note.txt", command)
+                )
+
+    def test_backslash_newline_cannot_split_asset_extension_or_path(self) -> None:
+        for command in (
+            asset_command("node assets/payload.wo", "\\\n", "ff2"),
+            asset_command("source assets/pa", "\\\n", "yload.png"),
+            asset_command("chmod 7", "\\\n", "55 assets/payload.png"),
+        ):
+            with self.subTest(command):
+                self.assertIsNotNone(
+                    integrity.asset_execution_finding("docs/note.txt", command)
+                )
+
+    def test_ordinary_multiline_content_stays_allowed(self) -> None:
+        text = asset_command("printf '%s\\n' assets/image.", "png", "\necho done\n")
+        self.assertIsNone(integrity.asset_execution_finding("docs/note.txt", text))
 
     def test_marker_does_not_exempt_an_ordinary_path(self) -> None:
         finding = integrity.asset_execution_finding("docs/note.txt", MARKED_PAYLOAD_LINE)

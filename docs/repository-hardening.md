@@ -17,7 +17,8 @@ a person's intent.
 
 For external contributor PRs:
 
-- `.vscode/**`, `.idea/**`, and `*.code-workspace`
+- `.vscode/**`, `.idea/**`, and `*.code-workspace`, matched case-insensitively
+  so case variants cannot collide on contributor filesystems
 - `.github/workflows/**` and composite actions under `.github/actions/**`, which
   privileged workflows run from the PR head
 - repository automation under `scripts/`, `tool/`, and `tools/`
@@ -43,7 +44,9 @@ For every PR, including maintainer PRs:
   invocation someone wrote down; a payload committed already-executable needs
   none
 - text that invokes an asset such as `.woff2`, `.png`, or `.pdf` through
-  Node/Python/shell interpreters, or marks one executable with `chmod +x`
+  Node/Python/shell interpreters (including `source` and dot commands), or
+  marks one executable with `chmod +x` or an executable numeric mode. Shell
+  backslash-newline continuations are resolved before this scan
 
 Repository-control changes must be made from a trusted maintainer-controlled
 branch.

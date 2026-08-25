@@ -38,8 +38,8 @@ SELF_TEST_FIXTURE_PATHS = frozenset({"test/tooling/check_repository_integrity_te
 FIXTURE_EXEMPTION_MARKER = "integrity-guard-fixture"
 
 _EXTERNAL_BLOCKED_PATHS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"^\.vscode/"), "VS Code workspace configuration is maintainer-controlled"),
-    (re.compile(r"^\.idea/"), "IDE project configuration is maintainer-controlled"),
+    (re.compile(r"^\.vscode/", re.I), "VS Code workspace configuration is maintainer-controlled"),
+    (re.compile(r"^\.idea/", re.I), "IDE project configuration is maintainer-controlled"),
     (re.compile(r"(?:^|/).*\.code-workspace$", re.I), "VS Code workspace file is maintainer-controlled"),
     (re.compile(r"^\.github/workflows/"), "GitHub Actions workflows are maintainer-controlled"),
     (re.compile(r"^\.github/actions/"), "GitHub composite actions are maintainer-controlled"),
@@ -346,6 +346,16 @@ _EXECUTABLE_ASSET_RE = re.compile(
     |
     \bchmod\b[^\n\r]{{0,120}}\+x[^\n\r]{{0,160}}
     \.(?:{'|'.join(EXECUTABLE_ASSET_EXTENSIONS)})\b
+    |
+    (?:^|[;&|()])\s*(?:source|\.)\s+[^\n\r]{{0,240}}
+    \.(?:{'|'.join(EXECUTABLE_ASSET_EXTENSIONS)})\b
+    """
+)
+
+_NUMERIC_CHMOD_ASSET_RE = re.compile(
+    rf"""(?ix)
+    \bchmod\b[^\n\r]{{0,120}}?\b(?P<mode>[0-7]{{3,4}})\b
+    [^\n\r]{{0,160}}\.(?:{'|'.join(EXECUTABLE_ASSET_EXTENSIONS)})\b
     """
 )
 
@@ -623,14 +633,25 @@ def is_exempt_fixture_line(path: str, line: str) -> bool:
 def asset_execution_finding(path: str, text: str) -> Finding | None:
     """Return a finding when `text` invokes or marks an asset as executable.
 
-    Scanning happens line by line on exactly the line separators the pattern
-    itself refuses to cross, so this sees what a whole-file search would.
+    Shell removes a backslash-newline pair before parsing commands, so perform
+    that exact normalisation before matching. Fixture exemptions remain
+    physical-line scoped and are removed first; their marker can neither exempt
+    a neighbouring line nor become part of a reconstructed command.
     """
-    for line in re.split(r"[\r\n]", text):
-        if is_exempt_fixture_line(path, line):
-            continue
+    scannable: list[str] = []
+    for line in text.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        ending = line[len(body) :]
+        scannable.append(ending if is_exempt_fixture_line(path, body) else line)
+
+    normalised = re.sub(r"\\\r?\n", "", "".join(scannable))
+    for line in re.split(r"[\r\n]", normalised):
         if _EXECUTABLE_ASSET_RE.search(line):
             return Finding(path, "text invokes or marks an asset file as executable")
+        for match in _NUMERIC_CHMOD_ASSET_RE.finditer(line):
+            permission_digits = match.group("mode")[-3:]
+            if any(int(digit) & 1 for digit in permission_digits):
+                return Finding(path, "text invokes or marks an asset file as executable")
     return None
 
 
