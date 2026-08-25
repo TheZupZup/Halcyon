@@ -65,7 +65,15 @@ jobs:
 
           if git cat-file -e "$BASE_SHA:$CHECKER_PATH" 2>/dev/null; then
             git show "$BASE_SHA:$CHECKER_PATH" > "$checker"
-            echo "Loaded repository-integrity checker from trusted PR base."
+            if grep -q -- '--json-report' "$checker"; then
+              echo "Loaded repository-integrity checker from trusted PR base."
+            elif [ "$PR_AUTHOR" = "$REPO_OWNER" ] && [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then
+              cp "$CHECKER_PATH" "$checker"
+              echo "Bootstrap: trusted base checker predates structured reports; using repository-owner HEAD copy."
+            else
+              echo "::error::Trusted repository-integrity checker does not support the structured report interface; refusing to execute contributor-supplied checker code."
+              exit 1
+            fi
           elif [ "$PR_AUTHOR" = "$REPO_OWNER" ] && [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then
             cp "$CHECKER_PATH" "$checker"
             echo "Bootstrap: using repository-owner HEAD copy."
