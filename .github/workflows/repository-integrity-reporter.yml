@@ -6,13 +6,22 @@ on:
     types: [completed]
 
 # This trusted workflow never checks out the PR head. Its sole write permission
-# is posting an issue-style comment on the PR identified by workflow_run.
+# is posting an issue-style comment on the pull request the scanner run belongs
+# to.
 #
 # The `workflows:` filter above matches on display name only, which a
 # contributor could copy onto an unrelated workflow to have it upload a forged
 # findings artifact. The job below therefore also binds to the scanner's
-# immutable file path, and to runs that carry a populated `pull_requests` array
-# (empty for fork-originated runs).
+# immutable file path.
+#
+# The job used to require a populated `pull_requests` array as well. GitHub
+# sends that array empty for every fork-originated run, so the reporter skipped
+# on exactly the external pull requests it exists to explain. The array is no
+# longer a precondition; instead the run reaches
+# scripts/resolve_repository_integrity_pr.py, which recovers the pull request
+# from the artifact and then binds it to fields only GitHub can set (the run's
+# head SHA and head repository) plus the live pull request from the API. Any
+# mismatch, ambiguity, or malformed field fails the job without commenting.
 permissions:
   actions: read
   contents: read
@@ -22,8 +31,9 @@ jobs:
   report:
     if: >-
       ${{ github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.name == 'Repository integrity'
       && github.event.workflow_run.path == '.github/workflows/repository-integrity.yml'
-      && github.event.workflow_run.pull_requests[0] != null }}
+      && github.event.workflow_run.repository.full_name == github.repository }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout trusted default branch reporter
@@ -33,6 +43,7 @@ jobs:
           persist-credentials: false
 
       - name: Download scanner report only
+        continue-on-error: true
         uses: actions/download-artifact@v8
         with:
           name: repository-integrity-findings
@@ -40,24 +51,55 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
 
+      # The guard job does not run on draft pull requests, so those runs upload
+      # no artifact at all. That is not a reporter failure and must not turn the
+      # job red; it is recorded and the run stops here. Anything else about the
+      # artifact -- malformed, unbindable, mismatched -- still fails the job.
+      - name: Require a findings artifact
+        id: artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "$RUNNER_TEMP/repository-integrity/report.json" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::The scanner run produced no findings artifact; there is nothing to report."
+          fi
+
+      - name: Bind the report to a pull request
+        id: bind
+        if: ${{ steps.artifact.outputs.present == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/resolve_repository_integrity_pr.py \
+            --event "$GITHUB_EVENT_PATH" \
+            --report "$RUNNER_TEMP/repository-integrity/report.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output "$RUNNER_TEMP/repository-integrity/binding.json"
+
       - name: Validate and render report as inert data
+        if: ${{ steps.bind.outputs.post == 'true' }}
         run: |
           python3 scripts/render_repository_integrity_comment.py \
             --report "$RUNNER_TEMP/repository-integrity/report.json" \
-            --event "$GITHUB_EVENT_PATH" \
+            --binding "$RUNNER_TEMP/repository-integrity/binding.json" \
             --output "$RUNNER_TEMP/repository-integrity/comment.md"
 
       - name: Create or update the sticky PR comment
+        if: ${{ steps.bind.outputs.post == 'true' }}
         uses: actions/github-script@v8
         env:
           COMMENT_PATH: ${{ runner.temp }}/repository-integrity/comment.md
-          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          PR_NUMBER: ${{ steps.bind.outputs.pr_number }}
           RUN_ID: ${{ github.event.workflow_run.id }}
         with:
           script: |
             const fs = require('fs');
             const marker = '<!-- linthra-repository-integrity-v1 -->';
             const body = fs.readFileSync(process.env.COMMENT_PATH, 'utf8');
+            // PR_NUMBER comes from the trusted binder, never from the event.
             const issue_number = Number.parseInt(process.env.PR_NUMBER, 10);
             if (!Number.isSafeInteger(issue_number) || issue_number < 1 || !body.startsWith(marker)) {
               throw new Error('validated comment binding is invalid');
@@ -77,6 +119,15 @@ jobs:
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner, repo: context.repo.repo, pull_number: issue_number
             });
+            // Re-derived from two API objects immediately before the write, so a
+            // fork pull request recovered from the artifact is re-bound here as
+            // well: same repository, same head repository, same scanned head.
+            if (pr.base.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+              throw new Error('pull request does not belong to this repository');
+            }
+            if (pr.head.repo?.full_name !== run.head_repository?.full_name) {
+              throw new Error('pull request head repository does not match the scanned head');
+            }
             if (pr.head.sha !== run.head_sha) {
               core.info(`Report is superseded (scanned ${run.head_sha}, head is now ${pr.head.sha}); leaving the comment untouched.`);
               return;

@@ -152,6 +152,47 @@ Under **Settings → Actions → General**:
   the strictest option that still fits the project workflow
 - never attach repository secrets to untrusted `pull_request` jobs
 
+## Reporting findings on fork pull requests
+
+The scanner (`.github/workflows/repository-integrity.yml`) runs on
+`pull_request` with `contents: read` and no secrets. It writes nothing. A
+separate trusted workflow, `repository-integrity-reporter.yml`, runs on
+`workflow_run` from the default branch, never checks out the PR head, and holds
+the only `pull-requests: write` grant.
+
+For a pull request opened from a fork, GitHub delivers
+`workflow_run.pull_requests` as an empty array. The reporter used to require
+that array to be populated, so on external pull requests the check went red
+with no comment explaining why — observed on #513, #514 and #515.
+
+The pull request is now recovered from the scanner artifact and then bound to
+evidence a contributor cannot forge. The scanner workflow file is
+contributor-controlled at the merge ref, so `pr_number` in the artifact is a
+claim, not an authority. `scripts/resolve_repository_integrity_pr.py` accepts it
+only when all of the following hold:
+
+1. The triggering run is the scanner's own: expected event, expected display
+   name, expected immutable file path, expected repository.
+2. The artifact was downloaded with `run-id` pinned to that exact run.
+3. The artifact's `head_sha` and `head_repository` equal
+   `workflow_run.head_sha` and `workflow_run.head_repository.full_name`, both
+   set by GitHub from the pull request that started the run.
+4. Exactly one pull request in this repository has that head commit *and* that
+   head repository. More than one, or none, is refused rather than guessed.
+5. The live pull request fetched by number agrees: same number, based on this
+   repository, same head repository, and its head is still the scanned SHA.
+
+Republishing another contributor's head commit into your own fork makes step 3
+match on the SHA, but the head repository is still your fork, so steps 4 and 5
+resolve to your own pull request. There is no input that makes the reporter
+comment on somebody else's.
+
+Every failure is silent-and-red rather than best-effort: a malformed artifact,
+a missing binding, a mismatch, an ambiguous pull request, an unexpected workflow
+path, or an unexpected repository all end the job without a comment. A head that
+has moved on since the scan is treated as superseded, so an out-of-order run
+never overwrites a newer verdict.
+
 ## Contributor model
 
 External contributors should work from their own forks. Avoid granting `Write`
