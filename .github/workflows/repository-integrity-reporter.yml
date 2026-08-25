@@ -42,15 +42,19 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
-      # The guard job does not run on draft pull requests, so those runs upload
-      # no artifact at all, and a reporter with nothing to report must not go
-      # red. That is the ONLY suppressed case, and it is established by asking
-      # the Actions API what this run uploaded rather than by tolerating a
-      # failed download: a download error, an expired artifact, or a scan that
-      # died before uploading would otherwise all read as "nothing to report"
-      # and finish green, leaving an earlier sticky verdict standing over a
-      # scan whose result was never rendered.
-      - name: Check whether the scanner uploaded findings
+      # Exactly one situation is "nothing to report": the guard job did not run,
+      # which is what happens on a draft pull request. Everything else that can
+      # leave the report unavailable -- a transport error, an expired artifact,
+      # a permissions failure, a scan that died before uploading -- must fail
+      # the job, or an earlier sticky verdict stays visible over a scan whose
+      # result was never rendered.
+      #
+      # The two are told apart from the Actions API rather than from a failed
+      # download, which cannot distinguish them: the run's own artifact list,
+      # and, when that list is empty, the guard job's conclusion. A guard job
+      # that ran, or that is not present under its expected name at all, is
+      # expected to have produced a report, so its absence fails the job.
+      - name: Establish whether a findings artifact is expected
         id: artifact
         uses: actions/github-script@v8
         env:
@@ -61,15 +65,24 @@ jobs:
             if (!Number.isSafeInteger(run_id) || run_id < 1) {
               throw new Error('invalid triggering run id');
             }
+            const common = { owner: context.repo.owner, repo: context.repo.repo, run_id };
             const artifacts = await github.paginate(
-              github.rest.actions.listWorkflowRunArtifacts,
-              { owner: context.repo.owner, repo: context.repo.repo, run_id, per_page: 100 }
-            );
-            const present = artifacts.some(a => a.name === 'repository-integrity-findings');
-            if (!present) {
-              core.notice('The scanner run uploaded no findings artifact; there is nothing to report.');
+              github.rest.actions.listWorkflowRunArtifacts, { ...common, per_page: 100 });
+            if (artifacts.some(a => a.name === 'repository-integrity-findings')) {
+              core.setOutput('present', 'true');
+              return;
             }
-            core.setOutput('present', String(present));
+            const jobs = await github.paginate(
+              github.rest.actions.listJobsForWorkflowRun, { ...common, per_page: 100 });
+            const guard = jobs.find(job => job.name === 'Repository integrity guard');
+            if (guard?.conclusion !== 'skipped') {
+              throw new Error(
+                'The scanner guard job was expected to produce a findings artifact ' +
+                `(job conclusion: ${guard?.conclusion ?? 'job not found'}), but none is ` +
+                'available. Refusing to leave an earlier result standing unreported.');
+            }
+            core.notice('The scanner guard job was skipped, as it is on draft pull requests; there is nothing to report.');
+            core.setOutput('present', 'false');
 
       # The artifact is known to exist by this point, so a failed download is a
       # real failure and is deliberately left to fail the job.

@@ -25,6 +25,7 @@ REPOSITORY = "TheZupZup/Linthra"
 FORK = "Borhan2004/Linthra"
 # The real head of PR #513, the incident this recovery path was built for.
 HEAD_SHA = "a9ecac5b6a94159c590ccb51e09f5a00ac14f796"
+HEAD_BRANCH = "feat/linux-408-embedded-artwork"
 NEWER_SHA = "b" * 40
 RUN_ID = 32887057547
 PR_NUMBER = 513
@@ -38,6 +39,7 @@ def event(*, pull_requests: list[dict] | None = None, **overrides) -> dict:
         "event": "pull_request",
         "head_sha": HEAD_SHA,
         "head_repository": {"full_name": FORK},
+        "head_branch": HEAD_BRANCH,
         "repository": {"full_name": REPOSITORY},
         # GitHub delivers this empty for every fork-originated run.
         "pull_requests": [] if pull_requests is None else pull_requests,
@@ -61,27 +63,41 @@ def report(**overrides) -> dict:
 
 def pull_request(*, number: int = PR_NUMBER, head_sha: str = HEAD_SHA,
                  head_repository: str | None = FORK,
+                 head_branch: str = HEAD_BRANCH,
                  base_repository: str = REPOSITORY) -> dict:
     head_repo = {"full_name": head_repository} if head_repository is not None else None
     return {
         "number": number,
-        "head": {"sha": head_sha, "repo": head_repo},
+        "head": {"sha": head_sha, "ref": head_branch, "repo": head_repo},
         "base": {"repo": {"full_name": base_repository}},
     }
 
 
 class Api:
-    """Records every path requested so URL construction can be asserted on."""
+    """Models real GitHub commit-to-PR association, and records every path.
 
-    def __init__(self, *, pulls: dict | None = None, associated: list | None = None) -> None:
+    The decisive behaviour, verified against the live API with PR #513's head:
+    a fork's head commit is NOT in the base repository's commit list, so
+    `/repos/{base}/commits/{fork_sha}/pulls` answers `[]`. Only
+    `/repos/{fork}/commits/{sha}/pulls` returns the pull request. An earlier
+    mock returned the PR from the base-repository path, which does not happen in
+    production and hid the fact that fork recovery never resolved anything.
+    """
+
+    def __init__(self, *, pulls: dict | None = None, associated: list | None = None,
+                 association_repository: str = FORK) -> None:
         self.pulls = pulls if pulls is not None else pull_request()
         self.associated = associated if associated is not None else [pull_request()]
+        # The only repository whose commit list contains the head commit.
+        self.association_repository = association_repository
         self.paths: list[str] = []
 
     def __call__(self, path: str) -> object:
         self.paths.append(path)
         if path.endswith("/pulls"):
-            return self.associated
+            if path == f"/repos/{self.association_repository}/commits/{HEAD_SHA}/pulls":
+                return self.associated
+            return []  # any other repository simply does not have this commit
         return self.pulls
 
 
@@ -92,16 +108,54 @@ def decide(event_payload: dict, report_payload: dict, api: Api | None = None):
 
 class ForkRecoveryTest(unittest.TestCase):
     def test_empty_pull_requests_resolves_the_external_fork_pr(self) -> None:
-        """The reported incident: a fork run GitHub gives no pull request for."""
+        """The reported incident: a fork run GitHub gives no pull request for.
+
+        These are PR #513's real identity values, and the mock models the real
+        API: only the fork's commit list contains this head commit.
+        """
         (binding, may_write), api = decide(event(), report())
         self.assertEqual(binding.pr_number, PR_NUMBER)
         self.assertEqual(binding.pr_source, "artifact")
         self.assertEqual(binding.head_repository, FORK)
+        self.assertEqual(binding.head_branch, HEAD_BRANCH)
         self.assertTrue(may_write)
+        # Association is asked of the HEAD repository; the pull request itself
+        # is read from the base repository.
+        print(f"\n  association query: {api.paths[0]}")
+        print(f"  pull request query: {api.paths[1]}")
         self.assertEqual(api.paths, [
-            f"/repos/{REPOSITORY}/commits/{HEAD_SHA}/pulls",
+            f"/repos/{FORK}/commits/{HEAD_SHA}/pulls",
             f"/repos/{REPOSITORY}/pulls/{PR_NUMBER}",
         ])
+
+    def test_base_repository_association_would_resolve_nothing(self) -> None:
+        """Pins the production defect this mock now models.
+
+        Verified against the live API: GET /repos/TheZupZup/Linthra/commits/
+        a9ecac5b6a94159c590ccb51e09f5a00ac14f796/pulls returns []. An
+        implementation that asks the base repository sees zero candidates and
+        fails closed, so fork recovery never resolves the incident it exists for.
+        """
+        api = Api()
+        self.assertEqual(api(f"/repos/{REPOSITORY}/commits/{HEAD_SHA}/pulls"), [])
+        self.assertEqual(
+            [p["number"] for p in api(f"/repos/{FORK}/commits/{HEAD_SHA}/pulls")],
+            [PR_NUMBER])
+        self.assertEqual(binder.association_path(
+            binder.resolve(event(), report(), REPOSITORY)),
+            f"/repos/{FORK}/commits/{HEAD_SHA}/pulls")
+
+    def test_head_branch_must_match_the_live_pull_request(self) -> None:
+        """One more GitHub-set identity dimension, bound when both sides have it."""
+        api = Api(pulls=pull_request(head_branch="attacker/other-branch"))
+        with self.assertRaises(binder.BindingError):
+            decide(event(), report(), api)
+        # Absent on the run: not an error, just one fewer dimension to bind.
+        (binding, may_write), _ = decide(event(head_branch=None), report())
+        self.assertIsNone(binding.head_branch)
+        self.assertTrue(may_write)
+        with self.assertRaises(binder.BindingError):
+            binder.resolve(event(head_branch="bad branch name"), report(), REPOSITORY)
 
     def test_same_repository_run_still_binds_to_the_named_pr(self) -> None:
         """The pre-existing path must keep working, and keep winning."""
@@ -217,10 +271,19 @@ class ForkRecoveryTest(unittest.TestCase):
                     binder.resolve(event(), report(head_repository=value), REPOSITORY)
                 with self.assertRaises(binder.BindingError):
                     binder.resolve(event(), report(pr_number=value), REPOSITORY)
+                if value:  # an empty branch is simply "absent", not hostile
+                    with self.assertRaises(binder.BindingError):
+                        binder.resolve(event(head_branch=value), report(), REPOSITORY)
         api = Api()
         decide(event(), report(), api)
+        # Only two repositories can ever appear, and both are GitHub-set values
+        # the artifact had to match exactly, not text the artifact supplied.
+        self.assertEqual(api.paths, [
+            f"/repos/{FORK}/commits/{HEAD_SHA}/pulls",
+            f"/repos/{REPOSITORY}/pulls/{PR_NUMBER}",
+        ])
         for path in api.paths:
-            self.assertTrue(path.startswith(f"/repos/{REPOSITORY}/"), path)
+            self.assertRegex(path, rf"^/repos/(?:{REPOSITORY}|{FORK})/")
             self.assertNotIn("..", path)
             self.assertNotIn("?", path)
 
@@ -295,18 +358,27 @@ class TrustBoundaryTest(unittest.TestCase):
         self.assertIn("github.event.workflow_run.repository.full_name == github.repository",
                       self.reporter)
 
-    def test_only_a_genuinely_absent_artifact_is_suppressed(self) -> None:
+    def test_only_a_skipped_guard_job_is_treated_as_nothing_to_report(self) -> None:
         """Draft pull requests skip the guard job, so no artifact is uploaded.
 
         Tolerating a failed download instead would swallow every other reason
         the report can be missing -- a transport error, an expired artifact, a
-        scan that died before uploading -- and finish green, leaving an earlier
-        sticky verdict standing over a scan that was never rendered. Absence is
-        therefore established from the Actions API, before downloading.
+        permissions failure, a scan that died before uploading -- and finish
+        green, leaving an earlier sticky verdict standing over a scan that was
+        never rendered. The two are told apart from the Actions API before
+        downloading: the run's artifact list, then the guard job's conclusion.
         """
         self.assertIn("listWorkflowRunArtifacts", self.reporter)
         self.assertIn("a.name === 'repository-integrity-findings'", self.reporter)
+        self.assertIn("listJobsForWorkflowRun", self.reporter)
+        self.assertIn("job.name === 'Repository integrity guard'", self.reporter)
+        # Only a skipped guard job is "nothing to report"; anything else throws.
+        self.assertIn("guard?.conclusion !== 'skipped'", self.reporter)
+        self.assertLess(self.reporter.index("guard?.conclusion !== 'skipped'"),
+                        self.reporter.index("core.setOutput('present', 'false')"))
         self.assertIn("steps.artifact.outputs.present == 'true'", self.reporter)
+        # The job name the reporter looks for must be the one the scanner uses.
+        self.assertIn("name: Repository integrity guard\n", self.scanner)
         # Nothing in the reporter may swallow a failure. Matched per line so a
         # comment mentioning the key cannot satisfy or defeat the assertion.
         self.assertEqual(

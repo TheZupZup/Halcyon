@@ -51,6 +51,7 @@ SCANNER_EVENT = "pull_request"
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$")
+BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,255}$")
 MAX_PR_NUMBER = 1_000_000
 MAX_CANDIDATES = 50
 MAX_REPORT_BYTES = 1_000_000
@@ -69,6 +70,7 @@ class RunFacts:
     run_id: int
     head_sha: str
     head_repository: str
+    head_branch: str | None
     repository: str
     pull_requests: tuple[int, ...]
 
@@ -78,6 +80,9 @@ class Binding:
     pr_number: int
     head_sha: str
     head_repository: str
+    # GitHub-set branch name of the run's head, when the event carries one. One
+    # more immutable identity dimension the live PR has to agree with.
+    head_branch: str | None
     repository: str
     run_id: int
     # "workflow_run" when GitHub named the PR itself; "artifact" when the PR was
@@ -89,6 +94,7 @@ class Binding:
             "pr_number": self.pr_number,
             "head_sha": self.head_sha,
             "head_repository": self.head_repository,
+            "head_branch": self.head_branch,
             "repository": self.repository,
             "run_id": self.run_id,
             "pr_source": self.pr_source,
@@ -115,6 +121,22 @@ def _sha(value: object, field: str) -> str:
 
 def _repository(value: object, field: str) -> str:
     if not isinstance(value, str) or not REPO_RE.fullmatch(value):
+        raise BindingError(f"invalid {field}")
+    return value
+
+
+def _branch(value: object, field: str) -> str | None:
+    """Branch names are optional; a present one must be a well-formed git ref.
+
+    This value is only ever compared for equality, never placed in a URL, but
+    it is held to git's own ref rules anyway so that nothing path-shaped can be
+    carried under the name of a branch.
+    """
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not BRANCH_RE.fullmatch(value):
+        raise BindingError(f"invalid {field}")
+    if ".." in value or value.startswith("/") or value.endswith("/") or "//" in value:
         raise BindingError(f"invalid {field}")
     return value
 
@@ -151,6 +173,7 @@ def trusted_run(event: object, repository: str) -> RunFacts:
         head_repository=_repository(
             _mapping(run.get("head_repository"), "run head repository").get("full_name"),
             "run head repository"),
+        head_branch=_branch(run.get("head_branch"), "run head branch"),
         repository=repository,
         pull_requests=numbers,
     )
@@ -197,7 +220,8 @@ def resolve(event: object, payload: object, repository: str) -> Binding:
         raise BindingError("workflow run identifies more than one PR")
 
     return Binding(pr_number=pr_number, head_sha=head_sha, head_repository=head_repository,
-                   repository=repository, run_id=run.run_id, pr_source=source)
+                   head_branch=run.head_branch, repository=repository, run_id=run.run_id,
+                   pr_source=source)
 
 
 def _head_repository_of(pull_request: dict) -> str | None:
@@ -206,6 +230,24 @@ def _head_repository_of(pull_request: dict) -> str | None:
         return None
     repo = head.get("repo")
     return repo.get("full_name") if isinstance(repo, dict) else None
+
+
+def association_path(binding: Binding) -> str:
+    """The commit-to-PR association endpoint for this run's head commit.
+
+    The query must go to the HEAD repository, not the base. A fork's head commit
+    is not in the base repository's own commit list, so
+    `/repos/{base}/commits/{fork_sha}/pulls` answers `[]` for exactly the fork
+    pull requests this recovery path exists to resolve -- verified against the
+    live API with PR #513's head. `/repos/{fork}/commits/{sha}/pulls` returns it.
+
+    Querying a contributor-controlled repository grants nothing: the repository
+    is `workflow_run.head_repository.full_name`, which GitHub sets, and every
+    candidate it returns is still constrained by `select_candidate` below to a
+    pull request into this repository, from that same fork, at that same head.
+    """
+    repository = urllib.parse.quote(binding.head_repository, safe="/")
+    return f"/repos/{repository}/commits/{binding.head_sha}/pulls"
 
 
 def select_candidate(candidates: object, binding: Binding) -> int:
@@ -248,7 +290,11 @@ def verify_pull_request(pull_request: object, binding: Binding) -> bool:
         raise BindingError("pull request does not belong to this repository")
     if _head_repository_of(live) != binding.head_repository:
         raise BindingError("pull request head repository does not match the scanned head")
-    head_sha = _sha(_mapping(live.get("head"), "PR head").get("sha"), "PR head SHA")
+    head = _mapping(live.get("head"), "PR head")
+    if binding.head_branch is not None:
+        if _branch(head.get("ref"), "PR head branch") != binding.head_branch:
+            raise BindingError("pull request head branch does not match the scanned head")
+    head_sha = _sha(head.get("sha"), "PR head SHA")
     # Out-of-order synchronize runs must never restore an older verdict over a
     # newer one. A moved head is not an error, it is a superseded report.
     return head_sha == binding.head_sha
@@ -280,13 +326,15 @@ def decide(event: object, payload: object, repository: str,
            fetch: Callable[[str], object]) -> tuple[Binding, bool]:
     """Resolve, then confirm against the API. Returns (binding, may_write)."""
     binding = resolve(event, payload, repository)
-    # Path segments are re-derived, never interpolated from report text: the
-    # repository is this workflow's own, the SHA is 40 hex characters, and the
-    # PR number is a bounded integer.
+    # Path segments are re-derived, never interpolated from report text: both
+    # repositories match REPO_RE and equal values GitHub set, the SHA is 40 hex
+    # characters, and the PR number is a bounded integer.
     owner_repo = urllib.parse.quote(binding.repository, safe="/")
     if binding.pr_source == "artifact":
-        select_candidate(
-            fetch(f"/repos/{owner_repo}/commits/{binding.head_sha}/pulls"), binding)
+        # Association is asked of the head repository; the pull request itself
+        # is always read from this repository, which is what makes the answer
+        # binding rather than merely suggestive.
+        select_candidate(fetch(association_path(binding)), binding)
     return binding, verify_pull_request(
         fetch(f"/repos/{owner_repo}/pulls/{binding.pr_number}"), binding)
 

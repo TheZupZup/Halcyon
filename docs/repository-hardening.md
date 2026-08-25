@@ -177,10 +177,18 @@ only when all of the following hold:
 3. The artifact's `head_sha` and `head_repository` equal
    `workflow_run.head_sha` and `workflow_run.head_repository.full_name`, both
    set by GitHub from the pull request that started the run.
-4. Exactly one pull request in this repository has that head commit *and* that
-   head repository. More than one, or none, is refused rather than guessed.
-5. The live pull request fetched by number agrees: same number, based on this
-   repository, same head repository, and its head is still the scanned SHA.
+4. Exactly one pull request has that head commit *and* that head repository.
+   More than one, or none, is refused rather than guessed. This association
+   query must be asked of the **head** repository: a fork's head commit is not
+   in the base repository's commit list, so
+   `/repos/{base}/commits/{fork_sha}/pulls` answers `[]` for exactly the fork
+   pull requests this path exists to resolve — confirmed against the live API
+   with #513's head. Asking a contributor-controlled repository grants nothing,
+   because the repository name is `workflow_run.head_repository.full_name`,
+   which GitHub sets, and step 5 still constrains every candidate it returns.
+5. The live pull request, fetched by number **from this repository**, agrees:
+   same number, based on this repository, same head repository, same head
+   branch where the run carries one, and its head is still the scanned SHA.
 
 Republishing another contributor's head commit into your own fork makes step 3
 match on the SHA, but the head repository is still your fork, so steps 4 and 5
@@ -192,6 +200,17 @@ a missing binding, a mismatch, an ambiguous pull request, an unexpected workflow
 path, or an unexpected repository all end the job without a comment. A head that
 has moved on since the scan is treated as superseded, so an out-of-order run
 never overwrites a newer verdict.
+
+One case is deliberately not a failure: the guard job does not run on draft pull
+requests, so those runs upload no artifact and there is genuinely nothing to
+report. That is told apart from every other reason the report can be missing —
+a transport error, an expired artifact, a permissions failure, a scan that died
+before uploading — by reading the run's artifact list and then the guard job's
+conclusion from the Actions API, before downloading anything. Only a guard job
+that was actually skipped counts as nothing to report. Tolerating a failed
+download instead would read all of those as "nothing to report" and finish
+green, leaving an earlier sticky verdict standing over a scan whose result was
+never rendered.
 
 ## Contributor model
 
