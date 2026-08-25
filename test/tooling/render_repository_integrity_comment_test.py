@@ -75,6 +75,33 @@ class ReporterTest(unittest.TestCase):
         self.assertIn("7 further finding(s) were withheld", body)
         self.assertIn("all of them block this PR", body)
 
+    def test_rendered_body_stays_within_the_api_comment_limit(self) -> None:
+        """Per-field and per-count limits are independent and don't bound the total.
+
+        A report satisfying both used to render past GitHub's comment limit, so
+        the API call failed and left the previous sticky result standing.
+        """
+        for label, path in (
+            ("max-length alnum", "p" * reporter.MAX_FIELD_LENGTH),
+            ("escape-expanded", "<" * 300),
+        ):
+            with self.subTest(label):
+                big = payload([finding(path) for _ in range(reporter.MAX_FINDINGS)])
+                body = reporter.render(*reporter.validate(big, EVENT))
+                self.assertLessEqual(len(body), reporter.MAX_COMMENT_CHARS)
+                self.assertIn("were withheld", body)
+                self.assertIn("**BLOCKED**", body)
+                self.assertTrue(body.startswith(reporter.MARKER))
+
+    def test_withheld_count_covers_both_producer_and_budget_drops(self) -> None:
+        big = payload([finding("p" * reporter.MAX_FIELD_LENGTH)
+                       for _ in range(reporter.MAX_FINDINGS)])
+        big["truncated"] = 5  # dropped by the scanner's own cap
+        body = reporter.render(*reporter.validate(big, EVENT))
+        shown = body.count("### Finding ")
+        withheld = int(body.split(" further finding(s)")[0].rsplit("\n", 1)[-1])
+        self.assertEqual(shown + withheld, reporter.MAX_FINDINGS + 5)
+
     def test_truncated_count_is_validated(self) -> None:
         for bad in (-1, "3", 1.5, True, None):
             with self.subTest(bad=bad):

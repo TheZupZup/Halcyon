@@ -17,6 +17,13 @@ SEVERITIES = {"blocked", "review_required"}
 FIELDS = ("path", "rule", "reason", "remediation")
 MAX_FINDINGS = 100
 MAX_FIELD_LENGTH = 2000
+# GitHub rejects an issue comment body above this length. The per-field and
+# per-count limits are independent and do not bound the total, so a report that
+# satisfies both can still render past it; the API call would then fail and
+# leave the previous sticky result standing. Findings are rendered against this
+# budget and the remainder is disclosed as withheld.
+MAX_COMMENT_CHARS = 65_536
+_TAIL_RESERVE = 512
 
 
 def safe_text(value: object, field: str) -> str:
@@ -73,16 +80,26 @@ def render(findings: list[dict[str, str | None]], truncated: int = 0) -> str:
         return "\n".join(lines + ["**CLEAN**", "", "Previously reported repository-integrity findings are resolved."])
     blocked = any(item["severity"] == "blocked" for item in findings)
     lines += [f"**{'BLOCKED' if blocked else 'REVIEW REQUIRED'}**", "", "Repository integrity blocked this PR." if blocked else "Repository integrity requires explicit maintainer review.", ""]
+    budget = MAX_COMMENT_CHARS - _TAIL_RESERVE
+    used = sum(len(line) + 1 for line in lines)
+    rendered = 0
     for number, item in enumerate(findings, 1):
-        lines += [f"### Finding {number}"]
+        block = [f"### Finding {number}"]
         if item["commit"]:
-            lines.append(f"- **Commit:** `{item['commit']}`")
-        lines += [
+            block.append(f"- **Commit:** `{item['commit']}`")
+        block += [
             f"- **Path:** `{item['path']}`",
             f"- **Rule:** `{item['rule']}`",
             f"- **Explanation:** {item['reason']}",
             f"- **How to fix:** {item['remediation']}", "",
         ]
+        size = sum(len(line) + 1 for line in block)
+        if used + size > budget:
+            break
+        lines += block
+        used += size
+        rendered += 1
+    truncated += len(findings) - rendered
     if truncated > 0:
         lines.append(f"{truncated} further finding(s) were withheld from this comment. "
                      "The check output lists every finding; all of them block this PR.")
