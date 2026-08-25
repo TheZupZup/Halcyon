@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -61,12 +63,17 @@ class MiniPlayer extends ConsumerWidget {
         ? PlaybackSourceLabel.of(trackUri: track.uri, source: source)
         : null;
 
+    final double miniPlayerHeight = math.max(
+      64,
+      MediaQuery.textScalerOf(context).scale(48),
+    );
+
     return Material(
       color: theme.colorScheme.surfaceContainerHigh,
       child: InkWell(
         onTap: () => context.push(AppRoutes.player),
         child: SizedBox(
-          height: 64,
+          height: miniPlayerHeight,
           child: Column(
             children: [
               const _MiniProgressBar(),
