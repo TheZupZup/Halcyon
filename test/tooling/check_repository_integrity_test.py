@@ -143,6 +143,27 @@ class RepositoryIntegrityTest(unittest.TestCase):
             )
         )
 
+    def test_external_composite_action_change_is_blocked(self) -> None:
+        """Composite actions run from the PR head in privileged workflows."""
+        path = self.repo / ".github" / "actions" / "setup-flutter" / "action.yml"
+        path.parent.mkdir(parents=True)
+        path.write_text("runs:\n  using: composite\n", encoding="utf-8")
+        findings = self.scan(self.commit())
+        self.assertTrue(
+            any(
+                f.path == ".github/actions/setup-flutter/action.yml"
+                and "maintainer-controlled" in f.reason
+                for f in findings
+            )
+        )
+
+    def test_owner_can_change_a_composite_action(self) -> None:
+        path = self.repo / ".github" / "actions" / "setup-flutter" / "action.yml"
+        path.parent.mkdir(parents=True)
+        path.write_text("runs:\n  using: composite\n", encoding="utf-8")
+        findings = self.scan(self.commit(), author="TheZupZup")
+        self.assertEqual(findings, [])
+
     def test_removing_vscode_ignore_is_blocked(self) -> None:
         (self.repo / ".gitignore").write_text(".idea/\n", encoding="utf-8")
         findings = self.scan(self.commit())

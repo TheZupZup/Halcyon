@@ -18,7 +18,8 @@ a person's intent.
 For external contributor PRs:
 
 - `.vscode/**`, `.idea/**`, and `*.code-workspace`
-- `.github/workflows/**`
+- `.github/workflows/**` and composite actions under `.github/actions/**`, which
+  privileged workflows run from the PR head
 - repository automation under `scripts/`, `tool/`, and `tools/`
 - `CODEOWNERS`, `.gitattributes`, `.gitmodules`, and Dependabot policy
 - Git symlinks
