@@ -27,7 +27,14 @@ class Finding:
 
 PROTECTED_IGNORE_ENTRIES = (".idea/", ".vscode/")
 
-EXTERNAL_BLOCKED_PATHS: tuple[tuple[re.Pattern[str], str], ...] = (
+# Files that must be able to hold literal attack strings, because they are the
+# fixtures this guard is tested against. Only lines carrying the explicit marker
+# below are exempted, and only inside these exact paths.
+SELF_TEST_FIXTURE_PATHS = frozenset({"test/tooling/check_repository_integrity_test.py"})
+
+FIXTURE_EXEMPTION_MARKER = "integrity-guard-fixture"
+
+_EXTERNAL_BLOCKED_PATHS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^\.vscode/"), "VS Code workspace configuration is maintainer-controlled"),
     (re.compile(r"^\.idea/"), "IDE project configuration is maintainer-controlled"),
     (re.compile(r"(?:^|/).*\.code-workspace$", re.I), "VS Code workspace file is maintainer-controlled"),
@@ -37,6 +44,16 @@ EXTERNAL_BLOCKED_PATHS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^\.github/dependabot\.ya?ml$"), "dependency-update policy is maintainer-controlled"),
     (re.compile(r"^\.gitattributes$"), "Git diff/attribute policy is maintainer-controlled"),
     (re.compile(r"^\.gitmodules$"), "Git submodule policy is maintainer-controlled"),
+)
+
+# The self-test paths are maintainer-controlled by construction: an external PR
+# cannot add (or mark) a line that the fixture exemption would then skip.
+EXTERNAL_BLOCKED_PATHS: tuple[tuple[re.Pattern[str], str], ...] = _EXTERNAL_BLOCKED_PATHS + tuple(
+    (
+        re.compile(rf"^{re.escape(path)}$"),
+        "repository-integrity self-test fixtures are maintainer-controlled",
+    )
+    for path in sorted(SELF_TEST_FIXTURE_PATHS)
 )
 
 ASSET_MAGIC: dict[str, tuple[bytes, ...]] = {
@@ -245,17 +262,41 @@ def check_active_svg(head: str, files: list[str]) -> list[Finding]:
     return findings
 
 
+def is_exempt_fixture_line(path: str, line: str) -> bool:
+    """Report whether a single line opts out of the asset-execution text scan.
+
+    The exemption exists so the guard's own test module can hold the literal
+    attack strings it asserts against. It is deliberately narrow: it applies
+    only inside `SELF_TEST_FIXTURE_PATHS`, only to individual lines that carry
+    the marker, and only to this one check. Every other line of those files is
+    scanned normally, and external PRs cannot modify them at all.
+    """
+    return path in SELF_TEST_FIXTURE_PATHS and FIXTURE_EXEMPTION_MARKER in line
+
+
+def asset_execution_finding(path: str, text: str) -> Finding | None:
+    """Return a finding when `text` invokes or marks an asset as executable.
+
+    Scanning happens line by line on exactly the line separators the pattern
+    itself refuses to cross, so this sees what a whole-file search would.
+    """
+    for line in re.split(r"[\r\n]", text):
+        if is_exempt_fixture_line(path, line):
+            continue
+        if _EXECUTABLE_ASSET_RE.search(line):
+            return Finding(path, "text invokes or marks an asset file as executable")
+    return None
+
+
 def check_asset_execution(head: str, files: list[str]) -> list[Finding]:
     findings: list[Finding] = []
     for path in files:
         data = blob_bytes(head, path)
         if data is None or b"\x00" in data:
             continue
-        text = data.decode("utf-8", "surrogateescape")
-        if _EXECUTABLE_ASSET_RE.search(text):
-            findings.append(
-                Finding(path, "text invokes or marks an asset file as executable")
-            )
+        finding = asset_execution_finding(path, data.decode("utf-8", "surrogateescape"))
+        if finding is not None:
+            findings.append(finding)
     return findings
 
 

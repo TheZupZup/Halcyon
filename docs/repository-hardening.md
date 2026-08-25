@@ -36,6 +36,25 @@ For every PR, including maintainer PRs:
 Repository-control changes must be made from a trusted maintainer-controlled
 branch.
 
+## Self-test fixtures
+
+The guard's own test module has to contain literal attack strings so it can
+assert that they are caught, which would otherwise make the repository-wide
+text scan flag the test file itself.
+
+The carve-out for this is deliberately small. A line inside
+`test/tooling/check_repository_integrity_test.py` is skipped by the
+asset-execution text scan — and by that check only — when it carries the
+marker `integrity-guard-fixture`. Every other line of that file, and every
+other check, still applies, and the same path is maintainer-controlled for
+external PRs so a fork cannot introduce a marked line. Fixture content written
+into a test repository carries no marker, so the attack strings the tests
+assert against remain detectable.
+
+Prefer this marker over path-wide exclusions: `test/` and `test/tooling/` stay
+fully scanned, because executable test infrastructure is itself a security
+surface.
+
 ## Required GitHub ruleset for `main`
 
 Create or update a branch ruleset targeting `main` and configure all of the
