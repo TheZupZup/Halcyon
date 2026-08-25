@@ -1,0 +1,6 @@
+# Linthra security baseline
+#
+# Every change is owned by the project owner. When "Require review from Code
+# Owners" is enabled on the protected main ruleset, no contributor PR can merge
+# without an explicit owner review.
+* @TheZupZup
