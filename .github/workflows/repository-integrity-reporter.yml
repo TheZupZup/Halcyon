@@ -147,6 +147,10 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --output "$RUNNER_TEMP/repository-integrity/binding.json"
 
+      # The checker is read from the bound base commit, the same revision the
+      # scanner loads, so the check and the comment explaining it cannot apply
+      # different policy versions.
+      #
       # The artifact's identity is now bound, but its `findings` are still just
       # a claim: the scanner definition that produced it comes from the merge
       # ref, so a contributor can keep its name and path, drop the trusted
@@ -161,7 +165,7 @@ jobs:
         run: |
           python3 scripts/recompute_repository_integrity_report.py \
             --binding "$RUNNER_TEMP/repository-integrity/binding.json" \
-            --checker scripts/check_repository_integrity.py \
+            --checker-path scripts/check_repository_integrity.py \
             --output "$RUNNER_TEMP/repository-integrity/verified-report.json" \
             --summary "$RUNNER_TEMP/repository-integrity/verified-report.md" \
             --repo-owner "$GITHUB_REPOSITORY_OWNER" \

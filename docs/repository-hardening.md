@@ -227,11 +227,21 @@ re-derived results is reported and the re-derived one wins — refusing to comme
 on a mismatch would let a forged artifact suppress the finding it was forged to
 hide.
 
+The checker itself is read out of the pull request's **base commit**, the same
+revision the scanner loads with `git show "$BASE_SHA:…"`. Running the reporter's
+own default-branch copy instead would apply a different revision whenever the
+base is not the default branch, or whenever the checker changed on the default
+branch between the scan and the report — and the two can enforce different
+rules, so the comment could report CLEAN while the guard is red. Both revisions
+are maintainer-controlled, so this is a consistency requirement rather than a
+trust one: the check and the comment explaining it must never disagree.
+
 No pull-request code is executed and no pull-request tree is checked out. The
 checker reads git objects only, so the objects are fetched into the trusted
 checkout through this repository's own `refs/pull/N/head` and analysed as data;
 the working tree stays on the default branch. A checker that cannot evaluate the
-range is an error, never an empty finding list.
+range — or a base commit that carries none — is an error, never an empty finding
+list.
 
 Every failure is silent-and-red rather than best-effort: a malformed artifact,
 a missing binding, a mismatch, an ambiguous pull request, an unexpected workflow

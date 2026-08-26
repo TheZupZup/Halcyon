@@ -34,12 +34,47 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$")
 MAX_LOGIN_LENGTH = 64
 MAX_PR_NUMBER = 1_000_000
+# The scanner loads its checker from the pull request's base commit. The
+# re-derivation must use that same revision: see load_checker.
+CHECKER_PATH = "scripts/check_repository_integrity.py"
+CHECKER_PATH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
 # The checker exits 1 when it has findings; that is a verdict, not a failure.
 CLEAN, BLOCKED = 0, 1
 
 
 class RecomputeError(Exception):
     """The verdict could not be re-derived. The reporter must not comment."""
+
+
+def load_checker(base_sha: str, checker_path: str, destination: Path,
+                 *, run=subprocess.run) -> Path:
+    """Read the checker out of the bound base commit, as the scanner does.
+
+    The scanner runs `git show "$BASE_SHA:scripts/check_repository_integrity.py"`,
+    so the policy it applied is the one committed on the pull request's base
+    branch. Running the reporter's own default-branch copy instead would apply a
+    different revision whenever the base is not the default branch, or whenever
+    the checker changed on the default branch between the scan and the report.
+    The two revisions can enforce different rules, so the comment could report
+    CLEAN while the guard is red, or BLOCKED while it passed -- the check and
+    the comment explaining it must never disagree.
+
+    Both revisions are maintainer-controlled, so this is a consistency
+    requirement rather than a trust one; the base commit is the branch a
+    maintainer chose to merge into, which is what the scanner already treats as
+    authoritative. A base commit whose checker is missing or unusable fails
+    closed, exactly like any other input this program cannot verify.
+    """
+    if not CHECKER_PATH_RE.fullmatch(checker_path) or ".." in checker_path:
+        raise RecomputeError("invalid checker path")
+    result = run(["git", "show", f"{base_sha}:{checker_path}"],
+                 capture_output=True)
+    if result.returncode != 0:
+        raise RecomputeError(
+            f"the trusted checker is not present at base commit {base_sha}: "
+            f"{result.stderr.decode('utf-8', 'replace').strip()[:200]}")
+    destination.write_bytes(result.stdout)
+    return destination
 
 
 def valid_login(value: object) -> bool:
@@ -166,7 +201,8 @@ def divergence(claimed: Path, recomputed: Path) -> str | None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--binding", required=True, type=Path)
-    parser.add_argument("--checker", required=True, type=Path)
+    parser.add_argument("--checker-path", default=CHECKER_PATH,
+                        help="repository-relative path read from the bound base commit")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--summary", required=True, type=Path)
     parser.add_argument("--repo-owner", required=True)
@@ -182,7 +218,9 @@ def main(argv: list[str] | None = None) -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         if not args.no_fetch:
             fetch_objects(binding)
-        verdict = recompute(args.checker, binding, args.output, args.summary,
+        checker = load_checker(str(binding["base_sha"]), args.checker_path,
+                               args.output.parent / "trusted-checker.py")
+        verdict = recompute(checker, binding, args.output, args.summary,
                             args.repo_owner)
     except (RecomputeError, ValueError, OSError) as exc:
         print(f"::error::Repository integrity reporter could not re-derive the "

@@ -59,6 +59,12 @@ class ForgedArtifactTest(unittest.TestCase):
         (self.repo / ".gitignore").write_text(".idea/\n.vscode/\n", encoding="utf-8")
         (self.repo / "lib").mkdir()
         (self.repo / "lib" / "main.dart").write_text("void main() {}\n", encoding="utf-8")
+        # The scanner loads its checker from the base commit and the reporter
+        # re-derives with that same revision, so the fixture carries it there
+        # rather than reaching for the reporter's own working copy.
+        (self.repo / "scripts").mkdir()
+        (self.repo / "scripts" / "check_repository_integrity.py").write_bytes(
+            CHECKER.read_bytes())
         git(self.repo, "add", ".")
         git(self.repo, "commit", "-m", "base")
         self.base = git(self.repo, "rev-parse", "HEAD")
@@ -103,7 +109,7 @@ class ForgedArtifactTest(unittest.TestCase):
 
     def run_recompute(self, head: str, claimed: Path | None) -> tuple[int, Path]:
         output = self.work / "verified-report.json"
-        argv = ["--binding", str(self.binding(head)), "--checker", str(CHECKER),
+        argv = ["--binding", str(self.binding(head)),
                 "--output", str(output), "--summary", str(self.work / "verified.md"),
                 "--repo-owner", OWNER, "--no-fetch"]
         if claimed is not None:
@@ -161,6 +167,65 @@ class ForgedArtifactTest(unittest.TestCase):
             derived, json.loads(self.binding(head).read_text())))
         self.assertIn("**CLEAN**", body)
 
+    def test_the_base_commits_checker_revision_is_the_one_that_runs(self) -> None:
+        """Decisive for the policy-skew case.
+
+        The base commit carries a distinguishable checker revision. If the
+        reporter ran its own default-branch copy instead, the re-derived report
+        would not carry that revision's marker -- which is exactly how a comment
+        could report CLEAN while the guard, running the base revision, is red.
+        """
+        stub = (
+            "#!/usr/bin/env python3\n"
+            "import argparse, json\n"
+            "p = argparse.ArgumentParser()\n"
+            "for f in ('--base','--head','--pr-author','--repo-owner','--report',\n"
+            "          '--json-report','--pr-number','--head-repository'):\n"
+            "    p.add_argument(f)\n"
+            "a = p.parse_args()\n"
+            "open(a.report, 'w').write('stub\\n')\n"
+            "json.dump({'schema_version': 1, 'pr_number': int(a.pr_number),\n"
+            "           'head_sha': a.head, 'head_repository': a.head_repository,\n"
+            "           'truncated': 0,\n"
+            "           'findings': [{'severity': 'blocked', 'commit': a.head,\n"
+            "                         'path': 'BASE-REVISION-MARKER', 'rule': 'stub',\n"
+            "                         'reason': 'from the base commit',\n"
+            "                         'remediation': 'none'}]},\n"
+            "          open(a.json_report, 'w'))\n"
+            "raise SystemExit(1)\n"
+        )
+        (self.repo / "scripts" / "check_repository_integrity.py").write_text(
+            stub, encoding="utf-8")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-m", "base carries a distinct checker revision")
+        self.base = git(self.repo, "rev-parse", "HEAD")
+
+        git(self.repo, "switch", "-qc", "pr")
+        (self.repo / "lib" / "feature.dart").write_text("const f = 1;\n", encoding="utf-8")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-m", "ordinary work")
+        head = git(self.repo, "rev-parse", "HEAD")
+
+        exit_code, verified = self.run_recompute(head, None)
+        self.assertEqual(exit_code, 0)
+        derived = json.loads(verified.read_text())
+        self.assertEqual([f["path"] for f in derived["findings"]],
+                         ["BASE-REVISION-MARKER"])
+
+    def test_a_base_commit_without_the_checker_refuses(self) -> None:
+        """No checker at the bound base is unverifiable, never 'clean'."""
+        git(self.repo, "rm", "-q", "scripts/check_repository_integrity.py")
+        git(self.repo, "commit", "-qm", "base without a checker")
+        self.base = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "switch", "-qc", "pr")
+        (self.repo / "lib" / "feature.dart").write_text("const f = 1;\n", encoding="utf-8")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-m", "ordinary work")
+        head = git(self.repo, "rev-parse", "HEAD")
+        exit_code, verified = self.run_recompute(head, None)
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(verified.exists())
+
     def test_an_unusable_range_refuses_rather_than_reporting_clean(self) -> None:
         """A checker that cannot evaluate must never read as 'no findings'."""
         _, head = self.contaminate()
@@ -174,7 +239,7 @@ class ForgedArtifactTest(unittest.TestCase):
         previous = Path.cwd()
         os.chdir(self.repo)
         try:
-            code = recompute.main(["--binding", str(path), "--checker", str(CHECKER),
+            code = recompute.main(["--binding", str(path),
                                    "--output", str(output), "--summary",
                                    str(self.work / "s.md"), "--repo-owner", OWNER,
                                    "--no-fetch"])
@@ -221,6 +286,12 @@ class BindingValidationTest(unittest.TestCase):
                 with self.assertRaises(recompute.RecomputeError):
                     recompute.load_binding(self.write(**{field: bad}))
 
+    def test_the_checker_path_is_constrained(self) -> None:
+        for bad in ("../../etc/passwd", "a/../../b", "with space", "x" * 201, ""):
+            with self.subTest(bad=bad):
+                with self.assertRaises(recompute.RecomputeError):
+                    recompute.load_checker("a" * 40, bad, Path("/dev/null"))
+
     def test_the_checker_is_invoked_as_an_argument_vector(self) -> None:
         """Never a shell string, so no value in it can be word-split."""
         binding = recompute.load_binding(self.write())
@@ -250,6 +321,22 @@ class TrustBoundaryTest(unittest.TestCase):
         render = self.reporter.index("render_repository_integrity_comment.py")
         tail = self.reporter[render:]
         self.assertNotIn("--report \"$RUNNER_TEMP/repository-integrity/report.json\"", tail)
+
+    def test_the_checker_comes_from_the_bound_base_commit(self) -> None:
+        """The check and the comment explaining it must apply one policy revision.
+
+        The scanner loads its checker from the PR base commit. Re-deriving with
+        the reporter's own default-branch copy would apply a different revision
+        whenever the base is not the default branch, or whenever the checker
+        changed on the default branch between scanning and reporting, so the
+        comment could report CLEAN while the guard is red.
+        """
+        self.assertIn("--checker-path scripts/check_repository_integrity.py",
+                      self.reporter)
+        source = (ROOT / "scripts" / "recompute_repository_integrity_report.py").read_text()
+        self.assertIn('f"{base_sha}:{checker_path}"', source)
+        # Read from the base commit, never from the reporter's working tree.
+        self.assertIn("load_checker(str(binding[\"base_sha\"])", source)
 
     def test_no_pull_request_tree_is_checked_out(self) -> None:
         self.assertEqual(self.reporter.count("uses: actions/checkout"), 1)
