@@ -54,8 +54,9 @@ REPO_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$")
 # GitHub caps a branch name at 255 bytes. Nothing narrower is imposed: see
 # _branch below for why this value is bounded but not otherwise constrained.
 MAX_BRANCH_LENGTH = 255
-# GitHub logins: alphanumeric and hyphens, 39 characters maximum.
-LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
+# A user login is 39 characters; a bot login adds "[bot]". Bounded, not shaped:
+# see _login for why no character allowlist is imposed.
+MAX_LOGIN_LENGTH = 64
 MAX_PR_NUMBER = 1_000_000
 # A commit realistically has one associated pull request. The bound exists so a
 # pathological or hostile response cannot be read unbounded; exceeding it fails
@@ -167,7 +168,23 @@ def _branch(value: object, field: str) -> str | None:
 
 
 def _login(value: object, field: str) -> str:
-    if not isinstance(value, str) or not LOGIN_RE.fullmatch(value):
+    """A GitHub account login, held only to what a comparand in an argv needs.
+
+    Deliberately no character allowlist. Bot accounts are named `name[bot]` --
+    `dependabot[bot]`, `github-actions[bot]` -- and an obvious login pattern
+    rejects the brackets, which would leave every Dependabot pull request with a
+    red reporter and no findings comment. The value is used for one casefolded
+    comparison in the checker's `is_external`, and is passed as an argument
+    vector element rather than through a shell, so no character in it can mean
+    anything.
+
+    What is enforced is what that use needs: a string, a length bound, no ASCII
+    control characters, and no leading hyphen, so it can never be mistaken for
+    an option by the program it is passed to.
+    """
+    if not isinstance(value, str) or not 1 <= len(value) <= MAX_LOGIN_LENGTH:
+        raise BindingError(f"invalid {field}")
+    if value.startswith("-") or any(ch < " " or ch == "\x7f" for ch in value):
         raise BindingError(f"invalid {field}")
     return value
 

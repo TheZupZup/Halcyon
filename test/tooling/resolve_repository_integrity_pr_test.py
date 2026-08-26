@@ -68,6 +68,7 @@ def report(**overrides) -> dict:
 def pull_request(*, number: int = PR_NUMBER, head_sha: str = HEAD_SHA,
                  head_repository: str | None = FORK,
                  head_branch: str = HEAD_BRANCH,
+                 author: object = PR_AUTHOR,
                  base_repository: str = REPOSITORY) -> dict:
     head_repo = {"full_name": head_repository} if head_repository is not None else None
     return {
@@ -77,7 +78,7 @@ def pull_request(*, number: int = PR_NUMBER, head_sha: str = HEAD_SHA,
         # re-derives its own findings from, so they come from here, never from
         # the artifact.
         "base": {"sha": BASE_SHA, "repo": {"full_name": base_repository}},
-        "user": {"login": PR_AUTHOR},
+        "user": {"login": author},
     }
 
 
@@ -166,6 +167,30 @@ class ForkRecoveryTest(unittest.TestCase):
         (binding, may_write), _ = decide(event(head_branch=None), report())
         self.assertIsNone(binding.head_branch)
         self.assertTrue(may_write)
+
+    def test_bot_form_pr_authors_are_accepted(self) -> None:
+        """Bot accounts are named `name[bot]`; an obvious login pattern rejects them.
+
+        Dependabot is configured in this repository, so rejecting its login
+        would leave every one of its pull requests with a red reporter and no
+        findings comment. The value is one casefolded comparison in the
+        checker's is_external, passed as an argv element, never through a shell.
+        """
+        for login in ("dependabot[bot]", "github-actions[bot]", "renovate[bot]",
+                      "a-user", "A1", "x" * 64):
+            with self.subTest(login=login):
+                api = Api(pulls=pull_request(author=login))
+                (binding, may_write), _ = decide(event(), report(), api)
+                self.assertEqual(binding.pr_author, login)
+                self.assertTrue(may_write)
+
+    def test_pr_author_values_an_argv_comparand_cannot_carry_are_refused(self) -> None:
+        # A leading hyphen could be read as an option by the program it is
+        # passed to; control characters cannot occur in a login at all.
+        for bad in ("-evil", "with\nnewline", "nul\x00byte", "", "x" * 65, 7, None):
+            with self.subTest(bad=bad):
+                with self.assertRaises(binder.BindingError):
+                    decide(event(), report(), Api(pulls=pull_request(author=bad)))
 
     def test_every_branch_name_git_accepts_is_accepted(self) -> None:
         """A character allowlist here would strand legitimate pull requests.

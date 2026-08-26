@@ -32,7 +32,7 @@ from pathlib import Path
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$")
-LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
+MAX_LOGIN_LENGTH = 64
 MAX_PR_NUMBER = 1_000_000
 # The checker exits 1 when it has findings; that is a verdict, not a failure.
 CLEAN, BLOCKED = 0, 1
@@ -40,6 +40,27 @@ CLEAN, BLOCKED = 0, 1
 
 class RecomputeError(Exception):
     """The verdict could not be re-derived. The reporter must not comment."""
+
+
+def valid_login(value: object) -> bool:
+    """A GitHub account login, held only to what a comparand in an argv needs.
+
+    Deliberately no character allowlist. Bot accounts are named `name[bot]` --
+    `dependabot[bot]`, `github-actions[bot]` -- and an obvious login pattern
+    rejects the brackets, which would leave every Dependabot pull request with a
+    red reporter and no findings comment. The value is used for one casefolded
+    comparison in the checker's `is_external`, and is passed as an argument
+    vector element rather than through a shell, so no character in it can mean
+    anything.
+
+    What is enforced is what that use needs: a string, a length bound, no ASCII
+    control characters, and no leading hyphen, so it can never be mistaken for
+    an option by the program it is passed to.
+    """
+    if not isinstance(value, str) or not 1 <= len(value) <= MAX_LOGIN_LENGTH:
+        return False
+    return not value.startswith("-") and not any(
+        ch < " " or ch == "\x7f" for ch in value)
 
 
 def load_binding(path: Path) -> dict[str, object]:
@@ -54,10 +75,12 @@ def load_binding(path: Path) -> dict[str, object]:
     if not isinstance(binding, dict):
         raise RecomputeError("invalid binding")
     for field, pattern in (("head_sha", SHA_RE), ("base_sha", SHA_RE),
-                           ("head_repository", REPO_RE), ("pr_author", LOGIN_RE)):
+                           ("head_repository", REPO_RE)):
         value = binding.get(field)
         if not isinstance(value, str) or not pattern.fullmatch(value):
             raise RecomputeError(f"invalid {field} in binding")
+    if not valid_login(binding.get("pr_author")):
+        raise RecomputeError("invalid pr_author in binding")
     number = binding.get("pr_number")
     if not isinstance(number, int) or isinstance(number, bool) or not 1 <= number <= MAX_PR_NUMBER:
         raise RecomputeError("invalid pr_number in binding")
@@ -153,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        if not LOGIN_RE.fullmatch(args.repo_owner):
+        if not valid_login(args.repo_owner):
             raise RecomputeError("invalid repository owner")
         binding = load_binding(args.binding)
         args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -200,14 +200,21 @@ class BindingValidationTest(unittest.TestCase):
         self.path.write_text(json.dumps(payload), encoding="utf-8")
         return self.path
 
+    def test_bot_form_authors_are_accepted(self) -> None:
+        for login in ("dependabot[bot]", "github-actions[bot]", "renovate[bot]"):
+            with self.subTest(login=login):
+                binding = recompute.load_binding(self.write(pr_author=login))
+                self.assertEqual(binding["pr_author"], login)
+
     def test_every_field_the_checker_receives_is_revalidated(self) -> None:
         recompute.load_binding(self.write())  # the good case
         for field, bad in (
             ("base_sha", "not-a-sha"), ("base_sha", None),
             ("head_sha", "../../etc/passwd"), ("head_sha", 7),
             ("head_repository", "a/b/c"), ("head_repository", ""),
-            ("pr_author", "bad login"), ("pr_author", "-leading"),
-            ("pr_author", "x" * 40), ("pr_number", 0), ("pr_number", True),
+            ("pr_author", "-leading"), ("pr_author", "new\nline"),
+            ("pr_author", ""), ("pr_author", "x" * 65),
+            ("pr_number", 0), ("pr_number", True),
             ("pr_number", "513"),
         ):
             with self.subTest(field=field, bad=bad):
