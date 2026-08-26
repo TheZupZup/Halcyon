@@ -236,6 +236,18 @@ rules, so the comment could report CLEAN while the guard is red. Both revisions
 are maintainer-controlled, so this is a consistency requirement rather than a
 trust one: the check and the comment explaining it must never disagree.
 
+One window is left open deliberately. `base.sha` on a pull request tracks the
+base branch's current tip, not the tip the scanner saw, so if the base branch
+advances between the scan and the report the reporter re-derives against a
+slightly newer base. The commit set is unaffected — commits pushed to the base
+after the scan are not reachable from a head that predates them, so
+`rev-list head --not base` yields the same commits either way — and only the
+checker revision can differ, and only when the push that moved the base also
+changed the checker, inside the seconds between the two runs. Closing it would
+mean taking the scan-time base SHA from the contributor-controlled artifact,
+making an artifact field decide something again; the narrower risk is the better
+trade.
+
 No pull-request code is executed and no pull-request tree is checked out. The
 checker reads git objects only, so the objects are fetched into the trusted
 checkout through this repository's own `refs/pull/N/head` and analysed as data;

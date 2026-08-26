@@ -361,6 +361,25 @@ def verify_pull_request(pull_request: object, binding: Binding) -> tuple[bool, B
     head_sha = _sha(head.get("sha"), "PR head SHA")
     # Both are read from the live pull request, so the re-derivation the reporter
     # performs cannot be steered by anything the scanner run wrote.
+    #
+    # Known limitation, accepted deliberately. `base.sha` tracks the base
+    # branch's current tip rather than the tip the scanner saw: a pull request
+    # reports whatever the base branch has advanced to since. So if the base
+    # branch moves between the scan and the report, the reporter re-derives
+    # against a slightly newer base than the guard used.
+    #
+    # The commit set is unaffected in practice. `rev-list head --not base`
+    # excludes what is reachable from base, and commits pushed to the base after
+    # the scan are not reachable from a head that predates them, so the same
+    # commits are scanned either way. What can differ is the checker revision
+    # loaded from that base -- and only when the push that moved the base also
+    # changed the checker, inside the seconds between the two workflow runs.
+    #
+    # Closing it entirely would mean taking the scan-time base SHA from the
+    # artifact, which is contributor-controlled: authenticating it against the
+    # base branch's ancestry is possible, but it would make an artifact field
+    # decide something again, which is the property this design gives up
+    # everywhere else. The narrower risk was judged the better trade.
     bound = replace(
         binding,
         base_sha=_sha(base.get("sha"), "PR base SHA"),
