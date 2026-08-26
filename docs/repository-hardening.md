@@ -206,6 +206,33 @@ match on the SHA, but the head repository is still your fork, so steps 4 and 5
 resolve to your own pull request. There is no input that makes the reporter
 comment on somebody else's.
 
+### The verdict is re-derived, never taken from the artifact
+
+Identity binding proves *which* pull request a report describes. It cannot prove
+the report is honest. A `pull_request` workflow definition comes from the merge
+ref, so a fork contributor can keep the scanner's name and path, drop the step
+that loads the trusted checker, and upload a findings artifact whose identity
+fields are the genuine GitHub-provided ones and whose `findings` list is empty.
+Every field identity binding checks would be honest; only the verdict is forged.
+Published, that would put a CLEAN comment under `github-actions[bot]`, lending
+contributor-authored content the authority of the maintainer-controlled
+reporter.
+
+So the artifact's `findings` are never the source of a published verdict. The
+reporter re-derives them with `scripts/recompute_repository_integrity_report.py`,
+running the checker from this trusted default-branch checkout over the same
+commit range, from a base SHA, head SHA and PR author read from the live pull
+request rather than from the artifact. A divergence between the uploaded and
+re-derived results is reported and the re-derived one wins — refusing to comment
+on a mismatch would let a forged artifact suppress the finding it was forged to
+hide.
+
+No pull-request code is executed and no pull-request tree is checked out. The
+checker reads git objects only, so the objects are fetched into the trusted
+checkout through this repository's own `refs/pull/N/head` and analysed as data;
+the working tree stays on the default branch. A checker that cannot evaluate the
+range is an error, never an empty finding list.
+
 Every failure is silent-and-red rather than best-effort: a malformed artifact,
 a missing binding, a mismatch, an ambiguous pull request, an unexpected workflow
 path, or an unexpected repository all end the job without a comment. A head that

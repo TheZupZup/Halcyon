@@ -38,7 +38,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -54,6 +54,8 @@ REPO_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$")
 # GitHub caps a branch name at 255 bytes. Nothing narrower is imposed: see
 # _branch below for why this value is bounded but not otherwise constrained.
 MAX_BRANCH_LENGTH = 255
+# GitHub logins: alphanumeric and hyphens, 39 characters maximum.
+LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 MAX_PR_NUMBER = 1_000_000
 # A commit realistically has one associated pull request. The bound exists so a
 # pathological or hostile response cannot be read unbounded; exceeding it fails
@@ -95,6 +97,11 @@ class Binding:
     # "workflow_run" when GitHub named the PR itself; "artifact" when the PR was
     # recovered from the report and must be confirmed against the API.
     pr_source: str
+    # Filled in from the live pull request, never from the artifact. These are
+    # what the trusted reporter re-derives the findings from, so they must come
+    # from GitHub rather than from anything the scanner run wrote.
+    base_sha: str | None = None
+    pr_author: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -105,6 +112,8 @@ class Binding:
             "repository": self.repository,
             "run_id": self.run_id,
             "pr_source": self.pr_source,
+            "base_sha": self.base_sha,
+            "pr_author": self.pr_author,
         }
 
 
@@ -153,6 +162,12 @@ def _branch(value: object, field: str) -> str | None:
     if not isinstance(value, str) or len(value) > MAX_BRANCH_LENGTH:
         raise BindingError(f"invalid {field}")
     if any(ch < " " or ch == "\x7f" for ch in value):
+        raise BindingError(f"invalid {field}")
+    return value
+
+
+def _login(value: object, field: str) -> str:
+    if not isinstance(value, str) or not LOGIN_RE.fullmatch(value):
         raise BindingError(f"invalid {field}")
     return value
 
@@ -308,8 +323,12 @@ def select_candidate(candidates: object, binding: Binding) -> int:
     return resolved
 
 
-def verify_pull_request(pull_request: object, binding: Binding) -> bool:
-    """Confirm the live PR is the one the artifact claims. False means superseded."""
+def verify_pull_request(pull_request: object, binding: Binding) -> tuple[bool, Binding]:
+    """Confirm the live PR is the one the artifact claims, and take from it the
+    scan inputs the trusted reporter re-derives its own findings from.
+
+    Returns (may_write, binding). A false first element means superseded.
+    """
     live = _mapping(pull_request, "pull request")
     if _identifier(live.get("number"), "PR number", MAX_PR_NUMBER) != binding.pr_number:
         raise BindingError("API returned a different pull request")
@@ -323,9 +342,16 @@ def verify_pull_request(pull_request: object, binding: Binding) -> bool:
         if _branch(head.get("ref"), "PR head branch") != binding.head_branch:
             raise BindingError("pull request head branch does not match the scanned head")
     head_sha = _sha(head.get("sha"), "PR head SHA")
+    # Both are read from the live pull request, so the re-derivation the reporter
+    # performs cannot be steered by anything the scanner run wrote.
+    bound = replace(
+        binding,
+        base_sha=_sha(base.get("sha"), "PR base SHA"),
+        pr_author=_login(_mapping(live.get("user"), "PR author").get("login"), "PR author"),
+    )
     # Out-of-order synchronize runs must never restore an older verdict over a
     # newer one. A moved head is not an error, it is a superseded report.
-    return head_sha == binding.head_sha
+    return head_sha == binding.head_sha, bound
 
 
 # Swappable so the pagination below can be exercised without a network.
@@ -415,8 +441,9 @@ def decide(event: object, payload: object, repository: str,
         # is always read from this repository, which is what makes the answer
         # binding rather than merely suggestive.
         select_candidate(fetch(association_path(binding)), binding)
-    return binding, verify_pull_request(
+    may_write, binding = verify_pull_request(
         fetch(f"/repos/{owner_repo}/pulls/{binding.pr_number}"), binding)
+    return binding, may_write
 
 
 def _emit(name: str, value: str) -> None:

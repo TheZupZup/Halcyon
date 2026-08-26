@@ -27,6 +27,7 @@ jobs:
           python3 test/tooling/check_repository_integrity_test.py
           python3 test/tooling/render_repository_integrity_comment_test.py
           python3 test/tooling/resolve_repository_integrity_pr_test.py
+          python3 test/tooling/recompute_repository_integrity_report_test.py
 
   integrity:
     name: Repository integrity guard

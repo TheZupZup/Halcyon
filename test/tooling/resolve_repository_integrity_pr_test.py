@@ -28,6 +28,8 @@ FORK = "Borhan2004/Linthra"
 # The real head of PR #513, the incident this recovery path was built for.
 HEAD_SHA = "a9ecac5b6a94159c590ccb51e09f5a00ac14f796"
 HEAD_BRANCH = "feat/linux-408-embedded-artwork"
+BASE_SHA = "9a53243641324a7bddeabd39ebded85c88350012"
+PR_AUTHOR = "Borhan2004"
 NEWER_SHA = "b" * 40
 RUN_ID = 32887057547
 PR_NUMBER = 513
@@ -71,7 +73,11 @@ def pull_request(*, number: int = PR_NUMBER, head_sha: str = HEAD_SHA,
     return {
         "number": number,
         "head": {"sha": head_sha, "ref": head_branch, "repo": head_repo},
-        "base": {"repo": {"full_name": base_repository}},
+        # base.sha and user.login are the scan inputs the trusted reporter
+        # re-derives its own findings from, so they come from here, never from
+        # the artifact.
+        "base": {"sha": BASE_SHA, "repo": {"full_name": base_repository}},
+        "user": {"login": PR_AUTHOR},
     }
 
 
@@ -121,6 +127,10 @@ class ForkRecoveryTest(unittest.TestCase):
         self.assertEqual(binding.head_repository, FORK)
         self.assertEqual(binding.head_branch, HEAD_BRANCH)
         self.assertTrue(may_write)
+        # Taken from the live pull request, not from the artifact: these are the
+        # inputs the trusted reporter re-derives the findings from.
+        self.assertEqual(binding.base_sha, BASE_SHA)
+        self.assertEqual(binding.pr_author, PR_AUTHOR)
         # Association is asked of the HEAD repository; the pull request itself
         # is read from the base repository.
         print(f"\n  association query: {api.paths[0]}")
