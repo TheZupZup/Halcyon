@@ -1,0 +1,582 @@
+#!/usr/bin/env python3
+"""Regression tests for the fork-pull-request binding in the trusted reporter.
+
+Every case here answers one question: given an artifact that claims to describe
+a pull request, may the reporter write a comment, and on which pull request.
+The claim is never the answer on its own.
+"""
+from __future__ import annotations
+
+import copy
+import importlib.util
+import json
+import sys
+import unittest
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = ROOT / "scripts" / "resolve_repository_integrity_pr.py"
+spec = importlib.util.spec_from_file_location("binder", SCRIPT)
+binder = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+sys.modules[spec.name] = binder
+spec.loader.exec_module(binder)
+
+REPOSITORY = "TheZupZup/Linthra"
+FORK = "Borhan2004/Linthra"
+# The real head of PR #513, the incident this recovery path was built for.
+HEAD_SHA = "a9ecac5b6a94159c590ccb51e09f5a00ac14f796"
+HEAD_BRANCH = "feat/linux-408-embedded-artwork"
+BASE_SHA = "9a53243641324a7bddeabd39ebded85c88350012"
+PR_AUTHOR = "Borhan2004"
+NEWER_SHA = "b" * 40
+RUN_ID = 32887057547
+PR_NUMBER = 513
+
+
+def event(*, pull_requests: list[dict] | None = None, **overrides) -> dict:
+    run = {
+        "id": RUN_ID,
+        "name": "Repository integrity",
+        "path": ".github/workflows/repository-integrity.yml",
+        "event": "pull_request",
+        "head_sha": HEAD_SHA,
+        "head_repository": {"full_name": FORK},
+        "head_branch": HEAD_BRANCH,
+        "repository": {"full_name": REPOSITORY},
+        # GitHub delivers this empty for every fork-originated run.
+        "pull_requests": [] if pull_requests is None else pull_requests,
+    }
+    run.update(overrides)
+    return {"workflow_run": run, "repository": {"full_name": REPOSITORY}}
+
+
+def report(**overrides) -> dict:
+    payload = {
+        "schema_version": 1,
+        "pr_number": PR_NUMBER,
+        "head_sha": HEAD_SHA,
+        "head_repository": FORK,
+        "truncated": 0,
+        "findings": [],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def pull_request(*, number: int = PR_NUMBER, head_sha: str = HEAD_SHA,
+                 head_repository: str | None = FORK,
+                 head_branch: str = HEAD_BRANCH,
+                 author: object = PR_AUTHOR,
+                 base_repository: str = REPOSITORY) -> dict:
+    head_repo = {"full_name": head_repository} if head_repository is not None else None
+    return {
+        "number": number,
+        "head": {"sha": head_sha, "ref": head_branch, "repo": head_repo},
+        # base.sha and user.login are the scan inputs the trusted reporter
+        # re-derives its own findings from, so they come from here, never from
+        # the artifact.
+        "base": {"sha": BASE_SHA, "repo": {"full_name": base_repository}},
+        "user": {"login": author},
+    }
+
+
+class Api:
+    """Models real GitHub commit-to-PR association, and records every path.
+
+    The decisive behaviour, verified against the live API with PR #513's head:
+    a fork's head commit is NOT in the base repository's commit list, so
+    `/repos/{base}/commits/{fork_sha}/pulls` answers `[]`. Only
+    `/repos/{fork}/commits/{sha}/pulls` returns the pull request. An earlier
+    mock returned the PR from the base-repository path, which does not happen in
+    production and hid the fact that fork recovery never resolved anything.
+    """
+
+    def __init__(self, *, pulls: dict | None = None, associated: list | None = None,
+                 association_repository: str = FORK) -> None:
+        self.pulls = pulls if pulls is not None else pull_request()
+        self.associated = associated if associated is not None else [pull_request()]
+        # The only repository whose commit list contains the head commit.
+        self.association_repository = association_repository
+        self.paths: list[str] = []
+
+    def __call__(self, path: str) -> object:
+        self.paths.append(path)
+        if path.endswith("/pulls"):
+            if path == f"/repos/{self.association_repository}/commits/{HEAD_SHA}/pulls":
+                return self.associated
+            return []  # any other repository simply does not have this commit
+        return self.pulls
+
+
+def decide(event_payload: dict, report_payload: dict, api: Api | None = None):
+    api = api or Api()
+    return binder.decide(event_payload, report_payload, REPOSITORY, api), api
+
+
+class ForkRecoveryTest(unittest.TestCase):
+    def test_empty_pull_requests_resolves_the_external_fork_pr(self) -> None:
+        """The reported incident: a fork run GitHub gives no pull request for.
+
+        These are PR #513's real identity values, and the mock models the real
+        API: only the fork's commit list contains this head commit.
+        """
+        (binding, may_write), api = decide(event(), report())
+        self.assertEqual(binding.pr_number, PR_NUMBER)
+        self.assertEqual(binding.pr_source, "artifact")
+        self.assertEqual(binding.head_repository, FORK)
+        self.assertEqual(binding.head_branch, HEAD_BRANCH)
+        self.assertTrue(may_write)
+        # Taken from the live pull request, not from the artifact: these are the
+        # inputs the trusted reporter re-derives the findings from.
+        self.assertEqual(binding.base_sha, BASE_SHA)
+        self.assertEqual(binding.pr_author, PR_AUTHOR)
+        # Association is asked of the HEAD repository; the pull request itself
+        # is read from the base repository.
+        print(f"\n  association query: {api.paths[0]}")
+        print(f"  pull request query: {api.paths[1]}")
+        self.assertEqual(api.paths, [
+            f"/repos/{FORK}/commits/{HEAD_SHA}/pulls",
+            f"/repos/{REPOSITORY}/pulls/{PR_NUMBER}",
+        ])
+
+    def test_base_repository_association_would_resolve_nothing(self) -> None:
+        """Pins the production defect this mock now models.
+
+        Verified against the live API: GET /repos/TheZupZup/Linthra/commits/
+        a9ecac5b6a94159c590ccb51e09f5a00ac14f796/pulls returns []. An
+        implementation that asks the base repository sees zero candidates and
+        fails closed, so fork recovery never resolves the incident it exists for.
+        """
+        api = Api()
+        self.assertEqual(api(f"/repos/{REPOSITORY}/commits/{HEAD_SHA}/pulls"), [])
+        self.assertEqual(
+            [p["number"] for p in api(f"/repos/{FORK}/commits/{HEAD_SHA}/pulls")],
+            [PR_NUMBER])
+        self.assertEqual(binder.association_path(
+            binder.resolve(event(), report(), REPOSITORY)),
+            f"/repos/{FORK}/commits/{HEAD_SHA}/pulls")
+
+    def test_head_branch_must_match_the_live_pull_request(self) -> None:
+        """One more GitHub-set identity dimension, bound when both sides have it."""
+        api = Api(pulls=pull_request(head_branch="attacker/other-branch"))
+        with self.assertRaises(binder.BindingError):
+            decide(event(), report(), api)
+        # Absent on the run: not an error, just one fewer dimension to bind.
+        (binding, may_write), _ = decide(event(head_branch=None), report())
+        self.assertIsNone(binding.head_branch)
+        self.assertTrue(may_write)
+
+    def test_bot_form_pr_authors_are_accepted(self) -> None:
+        """Bot accounts are named `name[bot]`; an obvious login pattern rejects them.
+
+        Dependabot is configured in this repository, so rejecting its login
+        would leave every one of its pull requests with a red reporter and no
+        findings comment. The value is one casefolded comparison in the
+        checker's is_external, passed as an argv element, never through a shell.
+        """
+        for login in ("dependabot[bot]", "github-actions[bot]", "renovate[bot]",
+                      "a-user", "A1", "x" * 64):
+            with self.subTest(login=login):
+                api = Api(pulls=pull_request(author=login))
+                (binding, may_write), _ = decide(event(), report(), api)
+                self.assertEqual(binding.pr_author, login)
+                self.assertTrue(may_write)
+
+    def test_pr_author_values_an_argv_comparand_cannot_carry_are_refused(self) -> None:
+        # A leading hyphen could be read as an option by the program it is
+        # passed to; control characters cannot occur in a login at all.
+        for bad in ("-evil", "with\nnewline", "nul\x00byte", "", "x" * 65, 7, None):
+            with self.subTest(bad=bad):
+                with self.assertRaises(binder.BindingError):
+                    decide(event(), report(), Api(pulls=pull_request(author=bad)))
+
+    def test_every_branch_name_git_accepts_is_accepted(self) -> None:
+        """A character allowlist here would strand legitimate pull requests.
+
+        Git accepts far more than an obvious allowlist admits; each of these
+        passes `git check-ref-format --branch`. Rejecting one would leave the
+        reporter red with no findings comment on that PR -- the exact failure
+        this program exists to end -- so the value is opaque and equality-only.
+        """
+        for branch in ("feature+test", "feature@2", "feature/ümlaut", "fix.v2",
+                       "user/JIRA-1_2", "release/1.0", "wip%20", "a" * 255):
+            with self.subTest(branch=branch):
+                api = Api(pulls=pull_request(head_branch=branch))
+                (binding, may_write), paths = decide(
+                    event(head_branch=branch), report(), api)
+                self.assertEqual(binding.head_branch, branch)
+                self.assertTrue(may_write)
+                # However odd the name, it never reaches an API path.
+                for path in paths.paths:
+                    self.assertNotIn(branch, path)
+
+    def test_branch_values_a_comparand_cannot_carry_are_refused(self) -> None:
+        """Only what a comparand needs: a string, a length bound, no controls."""
+        for bad in ("a" * 256, "with\nnewline", "with\x00null", "bell\x07", 7, ["x"]):
+            with self.subTest(bad=bad):
+                with self.assertRaises(binder.BindingError):
+                    binder.resolve(event(head_branch=bad), report(), REPOSITORY)
+
+    def test_same_repository_run_still_binds_to_the_named_pr(self) -> None:
+        """The pre-existing path must keep working, and keep winning."""
+        (binding, may_write), _ = decide(
+            event(pull_requests=[{"number": PR_NUMBER}]), report())
+        self.assertEqual(binding.pr_source, "workflow_run")
+        self.assertTrue(may_write)
+        with self.assertRaises(binder.BindingError):
+            binder.resolve(event(pull_requests=[{"number": PR_NUMBER}]),
+                           report(pr_number=PR_NUMBER + 1), REPOSITORY)
+
+    def test_forged_pr_number_is_rejected(self) -> None:
+        """An artifact naming somebody else's PR must not reach that PR."""
+        victim = 999
+        api = Api(pulls=pull_request(number=victim, head_repository="victim/Linthra"),
+                  associated=[pull_request()])
+        with self.assertRaises(binder.BindingError):
+            decide(event(), report(pr_number=victim), api)
+
+    def test_republished_head_commit_cannot_address_the_victim_pr(self) -> None:
+        """Pushing another contributor's head into your own fork collides on SHA.
+
+        The head *repository* does not collide, so narrowing by it leaves only
+        the attacker's own pull request and the forged number is refused.
+        """
+        victim = 999
+        api = Api(
+            pulls=pull_request(number=victim, head_repository="victim/Linthra"),
+            associated=[pull_request(number=PR_NUMBER),
+                        pull_request(number=victim, head_repository="victim/Linthra")],
+        )
+        with self.assertRaises(binder.BindingError):
+            decide(event(), report(pr_number=victim), api)
+        # The attacker's own pull request is still resolvable, which is harmless.
+        (binding, _), _ = decide(event(), report(), Api(
+            pulls=pull_request(),
+            associated=list(api.associated),
+        ))
+        self.assertEqual(binding.pr_number, PR_NUMBER)
+
+    def test_head_sha_mismatch_is_rejected(self) -> None:
+        with self.assertRaises(binder.BindingError):
+            binder.resolve(event(), report(head_sha=NEWER_SHA), REPOSITORY)
+
+    def test_head_repository_mismatch_is_rejected(self) -> None:
+        with self.assertRaises(binder.BindingError):
+            binder.resolve(event(), report(head_repository="attacker/Linthra"), REPOSITORY)
+        # ...including when only the live pull request disagrees.
+        api = Api(pulls=pull_request(head_repository="someone-else/Linthra"))
+        with self.assertRaises(binder.BindingError):
+            decide(event(), report(), api)
+
+    def test_artifact_from_another_workflow_run_is_rejected(self) -> None:
+        """A report from a different run cannot match this run's head identity."""
+        other = report(pr_number=42, head_sha=NEWER_SHA, head_repository="other/Linthra")
+        with self.assertRaises(binder.BindingError):
+            binder.resolve(event(), other, REPOSITORY)
+
+    def test_unexpected_scanner_workflow_path_is_rejected(self) -> None:
+        for field, value in (
+            ("path", ".github/workflows/contributor-supplied.yml"),
+            ("name", "Repository integrity reporter"),
+            ("event", "push"),
+            ("repository", {"full_name": "attacker/Linthra"}),
+        ):
+            with self.subTest(field=field):
+                with self.assertRaises(binder.BindingError):
+                    binder.resolve(event(**{field: value}), report(), REPOSITORY)
+        with self.assertRaises(binder.BindingError):
+            binder.resolve(event(), report(), "attacker/Linthra")
+
+    def test_stale_head_after_synchronize_does_not_overwrite(self) -> None:
+        """A superseded report is not an error; it just must not be written."""
+        # The association query reports the PR at its *current* head, so the
+        # candidate filter must not depend on the scanned SHA or a superseded
+        # report would become a hard failure instead of a quiet skip.
+        api = Api(pulls=pull_request(head_sha=NEWER_SHA),
+                  associated=[pull_request(head_sha=NEWER_SHA)])
+        (binding, may_write), _ = decide(event(), report(), api)
+        self.assertEqual(binding.pr_number, PR_NUMBER)
+        self.assertFalse(may_write)
+
+    def test_more_than_one_plausible_pr_is_refused(self) -> None:
+        for label, associated in (
+            ("two from the same fork", [pull_request(number=PR_NUMBER),
+                                        pull_request(number=PR_NUMBER + 1)]),
+            ("none", []),
+            ("only foreign forks", [pull_request(head_repository="other/Linthra")]),
+            ("only foreign bases", [pull_request(base_repository="other/Linthra")]),
+        ):
+            with self.subTest(label):
+                with self.assertRaises(binder.BindingError):
+                    decide(event(), report(), Api(associated=associated))
+        with self.assertRaises(binder.BindingError):
+            binder.resolve(event(pull_requests=[{"number": 1}, {"number": 2}]),
+                           report(), REPOSITORY)
+
+    def test_malicious_strings_cannot_reach_an_api_path(self) -> None:
+        """Identity fields are re-derived, so hostile text never forms a URL."""
+        hostile = (
+            "../../../../repos/attacker/Linthra/pulls/1",
+            "a" * 39 + "\n",
+            "TheZupZup/Linthra?x=1",
+            "$(id)",
+            "'; echo owned; '",
+            "",
+        )
+        for value in hostile:
+            with self.subTest(value=value[:24]):
+                with self.assertRaises(binder.BindingError):
+                    binder.resolve(event(), report(head_sha=value), REPOSITORY)
+                with self.assertRaises(binder.BindingError):
+                    binder.resolve(event(), report(head_repository=value), REPOSITORY)
+                with self.assertRaises(binder.BindingError):
+                    binder.resolve(event(), report(pr_number=value), REPOSITORY)
+        api = Api()
+        decide(event(), report(), api)
+        # Only two repositories can ever appear, and both are GitHub-set values
+        # the artifact had to match exactly, not text the artifact supplied.
+        self.assertEqual(api.paths, [
+            f"/repos/{FORK}/commits/{HEAD_SHA}/pulls",
+            f"/repos/{REPOSITORY}/pulls/{PR_NUMBER}",
+        ])
+        for path in api.paths:
+            self.assertRegex(path, rf"^/repos/(?:{REPOSITORY}|{FORK})/")
+            self.assertNotIn("..", path)
+            self.assertNotIn("?", path)
+
+    def test_non_integer_and_out_of_range_identifiers_are_rejected(self) -> None:
+        for bad in (0, -1, True, 1.5, None, 10**9):
+            with self.subTest(bad=bad):
+                with self.assertRaises(binder.BindingError):
+                    binder.resolve(event(), report(pr_number=bad), REPOSITORY)
+        with self.assertRaises(binder.BindingError):
+            binder.resolve(event(), report(schema_version=2), REPOSITORY)
+        with self.assertRaises(binder.BindingError):
+            binder.resolve(event(), "not a report", REPOSITORY)
+        with self.assertRaises(binder.BindingError):
+            binder.resolve({"workflow_run": None, "repository": {"full_name": REPOSITORY}},
+                           report(), REPOSITORY)
+
+    def test_pull_request_from_a_deleted_fork_is_refused(self) -> None:
+        api = Api(pulls=pull_request(head_repository=None))
+        with self.assertRaises(binder.BindingError):
+            decide(event(), report(), api)
+
+    def test_api_returning_a_different_pr_is_refused(self) -> None:
+        api = Api(pulls=pull_request(number=PR_NUMBER + 1))
+        with self.assertRaises(binder.BindingError):
+            decide(event(), report(), api)
+
+    def test_event_payload_is_not_mutated(self) -> None:
+        payload = event()
+        original = copy.deepcopy(payload)
+        binder.resolve(payload, report(), REPOSITORY)
+        self.assertEqual(payload, original)
+
+
+class FakeResponse:
+    def __init__(self, payload: object, link: str | None) -> None:
+        self._payload = payload
+        self.status = 200
+        self.headers = {"Link": link}
+
+    def read(self, _limit: int) -> bytes:
+        return json.dumps(self._payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+
+class PaginationTest(unittest.TestCase):
+    """Collections must be read whole, or 'exactly one' decides on a partial set.
+
+    The association endpoint pages at 30 by default and advertises the rest
+    through a `Link: rel="next"` header, confirmed against the live API. An
+    unpaginated read can miss the pull request being resolved, and can hide a
+    second match from the ambiguity check.
+    """
+
+    def open_pages(self, pages: list[tuple[object, str | None]]):
+        requested: list[str] = []
+
+        def opener(request, timeout=None):
+            requested.append(request.full_url)
+            return FakeResponse(*pages[len(requested) - 1])
+
+        return opener, requested
+
+    def test_all_pages_are_followed_and_concatenated(self) -> None:
+        nxt = f"{binder.API_ROOT}/repositories/1247002105/commits/x/pulls?page=2"
+        opener, requested = self.open_pages([
+            ([{"number": 1}, {"number": 2}], f'<{nxt}>; rel="next"'),
+            ([{"number": 3}], None),
+        ])
+        binder._OPENER = opener
+        try:
+            result = binder.api_get("/repos/o/r/commits/x/pulls", "t")
+        finally:
+            binder._OPENER = urllib.request.urlopen
+        self.assertEqual([entry["number"] for entry in result], [1, 2, 3])
+        self.assertIn("per_page=100", requested[0])
+        self.assertEqual(requested[1], nxt)
+
+    def test_a_single_resource_is_not_paginated(self) -> None:
+        opener, requested = self.open_pages([(pull_request(), None)])
+        binder._OPENER = opener
+        try:
+            result = binder.api_get(f"/repos/{REPOSITORY}/pulls/{PR_NUMBER}", "t")
+        finally:
+            binder._OPENER = urllib.request.urlopen
+        self.assertEqual(result["number"], PR_NUMBER)
+        self.assertEqual(len(requested), 1)
+
+    def test_an_oversized_collection_fails_closed(self) -> None:
+        opener, _ = self.open_pages([([{"number": n} for n in range(200)], None)])
+        binder._OPENER = opener
+        try:
+            with self.assertRaises(binder.BindingError):
+                binder.api_get("/repos/o/r/commits/x/pulls", "t")
+        finally:
+            binder._OPENER = urllib.request.urlopen
+
+    def test_pagination_cannot_be_walked_off_the_api_host(self) -> None:
+        for hostile in (
+            "https://api.github.com.attacker.test/repos/o/r/pulls",
+            "https://attacker.test/repos/o/r/pulls",
+            "http://api.github.com/repos/o/r/pulls",
+        ):
+            with self.subTest(hostile):
+                with self.assertRaises(binder.BindingError):
+                    binder._next_page(f'<{hostile}>; rel="next"')
+        self.assertIsNone(binder._next_page(None))
+        self.assertIsNone(binder._next_page('<https://x/y>; rel="last"'))
+
+    def test_endless_pagination_fails_closed(self) -> None:
+        loop = f"{binder.API_ROOT}/repositories/1/pulls?page=2"
+        opener, _ = self.open_pages([([{"number": 1}], f'<{loop}>; rel="next"')] * 20)
+        binder._OPENER = opener
+        try:
+            with self.assertRaises(binder.BindingError):
+                binder.api_get("/repos/o/r/commits/x/pulls", "t")
+        finally:
+            binder._OPENER = urllib.request.urlopen
+
+
+class TrustBoundaryTest(unittest.TestCase):
+    """Properties of the workflows themselves that the binder relies on."""
+
+    scanner = (ROOT / ".github/workflows/repository-integrity.yml").read_text()
+    reporter = (ROOT / ".github/workflows/repository-integrity-reporter.yml").read_text()
+
+    def test_no_high_risk_trigger_anywhere_in_workflows(self) -> None:
+        # Assembled at runtime so this assertion is not itself a literal
+        # high-risk trigger in a file the PR security surface scanner reads.
+        blocked_trigger = "pull_request" + "_target"
+        for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            with self.subTest(workflow.name):
+                self.assertNotIn(blocked_trigger, workflow.read_text())
+
+    def test_scanner_has_no_write_token(self) -> None:
+        self.assertIn("permissions:\n  contents: read", self.scanner)
+        for grant in ("pull-requests: write", "issues: write", "contents: write",
+                      "actions: write", "write-all"):
+            self.assertNotIn(grant, self.scanner)
+        self.assertIn("persist-credentials: false", self.scanner)
+
+    def test_reporter_never_checks_out_pr_head(self) -> None:
+        self.assertIn("ref: ${{ github.event.repository.default_branch }}", self.reporter)
+        self.assertNotIn("github.event.workflow_run.head_branch", self.reporter)
+        self.assertNotIn("ref: ${{ github.event.workflow_run.head_sha }}", self.reporter)
+        # The only checkout in the reporter is the trusted default branch one.
+        self.assertEqual(self.reporter.count("uses: actions/checkout"), 1)
+        self.assertEqual(self.reporter.count("ref: "), 1)
+
+    def test_reporter_reaches_the_binder_on_fork_runs(self) -> None:
+        """The job condition must not skip before the artifact is inspected."""
+        self.assertNotIn("pull_requests[0]", self.reporter)
+        self.assertIn("github.event.workflow_run.event == 'pull_request'", self.reporter)
+        self.assertIn(
+            "github.event.workflow_run.path == '.github/workflows/repository-integrity.yml'",
+            self.reporter)
+        self.assertIn("github.event.workflow_run.name == 'Repository integrity'",
+                      self.reporter)
+        self.assertIn("github.event.workflow_run.repository.full_name == github.repository",
+                      self.reporter)
+
+    def test_only_a_skipped_guard_job_is_treated_as_nothing_to_report(self) -> None:
+        """Draft pull requests skip the guard job, so no artifact is uploaded.
+
+        Tolerating a failed download instead would swallow every other reason
+        the report can be missing -- a transport error, an expired artifact, a
+        permissions failure, a scan that died before uploading -- and finish
+        green, leaving an earlier sticky verdict standing over a scan that was
+        never rendered. The two are told apart from the Actions API before
+        downloading: the run's artifact list, then the guard job's conclusion.
+        """
+        self.assertIn("listWorkflowRunArtifacts", self.reporter)
+        self.assertIn("a.name === 'repository-integrity-findings'", self.reporter)
+        self.assertIn("listJobsForWorkflowRun", self.reporter)
+        self.assertIn("job.name === 'Repository integrity guard'", self.reporter)
+        # Only a skipped guard job is "nothing to report"; anything else throws.
+        self.assertIn("guard?.conclusion !== 'skipped'", self.reporter)
+        self.assertLess(self.reporter.index("guard?.conclusion !== 'skipped'"),
+                        self.reporter.index("core.setOutput('present', 'false')"))
+
+    def test_a_skipped_guard_job_alone_cannot_suppress_the_report(self) -> None:
+        """A skipped job is contributor-controlled; the draft flag is not.
+
+        The scanner workflow file comes from the merge ref, which is why the
+        scanner loads its checker from the trusted base instead of the PR. That
+        same contributor can keep the guard job's name and set its condition to
+        false, producing a `skipped` conclusion on a non-draft PR. Suppression
+        must therefore rest on the pull request's own draft flag.
+        """
+        self.assertIn("candidate.draft !== true", self.reporter)
+        # The draft check has to gate the suppression, not follow it.
+        self.assertLess(self.reporter.index("candidate.draft !== true"),
+                        self.reporter.index("core.setOutput('present', 'false')"))
+        # The PR it reads the flag from is resolved under the binder's own
+        # constraints: fork association, this repository as base, one candidate.
+        self.assertIn("listPullRequestsAssociatedWithCommit", self.reporter)
+        self.assertIn("candidates.length !== 1", self.reporter)
+        self.assertIn("candidate.head?.repo?.full_name === headRepository", self.reporter)
+        # Same head-repository association rule the binder uses, so the two
+        # cannot disagree about which pull request a run's head belongs to.
+        self.assertIn("owner: match[1], repo: match[2], commit_sha: run.head_sha",
+                      self.reporter)
+        self.assertIn("steps.artifact.outputs.present == 'true'", self.reporter)
+        # The job name the reporter looks for must be the one the scanner uses.
+        self.assertIn("name: Repository integrity guard\n", self.scanner)
+        # Nothing in the reporter may swallow a failure. Matched per line so a
+        # comment mentioning the key cannot satisfy or defeat the assertion.
+        self.assertEqual(
+            [line for line in self.reporter.splitlines()
+             if line.strip().startswith("continue-on-error")], [])
+        # The check must precede the download it guards.
+        self.assertLess(self.reporter.index("listWorkflowRunArtifacts"),
+                        self.reporter.index("uses: actions/download-artifact"))
+
+    def test_reporter_downloads_only_this_run_and_binds_before_writing(self) -> None:
+        self.assertIn("run-id: ${{ github.event.workflow_run.id }}", self.reporter)
+        self.assertIn("scripts/resolve_repository_integrity_pr.py", self.reporter)
+        self.assertIn("PR_NUMBER: ${{ steps.bind.outputs.pr_number }}", self.reporter)
+        bind = self.reporter.index("scripts/resolve_repository_integrity_pr.py")
+        for write in ("updateComment", "createComment"):
+            self.assertLess(bind, self.reporter.index(write))
+
+    def test_binder_pins_the_scanner_workflow_identity(self) -> None:
+        self.assertTrue((ROOT / binder.SCANNER_WORKFLOW_PATH).is_file())
+        self.assertIn(f"name: {binder.SCANNER_WORKFLOW_NAME}\n", self.scanner)
+        self.assertIn(f"workflows: [{binder.SCANNER_WORKFLOW_NAME}]", self.reporter)
+        self.assertIn(f"'{binder.SCANNER_WORKFLOW_PATH}'", self.reporter)
+        self.assertEqual(binder.SCANNER_EVENT, "pull_request")
+        self.assertIn(f"'{binder.SCANNER_EVENT}'", self.reporter)
+
+
+if __name__ == "__main__":
+    unittest.main()
