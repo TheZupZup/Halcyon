@@ -269,6 +269,7 @@ class ForgedArtifactTest(unittest.TestCase):
         git(self.repo, "commit", "-qm", "base without a checker")
         self.base = git(self.repo, "rev-parse", "HEAD")
         git(self.repo, "switch", "-qc", "pr")
+        (self.repo / "scripts").mkdir(exist_ok=True)
         (self.repo / "scripts" / "check_repository_integrity.py").write_bytes(
             CHECKER.read_bytes()
         )
@@ -285,6 +286,7 @@ class ForgedArtifactTest(unittest.TestCase):
         git(self.repo, "commit", "-qm", "base without a checker")
         self.base = git(self.repo, "rev-parse", "HEAD")
         git(self.repo, "switch", "-qc", "pr")
+        (self.repo / "scripts").mkdir(exist_ok=True)
         (self.repo / "scripts" / "check_repository_integrity.py").write_bytes(
             CHECKER.read_bytes()
         )
