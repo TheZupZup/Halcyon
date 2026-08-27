@@ -1,0 +1,7 @@
+Linthra 0.2.4
+
+- Improves keyboard and assistive-technology support across playback and other controls.
+- Keeps the mini-player usable with larger text.
+- Hardens app shutdown so owned resources close cleanly.
+- Advances Linux/Flatpak packaging and desktop integration.
+- Includes repository-security and build-maintenance improvements.
