@@ -629,6 +629,59 @@ class RepositoryIntegrityTest(unittest.TestCase):
         self.assertTrue(any(f.path == "assets/payload.png" for f in historical))
         self.assertFalse(any(f.commit == merge for f in findings))
 
+    def test_pr_513_contamination_survives_a_fully_clean_final_diff(self) -> None:
+        """The #513/#514/#515 incident, reproduced with its real finding shapes.
+
+        External PR #513 attributed every violation to bd48e57df55ed0cde25170e4
+        baa53314bd2187e8 while its final diff against main was empty. The
+        commit SHA differs here because the fixture history is built fresh, but
+        the property that matters is the same one: attribution survives cleanup
+        plus an Update-branch merge, so a zero-file diff still blocks.
+        """
+        git(self.repo, "switch", "-c", "pr")
+        workspace = self.repo / ".vscode"
+        workspace.mkdir()
+        # The .gitignore change is what let the workspace files be committed.
+        (self.repo / ".gitignore").write_text(".idea/\n", encoding="utf-8")
+        for name in ("extensions.json", "launch.json", "settings.json", "spellright.dict"):
+            (workspace / name).write_text("{}\n", encoding="utf-8")
+        (workspace / "tasks.json").write_text(ASSET_EXECUTION_PAYLOAD, encoding="utf-8")
+        font = self.repo / "public" / "fonts" / "fa-solid-400.woff2"
+        font.parent.mkdir(parents=True)
+        font.write_text("this is not a font\n", encoding="utf-8")
+        contaminated = self.commit("A: import IDE workspace and vendored assets")
+
+        # Cleanup: every prohibited path removed and the ignore rule restored.
+        for entry in sorted(workspace.iterdir()):
+            entry.unlink()
+        workspace.rmdir()
+        font.unlink()
+        (self.repo / ".gitignore").write_text(".idea/\n.vscode/\n", encoding="utf-8")
+        self.commit("B: revert the workspace import")
+
+        git(self.repo, "switch", "main")
+        (self.repo / "README.md").write_text("trusted update\n", encoding="utf-8")
+        self.base = self.commit("trusted main update")
+        git(self.repo, "switch", "pr")
+        git(self.repo, "merge", "--no-ff", "main", "-m", "C: Update branch")
+        head = git(self.repo, "rev-parse", "HEAD")
+
+        # The state the reporter has to explain: zero changed files, still blocked.
+        self.assertEqual(git(self.repo, "diff", "--name-only", f"{self.base}...{head}"), "")
+        findings = self.scan(head)
+        self.assertTrue(findings)
+        attributed = {f.path for f in findings if f.commit == contaminated}
+        for path in (".gitignore", ".vscode/extensions.json", ".vscode/launch.json",
+                     ".vscode/settings.json", ".vscode/spellright.dict",
+                     ".vscode/tasks.json", "public/fonts/fa-solid-400.woff2"):
+            self.assertIn(path, attributed)
+        reasons = {f.reason for f in findings if f.commit == contaminated}
+        self.assertTrue(any("asset file as executable" in reason for reason in reasons))
+        self.assertTrue(any("file extension claims" in reason for reason in reasons))
+        self.assertTrue(all(f.severity == "blocked" for f in findings))
+        # The Update-branch merge copies content unchanged, so it is not blamed.
+        self.assertNotIn(head, {f.commit for f in findings})
+
     def test_ordinary_multi_commit_pr_passes(self) -> None:
         (self.repo / "lib" / "first.dart").write_text("const first = 1;\n", encoding="utf-8")
         self.commit("first")

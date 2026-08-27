@@ -6,13 +6,22 @@ on:
     types: [completed]
 
 # This trusted workflow never checks out the PR head. Its sole write permission
-# is posting an issue-style comment on the PR identified by workflow_run.
+# is posting an issue-style comment on the pull request the scanner run belongs
+# to.
 #
 # The `workflows:` filter above matches on display name only, which a
 # contributor could copy onto an unrelated workflow to have it upload a forged
 # findings artifact. The job below therefore also binds to the scanner's
-# immutable file path, and to runs that carry a populated `pull_requests` array
-# (empty for fork-originated runs).
+# immutable file path.
+#
+# The job used to require a populated `pull_requests` array as well. GitHub
+# sends that array empty for every fork-originated run, so the reporter skipped
+# on exactly the external pull requests it exists to explain. The array is no
+# longer a precondition; instead the run reaches
+# scripts/resolve_repository_integrity_pr.py, which recovers the pull request
+# from the artifact and then binds it to fields only GitHub can set (the run's
+# head SHA and head repository) plus the live pull request from the API. Any
+# mismatch, ambiguity, or malformed field fails the job without commenting.
 permissions:
   actions: read
   contents: read
@@ -22,17 +31,103 @@ jobs:
   report:
     if: >-
       ${{ github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.name == 'Repository integrity'
       && github.event.workflow_run.path == '.github/workflows/repository-integrity.yml'
-      && github.event.workflow_run.pull_requests[0] != null }}
+      && github.event.workflow_run.repository.full_name == github.repository }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout trusted default branch reporter
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
           persist-credentials: false
 
+      # Exactly one situation is "nothing to report": the guard job did not run,
+      # which is what happens on a draft pull request. Everything else that can
+      # leave the report unavailable -- a transport error, an expired artifact,
+      # a permissions failure, a scan that died before uploading -- must fail
+      # the job, or an earlier sticky verdict stays visible over a scan whose
+      # result was never rendered.
+      #
+      # The two are told apart from the Actions API rather than from a failed
+      # download, which cannot distinguish them: the run's own artifact list,
+      # and, when that list is empty, the guard job's conclusion. A guard job
+      # that ran, or that is not present under its expected name at all, is
+      # expected to have produced a report, so its absence fails the job.
+      - name: Establish whether a findings artifact is expected
+        id: artifact
+        uses: actions/github-script@v8
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        with:
+          script: |
+            const run_id = Number.parseInt(process.env.RUN_ID, 10);
+            if (!Number.isSafeInteger(run_id) || run_id < 1) {
+              throw new Error('invalid triggering run id');
+            }
+            const common = { owner: context.repo.owner, repo: context.repo.repo, run_id };
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts, { ...common, per_page: 100 });
+            if (artifacts.some(a => a.name === 'repository-integrity-findings')) {
+              core.setOutput('present', 'true');
+              return;
+            }
+            const jobs = await github.paginate(
+              github.rest.actions.listJobsForWorkflowRun, { ...common, per_page: 100 });
+            const guard = jobs.find(job => job.name === 'Repository integrity guard');
+            if (guard?.conclusion !== 'skipped') {
+              throw new Error(
+                'The scanner guard job was expected to produce a findings artifact ' +
+                `(job conclusion: ${guard?.conclusion ?? 'job not found'}), but none is ` +
+                'available. Refusing to leave an earlier result standing unreported.');
+            }
+            // A skipped guard job is NOT proof of a draft. The scanner workflow
+            // file is contributor-controlled at the merge ref -- which is why
+            // the scanner loads its checker from the trusted base rather than
+            // from the PR -- so a contributor can keep the job's name and set
+            // its condition to false, producing this same `skipped` conclusion
+            // on a non-draft PR and suppressing the report. The authoritative
+            // signal is the pull request's own draft flag, so that is what is
+            // read, from the pull request this run's head actually belongs to.
+            const { data: run } = await github.rest.actions.getWorkflowRun(common);
+            const headRepository = run.head_repository?.full_name;
+            const match = /^([A-Za-z0-9._-]{1,100})\/([A-Za-z0-9._-]{1,100})$/.exec(
+              headRepository ?? '');
+            if (!match || !/^[0-9a-f]{40}$/.test(run.head_sha ?? '')) {
+              throw new Error('triggering run does not identify a head to resolve');
+            }
+            // Asked of the head repository: a fork's head commit is not in this
+            // repository's commit list. Both names are GitHub-set, and the
+            // candidates are constrained below exactly as the binder does it.
+            const associated = await github.paginate(
+              github.rest.repos.listPullRequestsAssociatedWithCommit,
+              { owner: match[1], repo: match[2], commit_sha: run.head_sha, per_page: 100 });
+            const candidates = associated.filter(candidate =>
+              candidate.base?.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`
+              && candidate.head?.repo?.full_name === headRepository);
+            if (candidates.length !== 1) {
+              throw new Error(
+                `${candidates.length} pull requests match this run's head; cannot confirm ` +
+                'the skipped guard job was a draft, and will not suppress the report.');
+            }
+            const { data: candidate } = await github.rest.pulls.get({
+              owner: context.repo.owner, repo: context.repo.repo,
+              pull_number: candidates[0].number
+            });
+            if (candidate.draft !== true) {
+              throw new Error(
+                `The scanner guard job was skipped but PR #${candidate.number} is not a ` +
+                'draft, so the report was suppressed by something other than the draft ' +
+                'condition. Refusing to leave an earlier result standing unreported.');
+            }
+            core.notice(`PR #${candidate.number} is a draft, so the scanner guard job did not run; there is nothing to report.`);
+            core.setOutput('present', 'false');
+
+      # The artifact is known to exist by this point, so a failed download is a
+      # real failure and is deliberately left to fail the job.
       - name: Download scanner report only
+        if: ${{ steps.artifact.outputs.present == 'true' }}
         uses: actions/download-artifact@v8
         with:
           name: repository-integrity-findings
@@ -40,24 +135,65 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
 
+      - name: Bind the report to a pull request
+        id: bind
+        if: ${{ steps.artifact.outputs.present == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/resolve_repository_integrity_pr.py \
+            --event "$GITHUB_EVENT_PATH" \
+            --report "$RUNNER_TEMP/repository-integrity/report.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output "$RUNNER_TEMP/repository-integrity/binding.json"
+
+      # The checker is read from the bound base commit, the same revision the
+      # scanner loads, so the check and the comment explaining it cannot apply
+      # different policy versions.
+      #
+      # The artifact's identity is now bound, but its `findings` are still just
+      # a claim: the scanner definition that produced it comes from the merge
+      # ref, so a contributor can keep its name and path, drop the trusted
+      # checker, and upload a genuine-looking report with an empty findings
+      # list. Publishing that would put a forged CLEAN under the bot's name.
+      # The verdict is therefore re-derived here by the checker on this trusted
+      # default-branch checkout, over the same range, from inputs taken from
+      # the live pull request. Objects are fetched and read; no pull-request
+      # tree is checked out and no pull-request code runs.
+      - name: Re-derive the findings with the trusted checker
+        if: ${{ steps.bind.outputs.post == 'true' }}
+        run: |
+          python3 scripts/recompute_repository_integrity_report.py \
+            --binding "$RUNNER_TEMP/repository-integrity/binding.json" \
+            --checker-path scripts/check_repository_integrity.py \
+            --output "$RUNNER_TEMP/repository-integrity/verified-report.json" \
+            --summary "$RUNNER_TEMP/repository-integrity/verified-report.md" \
+            --repo-owner "$GITHUB_REPOSITORY_OWNER" \
+            --claimed "$RUNNER_TEMP/repository-integrity/report.json"
+
+      # Renders the re-derived report. The uploaded artifact is never the source
+      # of a published verdict.
       - name: Validate and render report as inert data
+        if: ${{ steps.bind.outputs.post == 'true' }}
         run: |
           python3 scripts/render_repository_integrity_comment.py \
-            --report "$RUNNER_TEMP/repository-integrity/report.json" \
-            --event "$GITHUB_EVENT_PATH" \
+            --report "$RUNNER_TEMP/repository-integrity/verified-report.json" \
+            --binding "$RUNNER_TEMP/repository-integrity/binding.json" \
             --output "$RUNNER_TEMP/repository-integrity/comment.md"
 
       - name: Create or update the sticky PR comment
+        if: ${{ steps.bind.outputs.post == 'true' }}
         uses: actions/github-script@v8
         env:
           COMMENT_PATH: ${{ runner.temp }}/repository-integrity/comment.md
-          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          PR_NUMBER: ${{ steps.bind.outputs.pr_number }}
           RUN_ID: ${{ github.event.workflow_run.id }}
         with:
           script: |
             const fs = require('fs');
             const marker = '<!-- linthra-repository-integrity-v1 -->';
             const body = fs.readFileSync(process.env.COMMENT_PATH, 'utf8');
+            // PR_NUMBER comes from the trusted binder, never from the event.
             const issue_number = Number.parseInt(process.env.PR_NUMBER, 10);
             if (!Number.isSafeInteger(issue_number) || issue_number < 1 || !body.startsWith(marker)) {
               throw new Error('validated comment binding is invalid');
@@ -77,6 +213,15 @@ jobs:
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner, repo: context.repo.repo, pull_number: issue_number
             });
+            // Re-derived from two API objects immediately before the write, so a
+            // fork pull request recovered from the artifact is re-bound here as
+            // well: same repository, same head repository, same scanned head.
+            if (pr.base.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+              throw new Error('pull request does not belong to this repository');
+            }
+            if (pr.head.repo?.full_name !== run.head_repository?.full_name) {
+              throw new Error('pull request head repository does not match the scanned head');
+            }
             if (pr.head.sha !== run.head_sha) {
               core.info(`Report is superseded (scanned ${run.head_sha}, head is now ${pr.head.sha}); leaving the comment untouched.`);
               return;
