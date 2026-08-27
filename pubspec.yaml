@@ -9,7 +9,7 @@ publish_to: "none"
 # Android build (versionName/versionCode) and the in-app version mirrors it via
 # AppInfo._devVersionName, so a plain `flutter build` (CI and F-Droid alike) and
 # the tag all agree.
-version: 0.2.3+203999
+version: 0.2.4+204999
 
 environment:
   sdk: ">=3.6.0 <4.0.0"
@@ -48,7 +48,6 @@ dependencies:
   # Android Auto). Used only by LinthraAudioHandler in the services layer, which
   # forwards session commands to PlaybackController and mirrors its state out.
   # The UI never depends on audio_service directly.
-  audio_service: ^0.18.15
   # Audio-focus / interruption handling for the on-device engine. just_audio's
   # built-in handler auto-resumes playback on focus regain (the screen-wake /
   # app-switch "music starts by itself" bug), so JustAudioPlaybackController
@@ -56,6 +55,7 @@ dependencies:
   # real focus loss and never auto-resumes. Already a transitive dependency of
   # just_audio/audio_service; declared here because the services layer imports
   # it directly. The UI never depends on audio_session.
+  audio_service: ^0.18.15
   audio_session: ^0.1.25
   # Native folder chooser for selecting a music folder to scan. Used only by
   # FilePickerFolderPickerService; the UI depends on the FolderPickerService
