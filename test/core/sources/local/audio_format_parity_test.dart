@@ -27,12 +27,32 @@ void main() {
       reason: 'The Android SAF extension fallback declaration must stay readable',
     );
 
-    // Kotlin matches dotted filename suffixes (".flac"), while Dart stores the
-    // same extensions without the dot. Compare the normalized sets so any
-    // addition, removal, spelling change, or duplicate fails CI.
-    final List<String> androidExtensions = RegExp(r'"(\.[^"]+)"')
+    final List<String> androidRawExtensions = RegExp(r'"([^"]+)"')
         .allMatches(declaration!.group(1)!)
-        .map((RegExpMatch match) => match.group(1)!.substring(1))
+        .map((RegExpMatch match) => match.group(1)!)
+        .toList(growable: false);
+
+    expect(
+      androidRawExtensions,
+      isNotEmpty,
+      reason: 'The Android SAF extension fallback must declare audio formats',
+    );
+
+    // Kotlin matches dotted filename suffixes (".flac"), while Dart stores the
+    // same extensions without the dot. Validate every Kotlin entry before
+    // normalizing so a malformed value such as "webm" cannot be silently
+    // skipped by the parity guard.
+    for (final String extension in androidRawExtensions) {
+      expect(
+        extension,
+        matches(RegExp(r'^\.[^.]+$')),
+        reason: 'Android SAF extensions must start with exactly one dot: '
+            '$extension',
+      );
+    }
+
+    final List<String> androidExtensions = androidRawExtensions
+        .map((String extension) => extension.substring(1))
         .toList(growable: false);
 
     expect(
