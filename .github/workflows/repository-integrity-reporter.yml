@@ -57,7 +57,7 @@ jobs:
       # expected to have produced a report, so its absence fails the job.
       - name: Establish whether a findings artifact is expected
         id: artifact
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           RUN_ID: ${{ github.event.workflow_run.id }}
         with:
@@ -183,7 +183,7 @@ jobs:
 
       - name: Create or update the sticky PR comment
         if: ${{ steps.bind.outputs.post == 'true' }}
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           COMMENT_PATH: ${{ runner.temp }}/repository-integrity/comment.md
           PR_NUMBER: ${{ steps.bind.outputs.pr_number }}
