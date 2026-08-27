@@ -12,7 +12,8 @@ void main() {
     expect(
       scanner.existsSync(),
       isTrue,
-      reason: 'SafDocumentScanner.kt must remain available for the parity guard',
+      reason:
+          'SafDocumentScanner.kt must remain available for the parity guard',
     );
 
     final String source = scanner.readAsStringSync();
@@ -24,7 +25,8 @@ void main() {
     expect(
       declaration,
       isNotNull,
-      reason: 'The Android SAF extension fallback declaration must stay readable',
+      reason:
+          'The Android SAF extension fallback declaration must stay readable',
     );
 
     final List<String> androidRawExtensions = RegExp(r'"([^"]+)"')
