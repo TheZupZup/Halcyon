@@ -2,9 +2,10 @@ import 'package:path/path.dart' as p;
 
 /// The audio file extensions Linthra's local scanner recognizes.
 ///
-/// Kept small and centralized on purpose: supporting a new container format
-/// later is a one-line change here that the rest of the scanner picks up for
-/// free.
+/// This is the Dart catalog's source of truth. Android's SAF scanner mirrors
+/// these values for its filename fallback because Kotlin cannot import a Dart
+/// constant; `audio_format_parity_test.dart` compares the two definitions so
+/// future additions cannot silently drift across the platform boundary.
 abstract final class AudioFileTypes {
   /// Recognized extensions, lower-case and *without* the leading dot.
   static const Set<String> supportedExtensions = <String>{
