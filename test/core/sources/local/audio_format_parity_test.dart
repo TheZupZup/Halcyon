@@ -46,8 +46,8 @@ void main() {
       expect(
         extension,
         matches(RegExp(r'^\.[^.]+$')),
-        reason: 'Android SAF extensions must start with exactly one dot: '
-            '$extension',
+        reason:
+            'Android SAF extensions must start with exactly one dot: $extension',
       );
     }
 
