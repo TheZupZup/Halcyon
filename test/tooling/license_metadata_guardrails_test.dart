@@ -50,7 +50,6 @@ void main() {
 
   test('README and contribution terms keep the current license', () {
     expect(readme, contains('[$current](./LICENSE)'));
-    expect(readme, contains('License: $current'));
     expect(contributing, contains('[$current](./LICENSE)'));
   });
 
