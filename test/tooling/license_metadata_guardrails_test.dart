@@ -3,11 +3,15 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
-/// Guards active/current Linthra license declarations against metadata drift.
+/// Guards Linthra's active/current license declarations against metadata drift.
 ///
 /// Historical releases and docs/licenses/MPL-2.0.txt intentionally remain MPL.
+/// F-Droid metadata is also intentionally still MPL until the first
+/// post-transition release is added there, because its current Builds entries
+/// all point at pre-transition source commits.
 void main() {
   const String current = 'AGPL-3.0-or-later';
+  const String fdroidHistorical = 'MPL-2.0';
   const String agpl = 'GNU AFFERO GENERAL PUBLIC LICENSE';
   const String mpl = 'Mozilla Public License Version 2.0';
   const String storeLicense = 'GNU Affero General Public License v3.0 or later';
@@ -35,8 +39,8 @@ void main() {
     historical = _read(root, 'docs/licenses/MPL-2.0.txt');
   });
 
-  test('F-Droid metadata keeps the current license', () {
-    expect(_hasLine(fdroid, 'License: $current'), isTrue);
+  test('F-Droid metadata stays MPL while it points at MPL release commits', () {
+    expect(_hasLine(fdroid, 'License: $fdroidHistorical'), isTrue);
   });
 
   test('Rust metadata keeps the current license', () {
