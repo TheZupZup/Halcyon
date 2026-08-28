@@ -27,7 +27,8 @@ void main() {
         _read(p.join(root, 'metadata', 'io.github.thezupzup.linthra.yml'));
     cargoToml = _read(p.join(root, 'native', 'linthra_core', 'Cargo.toml'));
     aboutScreen = _read(
-        p.join(root, 'lib', 'features', 'settings', 'hub', 'about_screen.dart'));
+      p.join(root, 'lib', 'features', 'settings', 'hub', 'about_screen.dart'),
+    );
     readme = _read(p.join(root, 'README.md'));
     fastlaneDescription = _read(p.join(
       root,
@@ -91,12 +92,18 @@ void main() {
           '13. Remote Network Interaction; Use with the GNU General Public License.',
         ),
       );
-      expect(licenseText, isNot(contains('Mozilla Public License Version 2.0')));
+      expect(
+        licenseText,
+        isNot(contains('Mozilla Public License Version 2.0')),
+      );
     });
 
     test('historical MPL-2.0 text remains preserved separately', () {
       expect(historicalMpl, contains('Mozilla Public License Version 2.0'));
-      expect(historicalMpl, isNot(contains('GNU AFFERO GENERAL PUBLIC LICENSE')));
+      expect(
+        historicalMpl,
+        isNot(contains('GNU AFFERO GENERAL PUBLIC LICENSE')),
+      );
     });
   });
 }
