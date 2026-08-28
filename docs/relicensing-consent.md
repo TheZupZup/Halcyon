@@ -1,13 +1,19 @@
-# Relicensing consent tracker
+# Relicensing consent record
 
-Linthra is currently distributed under MPL-2.0. The project intends to move
-future releases to **AGPL-3.0-or-later**, but the project-wide license will not
-be changed until the copyright permissions needed for that transition are
-confirmed.
+**Status: complete.** Linthra's project-wide license is now
+**AGPL-3.0-or-later**. This file is the public record of the copyright
+permissions that made that transition possible.
 
-This file is a public record of that process. It is not itself a license, it does
-not change the license of any existing Linthra release or contribution, and it is
-not legal advice.
+The authoritative, attributable record is
+**[issue #503](https://github.com/TheZupZup/Linthra/issues/503)**, where each
+contributor posted their consent from their own GitHub account. This file
+summarises it; #503 is the source of truth.
+
+This file is not itself a license, it does not change the license of any
+existing Linthra release, and it is not legal advice.
+
+Releases published under MPL-2.0 — up to and including **v0.2.4** — remain under
+those terms. See [`license-transition.md`](./license-transition.md).
 
 ## What the consent is meant to do
 
@@ -35,16 +41,22 @@ the pull request or issue that tracks the relicensing:
 The agreement should come from the contributor's own GitHub account so there is
 a durable, attributable record.
 
-## Known contributor status
+## Contributor consent status
 
-| Contributor | Status | Notes |
+All consent below is **additive**: past contributions remain available under
+MPL-2.0, and the contributor additionally permitted distribution under
+AGPL-3.0-or-later. No copyright was transferred.
+
+| Contributor | Status | Record |
 | --- | --- | --- |
-| TheZupZup | approved | Project owner / initial contributor; proposed the transition. |
-| @jpdexter101-lang | pending | Human contributor with copyrightable contributions merged under MPL-2.0; request explicit consent before the project-wide AGPL switch. |
-| Other human contributors | audit before merge | Review repository history before the final license replacement so nobody with relevant copyright ownership is silently skipped. |
+| TheZupZup | **approved** | Project owner / initial contributor; proposed the transition and recorded maintainer approval in [#503](https://github.com/TheZupZup/Linthra/issues/503). |
+| [@jpdexter101-lang](https://github.com/jpdexter101-lang) | **consented** | [Comment of 2026-08-24](https://github.com/TheZupZup/Linthra/issues/503#issuecomment-5391082191) |
+| [@Borhan2004](https://github.com/Borhan2004) | **consented** | [Comment of 2026-08-24](https://github.com/TheZupZup/Linthra/issues/503#issuecomment-5391430734) |
+| [@Jeevika1917](https://github.com/Jeevika1917) | **consented** | [Comment of 2026-08-28](https://github.com/TheZupZup/Linthra/issues/503#issuecomment-5452329340) |
+| Other human contributors | **none identified** | The repository-history audit recorded in [#503](https://github.com/TheZupZup/Linthra/issues/503#issuecomment-5452617401) found no additional non-owner human copyright holder whose merged work still ships. Automation-only commits (CI, Dependabot) add no human copyright holder. |
 
-For each contributor, record the GitHub handle, a permalink to the comment
-granting consent, and the date.
+Each consent was posted by the contributor from their own GitHub account, using
+the statement above, and covers **past and future** contributions.
 
 ## Auditing who needs to be asked
 
@@ -89,9 +101,13 @@ proceeding rather than resolving the ambiguity in the project's own favour.
 
 ## Merge rule for the actual license switch
 
-Do not replace the top-level `LICENSE` or advertise the repository as
-AGPL-3.0-or-later until the maintainer has completed the contributor audit and
-recorded the permissions needed for the intended project-wide relicensing.
+*This gate has been satisfied.* It is kept as the standing rule for any future
+relicensing:
+
+> Do not replace the top-level `LICENSE` or advertise the repository under a new
+> license until the maintainer has completed the contributor audit and recorded
+> the permissions needed for the intended project-wide relicensing.
 
 Historical releases remain under the terms that applied when they were
-published.
+published, and vendored third-party code in `third_party/` keeps its own
+upstream license.

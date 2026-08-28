@@ -18,8 +18,8 @@ On privacy:
   mobile data).
 * When you sign in to a server, the password is used once to get a session
   token, then dropped; the token is stored encrypted and never logged.
-* Open-source under the Mozilla Public License 2.0, so anyone can read, build,
-  and contribute to it.
+* Open-source under the GNU Affero General Public License v3.0 or later, so
+  anyone can read, build, and contribute to it.
 
 What works today:
 

@@ -21,12 +21,14 @@ which tracks assets, anti-features, and overall submission status.
 | -------- | -------------------------------- |
 | Name     | Linthra                          |
 | App ID   | `io.github.thezupzup.linthra`    |
-| License  | MPL-2.0                          |
+| License  | AGPL-3.0-or-later                |
 
 - The App ID is the Android `namespace` and `applicationId` in
   `android/app/build.gradle` and must stay stable across all releases.
-- License is MPL-2.0 (see [`LICENSE`](../LICENSE)), an FSF/OSI-approved free
-  license accepted by F-Droid. F-Droid expects the SPDX identifier `MPL-2.0`.
+- License is AGPL-3.0-or-later (see [`LICENSE`](../LICENSE)), an FSF/OSI-approved
+  free license accepted by F-Droid. F-Droid expects the SPDX identifier
+  `AGPL-3.0-or-later`. Linthra releases up to and including v0.2.4 were published
+  under MPL-2.0; see [`license-transition.md`](./license-transition.md).
 
 ## 2. Expected F-Droid metadata repo fields
 
@@ -37,7 +39,7 @@ submission time.
 | Field             | Planned value | Notes |
 | ----------------- | ------------- | ----- |
 | `Categories`      | `Multimedia` _(draft)_ | A music player fits Multimedia; `Internet` is **not** appropriate (local-first, no required network). |
-| `License`         | `MPL-2.0` | SPDX identifier; matches `LICENSE`. |
+| `License`         | `AGPL-3.0-or-later` | SPDX identifier; matches `LICENSE`. Builds for tags up to v0.2.4 were MPL-2.0. |
 | `AuthorName`      | TheZupZup _(draft)_ | Optional; confirm preferred attribution. |
 | `SourceCode`      | `https://github.com/TheZupZup/Linthra` | Public repository. |
 | `IssueTracker`    | `https://github.com/TheZupZup/Linthra/issues` | GitHub issues. |

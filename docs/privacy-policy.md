@@ -12,7 +12,7 @@ _Last updated: see this file's git history._
 ## Overview
 
 Linthra is an **open-source Android music player**. It is licensed under the
-Mozilla Public License 2.0 and its source code is public at
+GNU Affero General Public License v3.0 or later and its source code is public at
 <https://github.com/thezupzup/linthra>.
 
 In plain terms:

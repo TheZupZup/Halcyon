@@ -149,7 +149,7 @@ contributing code or other work.
 
 ## License
 
-Linthra is [MPL-2.0](./LICENSE). By contributing, you agree that your
+Linthra is [AGPL-3.0-or-later](./LICENSE). By contributing, you agree that your
 contribution is licensed under the same terms.
 
 Thanks for helping Linthra. Even a small fix is appreciated.

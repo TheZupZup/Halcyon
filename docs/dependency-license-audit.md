@@ -11,57 +11,108 @@ project's licensing accurately. It is a planning/compliance aid.
 
 ## 1. Project license
 
-Linthra is licensed under the **Mozilla Public License 2.0** (`MPL-2.0`), an
+Linthra is licensed under the **GNU Affero General Public License v3.0 or later**
+(`AGPL-3.0-or-later`), an
 [FSF/OSI-approved free license](https://www.gnu.org/licenses/license-list.html)
-accepted by F-Droid. The full text is in [`LICENSE`](../LICENSE), and the SPDX
-identifier F-Droid expects is `MPL-2.0`.
+accepted by F-Droid. The full text is the unmodified GNU AGPLv3 in
+[`LICENSE`](../LICENSE), and the SPDX identifier F-Droid expects is
+`AGPL-3.0-or-later`.
 
-MPL-2.0 is a file-level (weak) copyleft. It combines cleanly with the permissive
-(MIT / BSD) dependencies listed below: those licenses impose only attribution
-and license-notice requirements, with no terms that conflict with shipping them
-alongside MPL-2.0 code.
+Linthra was previously **MPL-2.0**. Releases up to and including **v0.2.4** were
+published under MPL-2.0 and remain under those terms; that text is preserved
+verbatim at [`licenses/MPL-2.0.txt`](./licenses/MPL-2.0.txt). See
+[`license-transition.md`](./license-transition.md) for the transition record and
+[`relicensing-consent.md`](./relicensing-consent.md) for contributor consent.
+
+### Why the dependency set is compatible
+
+AGPL-3.0-or-later is a **strong** copyleft, and compatibility with it is
+**one-way**: permissive code can be taken into an AGPL work, but AGPL terms
+cannot be imposed back on the dependency, whose own license and notices continue
+to apply. Every dependency Linthra ships is either permissive (MIT / BSD-2-Clause
+/ BSD-3-Clause / Apache-2.0 / public domain / Unlicense / ISC) or, for the native
+Linux media chain, LGPL-2.1-**or-later**.
+
+The specific combinations that need stating rather than assuming:
+
+- **Apache-2.0 → AGPLv3: compatible.** GNU states Apache-2.0 is compatible with
+  GPLv3 (and therefore AGPLv3), though not with GPLv2. `just_audio` is the
+  Apache-2.0 dependency in the shipped set.
+- **MPL-2.0 → AGPLv3: compatible, conditionally.** MPL-2.0 §1.12 defines a
+  "Secondary License" as *"either the GNU General Public License, Version 2.0,
+  the GNU Lesser General Public License, Version 2.1, the GNU Affero General
+  Public License, Version 3.0, or any later versions of those licenses"*, and
+  §3.3 permits distributing MPL-covered code as part of a Larger Work under such
+  a Secondary License **provided the covered software is not marked
+  "Incompatible With Secondary Licenses"** (the Exhibit B notice, §1.5).
+  The one MPL-2.0 dependency in the tree, `dbus` (§3), is **not** so marked —
+  verified by scanning every file in the published `dbus-0.7.12` archive: the
+  phrase appears only inside the boilerplate Exhibit B *template* in its own
+  `LICENSE`, and no source file carries the notice. The combination is therefore
+  permitted.
+- **LGPL-2.1-or-later → AGPLv3: compatible via the upgrade path.** LGPL-2.1
+  **-or-later** may be used as LGPLv3, which is compatible with GPLv3/AGPLv3.
+  `LGPL-2.1-only` would **not** be. The Linux media chain (§5) is
+  or-later throughout.
+- **`GPL-2.0-only` would be a blocker.** None is present; the Linux media chain
+  is deliberately configured to exclude every GPL-only component (§5).
 
 ## 2. How this audit was produced (and its limits)
 
-- **Scope:** the **direct** dependencies declared in
-  [`pubspec.yaml`](../pubspec.yaml). Licenses below are the ones each package
-  publishes on [pub.dev](https://pub.dev) / in its bundled `LICENSE` file.
-- **Transitive walk — now run.** The full transitive dependency set has since
-  been resolved and audited with the then-pinned toolchain (Flutter 3.27.4 /
-  Dart 3.6.2). The Flutter 3.44.7 upgrade refreshed `pubspec.lock` (15 packages
-  moved version, 151 now resolved), so the counts below predate that refresh and
-  the scan should be re-run before the audit is quoted for a submission.
-  `flutter pub get` + `flutter pub deps` resolve **152** packages;
-  a license scan of every resolved package (reading each package's bundled
-  `LICENSE`) classifies them as **101 BSD-3-Clause, 34 MIT, 6 Apache-2.0,
-  6 BSD-2-Clause, 2 MPL-2.0** — every one a permissive free-software license,
-  MPL-2.0-compatible, with **no GPL/LGPL, proprietary, or unknown license**.
-  The only two packages without their own `LICENSE` file are `flutter_test` and
-  `flutter_web_plugins`, both bundled inside the Flutter SDK and covered by the
-  SDK's own BSD-3-Clause license. No `com.google.android.gms` / `play-services`
-  / Firebase / analytics / ads / crash-reporting package appears anywhere in the
-  resolved tree (§5, §6). `pubspec.lock` remains git-ignored, so this reflects
-  the set resolved at audit time; re-run on a dependency change.
-- **To reproduce / extend this audit** with the toolchain available:
+- **Scope:** the **committed** [`pubspec.lock`](../pubspec.lock) — the exact
+  resolved set, not the `pubspec.yaml` constraints — plus the native components
+  in the Android, Linux/Flatpak and Rust build paths (§5).
+- **Method (mechanical and reproducible).** For every package resolved from
+  pub.dev, the audit downloads that package's **published archive at the exact
+  locked version** (`https://pub.dev/api/archives/<name>-<version>.tar.gz`),
+  reads the `LICENSE` / `LICENCE` / `COPYING` file inside it, and classifies the
+  text. Licenses are taken from the shipped archive rather than from the pub.dev
+  web page, because pub.dev renders "unknown" on version pages for
+  non-latest versions — an artifact of the site, not a real unknown license, and
+  a trap that a page-scraping audit falls into for ~1/3 of this tree.
+- **Ordering caveat that matters.** MPL-2.0's own text *names* the GPL, LGPL and
+  AGPL in its §1.12 "Secondary License" definition. A naive text classifier that
+  tests for "GNU Affero General Public License" before "Mozilla Public License"
+  will mis-report every MPL-2.0 package as AGPL. Match MPL first.
+- **Result — 160 entries in `pubspec.lock`:**
+
+  | Source | Count | Licenses |
+  | --- | --- | --- |
+  | pub.dev hosted | 155 | **100** BSD-3-Clause, **42** MIT, **6** Apache-2.0, **6** BSD-2-Clause, **1** MPL-2.0 |
+  | Flutter SDK (`flutter`, `flutter_test`, `flutter_web_plugins`, `sky_engine`) | 4 | BSD-3-Clause (the SDK's own license) |
+  | Vendored path dependency (`just_audio_media_kit`) | 1 | Unlicense (public domain) — see §5 |
+
+  **No GPL, no LGPL, no proprietary, and no unknown or unverifiable license** in
+  the resolved Dart/Flutter set. The single MPL-2.0 package is `dbus 0.7.12`
+  (§3). Counts by dependency kind: 19 direct-main, 3 direct-dev and 133
+  transitive hosted packages.
+- **Supersedes the earlier snapshot.** A previous revision of this document
+  reported 152 packages against Flutter 3.27.4 and, separately, classified
+  `just_audio` as MIT. Both are corrected here: the tree is now 160 entries
+  against the committed lockfile, and `just_audio 0.9.46` ships an
+  **Apache-2.0** `LICENSE`.
+- **Limits.** This is a repository/license engineering audit against the
+  committed lockfile and committed build manifests. It is **not legal advice**,
+  and it describes the *declared* build inputs — a distribution that rebuilds
+  Linthra against different system libraries is responsible for its own
+  compliance.
+- **To reproduce:**
 
   ```sh
+  # Every resolved package's license, read from its published archive.
+  # (See the "Ordering caveat" above before writing the classifier.)
   flutter pub get
-  flutter pub deps --style=compact     # full transitive dependency tree
-  # Optional: collect every bundled LICENSE into one report
-  dart pub global activate pana
-  pana --no-warning .                  # includes a license check
-  # or generate an in-app/exported license list:
-  #   dart run flutter_oss_licenses:generate
+  flutter pub deps --style=compact
+  dart pub global activate pana && pana --no-warning .
   ```
-
-  Cross-check the generated list against this table and resolve any package that
-  is **not** a recognised free-software license or that pulls in proprietary /
-  Google-only binaries.
 
 ## 3. Runtime dependencies (shipped in the APK)
 
-All entries below are permissive free-software licenses (MIT or BSD-3-Clause),
-compatible with MPL-2.0 and acceptable to F-Droid.
+All entries below are permissive free-software licenses (MIT, BSD-3-Clause or
+Apache-2.0), compatible with AGPL-3.0-or-later (§1) and acceptable to F-Droid.
+The **Locked** column is the version in the committed
+[`pubspec.lock`](../pubspec.lock); the license is the one read from that exact
+published archive (§2).
 
 | Package                  | Constraint   | Publisher (pub.dev) | License        | Purpose in Linthra |
 | ------------------------ | ------------ | ------------------- | -------------- | ------------------ |
@@ -72,7 +123,7 @@ compatible with MPL-2.0 and acceptable to F-Droid.
 | `drift`                  | `^2.18.0`    | simonbinder.eu      | MIT            | Typed SQLite query layer. |
 | `sqlite3_flutter_libs`   | `^0.5.20`    | simonbinder.eu      | MIT            | Bundles the native SQLite engine (see §5). |
 | `path_provider`          | `^2.1.4`     | flutter.dev         | BSD-3-Clause   | Locates the on-device DB file. |
-| `just_audio`             | `^0.9.42`    | ryanheise.com       | MIT            | Local audio playback engine. |
+| `just_audio`             | `^0.9.42`    | ryanheise.com       | **Apache-2.0** | Local audio playback engine. Apache-2.0, not MIT — corrected in this revision (§2). |
 | `audio_service`          | `^0.18.15`   | ryanheise.com       | MIT            | Background playback / media session. |
 | `file_picker`            | `^8.1.4`     | (miguelpruivo)      | MIT            | Native folder chooser (SAF). |
 | `shared_preferences`     | `^2.3.3`     | flutter.dev         | BSD-3-Clause   | Persists the selected folder. |
@@ -82,6 +133,10 @@ compatible with MPL-2.0 and acceptable to F-Droid.
 | `cast`                   | `^2.1.0`     | (johnvuko)          | MIT            | Pure-Dart Google Cast v2 protocol for real Chromecast — **no** Google Play Services / proprietary Cast SDK. See §5 (Casting). |
 | `bonsoir`                | `^5.1.11`    | (Skyost)            | MIT            | mDNS/Bonjour service discovery used by `cast`; Android side is AOSP `NsdManager`, not GMS. Pinned to 5.x for Dart 3.6 (6.x+ needs Dart ≥3.8). See §5 (Casting). |
 | `url_launcher`           | `^6.3.0`     | flutter.dev         | BSD-3-Clause   | Opens the browser for the "Report a bug" → "Open GitHub issue" action (a prefilled, **unsubmitted** issue the user reviews). AOSP `ACTION_VIEW` intent; **no** GMS. See note below and §7 (Reporting a bug). |
+| `permission_handler`     | `^11.3.1`    | baseflow.com        | MIT            | Runtime permission requests. |
+| `audio_session`          | `^0.1.25`    | ryanheise.com       | MIT            | Audio-focus / interruption handling. |
+| `media_kit_libs_linux`   | `^1.2.1`     | media-kit.dev       | MIT            | Linux native registration for media_kit; links the **system/Flatpak libmpv** built in §5. Ships no prebuilt binary. |
+| `just_audio_media_kit`   | (vendored)   | — (see §5)          | Unlicense      | Vendored Linux `just_audio` backend. Third-party code — **not** relicensed (§5). |
 
 > The `http` and `flutter_secure_storage` entries were added with the Jellyfin
 > source foundation; `cast` and `bonsoir` were added with real Chromecast
@@ -94,6 +149,26 @@ compatible with MPL-2.0 and acceptable to F-Droid.
 > Services). It is wrapped behind the `ExternalLinkLauncher` interface and is
 > invoked only on an explicit user tap — the app never opens a link on its own.
 > See §7.
+
+### The one MPL-2.0 transitive dependency (`dbus`)
+
+`dbus 0.7.12` (Canonical, **MPL-2.0**) is the only non-permissive package in the
+resolved Dart set. It reaches the tree through exactly one path:
+
+```
+bonsoir  ->  bonsoir_linux 5.1.3  ->  dbus 0.7.12
+```
+
+so it is a **Linux-desktop-only** dependency of the mDNS/Cast discovery stack,
+and it *is* in the shipped Linux build path — not a dev-only package.
+
+It is compatible with AGPL-3.0-or-later under MPL-2.0 §3.3, because it is not
+marked "Incompatible With Secondary Licenses"; see §1 for the clause-by-clause
+reasoning and the verification actually performed.
+
+**Its MPL-2.0 terms continue to apply to it.** Linthra's relicensing does not
+relicense `dbus`; the combination is distributed as a Larger Work, and `dbus`'s
+own license and notices are preserved.
 
 ## 4. Dev / build-only dependencies (NOT shipped in the APK)
 
@@ -112,6 +187,87 @@ listed for completeness.
 
 F-Droid requires every shipped component to be free software and buildable from
 source (no prebuilt proprietary blobs).
+
+### 5.1 Linux / Flatpak native media stack
+
+This is the part of the build most likely to carry copyleft, and it is the part
+the earlier Flutter-only audit did not cover. Every component below is built
+**from pinned upstream source** by
+[`flatpak/io.github.thezupzup.linthra.yml`](../flatpak/io.github.thezupzup.linthra.yml)
+(hash-pinned; the manifest is generated from
+[`flatpak/flatpak-flutter.yml`](../flatpak/flatpak-flutter.yml)). No prebuilt
+media binary is shipped.
+
+| Component | Pinned version | License as built | Why it is AGPL-compatible |
+| --- | --- | --- | --- |
+| **FFmpeg** | `n9.0.1` | **LGPL-2.1-or-later** | Built with **neither `--enable-gpl` nor `--enable-nonfree`**, which is what keeps FFmpeg on its LGPL default. No GPL-only filters/codecs are enabled; Linthra is audio-only and every supported format decodes with a native FFmpeg decoder. LGPL-2.1-or-later → LGPLv3 → AGPLv3. |
+| **mpv (libmpv)** | `v0.41.0` | **LGPL-2.1-or-later** | Built with **`-Dgpl=false`**. See the caveat below. |
+| **libplacebo** | `v7.360.1` | **LGPL-2.1-or-later** | Hard mpv dependency (no feature toggle). Or-later, so the LGPLv3 upgrade path applies. |
+| **libass** | `0.17.5` | **ISC** | Permissive. Hard mpv dependency. |
+| **GnuTLS** | runtime-provided (`org.gnome.Sdk//50`, 3.8.x) | **LGPL-2.1-or-later** | TLS backend for FFmpeg's `https://`. Chosen over OpenSSL specifically to avoid OpenSSL's historical GPL-linking caveats. |
+| **jinja / markupsafe** | `3.1.6` / `3.0.3` | **BSD-3-Clause** | libplacebo build-time shader-template generation. |
+| **glad** | `v2.0.8` | **MIT** (generator; emits public-domain/MIT loader code) | libplacebo GL/Vulkan loader generation. |
+| **SQLite amalgamation** | `3.52.0` | **Public domain** | Compiled from source via `sqlite3_flutter_libs`; hash-pinned by a committed patch. |
+| **mimalloc** | `v2.1.2` | **MIT** | **Disabled in Linthra's build** — see below. |
+
+**The `-Dgpl=false` caveat, checked rather than assumed.** mpv's own guidance is
+that `-Dgpl=false` yields an LGPL-2.1-or-later libmpv *only if the GPL-only
+components are actually excluded*; the switch alone is not a licensing
+guarantee. Linthra's manifest disables exactly those components explicitly:
+
+```
+-Dcdda=disabled        -Ddvdnav=disabled      -Ddvbin=disabled
+-Dlibbluray=disabled   -Dlibarchive=disabled  -Drubberband=disabled
+-Dlua=disabled         -Djavascript=disabled  -Dvapoursynth=disabled
+-Dcplugins=disabled    -Dcplayer=false        -Dlibmpv=true
+```
+
+`cdda` (libcdio), `dvdnav`, `dvbin` and `rubberband` are the GPL-encumbered
+inputs; each is off. `-Dcplayer=false` also drops the mpv CLI player entirely,
+so only the LGPL `libmpv` library is produced. Audio output is `-Dalsa=enabled`
+/ `-Dpulse=enabled` (both LGPL-2.1-or-later), with `-Dpipewire=disabled` set
+explicitly so a future SDK bump cannot silently add an undeclared backend.
+
+**mimalloc is not linked.** `media_kit_libs_linux` would otherwise download and
+statically link mimalloc during CMake configure.
+[`linux/CMakeLists.txt`](../linux/CMakeLists.txt) sets
+`MIMALLOC_USE_STATIC_LIBS OFF ... FORCE` before the generated plugin CMake is
+included, so it is not built into Linthra. The pinned tarball still appears in
+`flatpak/generated/sources/pubspec.json` only so the network-isolated Flatpak
+build cannot attempt a fetch. It is MIT either way, so this is a build-hygiene
+note, not a licensing one.
+
+**Verdict:** the Linux/Flatpak media path is LGPL-2.1-or-later at its most
+restrictive, with no `GPL-2.0-only`, no GPL-3.0-only, and no non-free component.
+It is compatible with AGPL-3.0-or-later via the LGPL upgrade path (§1).
+
+**Obligation that survives relicensing.** LGPL components stay LGPL. Because
+they are built as **shared libraries** from unmodified, hash-pinned upstream
+source and the corresponding sources are identified in the committed manifest,
+the LGPL relinking obligation is satisfied by that manifest. Anyone
+redistributing a modified media stack must continue to meet LGPL §6 themselves.
+
+### 5.2 Rust core (`native/linthra_core`)
+
+`native/linthra_core` declares `license = "AGPL-3.0-or-later"` and
+`publish = false`. Its `Cargo.lock` resolves to **`linthra_core` and nothing
+else** — it has **zero third-party crate dependencies**, so it introduces no
+external license obligation at all. It is entirely first-party code, which is
+why relicensing it is unambiguous.
+
+### 5.3 Vendored third-party code (`third_party/`)
+
+[`third_party/just_audio_media_kit`](../third_party/just_audio_media_kit) is a
+vendored fork of the upstream package, carried with its upstream `LICENSE`
+(**the Unlicense** — public domain), plus `PATCHES.md`, `upstream.patch` and
+`upstream.sha256` recording provenance.
+
+**This code is not relicensed and must not be relabelled.** Linthra's move to
+AGPL-3.0-or-later covers Linthra's own work. Vendored third-party code keeps its
+own upstream terms, and its license/provenance files are preserved byte-for-byte.
+The same applies to every other third-party notice in the tree.
+
+### 5.4 Android native components
 
 - **SQLite** (via `sqlite3_flutter_libs`): the SQLite amalgamation is in the
   **public domain** and is compiled from source as part of the build — not a
@@ -184,7 +340,7 @@ Mapped to F-Droid's [anti-features](https://f-droid.org/docs/Anti-Features/):
 | -------------------------- | ------ | ----- |
 | Ads                        | None   | No advertising libraries or code. |
 | Tracking / analytics       | None   | No telemetry, analytics, or crash-reporting SDK is present. |
-| Proprietary dependencies   | **None** (transitive walk confirmed) | All 152 resolved packages are permissive free software (MIT/BSD/Apache-2.0/MPL-2.0); no GMS/Firebase/proprietary package present (§2). Native AARs are AndroidX Media3/`media`/`core` (Apache-2.0) and SQLite (public domain) — all open source (§5). Chromecast deliberately avoids the GMS Cast SDK (pure-Dart `cast` + AOSP `NsdManager` via `bonsoir`); see §5 (Casting). |
+| Proprietary dependencies   | **None** (transitive walk confirmed) | All 160 resolved lockfile entries are free software (MIT/BSD-2/BSD-3/Apache-2.0/MPL-2.0/Unlicense); no GMS/Firebase/proprietary package present (§2). The Linux media chain is LGPL-2.1-or-later, built from pinned source (§5.1). Native AARs are AndroidX Media3/`media`/`core` (Apache-2.0) and SQLite (public domain) — all open source (§5). Chromecast deliberately avoids the GMS Cast SDK (pure-Dart `cast` + AOSP `NsdManager` via `bonsoir`); see §5 (Casting). |
 | Non-free network services  | See §7 | Local-first core needs no network; the self-hosted Jellyfin/Navidrome/Subsonic sources are optional and user-configured. |
 
 ## 7. Network use & the optional self-hosted sources
@@ -241,27 +397,44 @@ The in-app "Report a bug" flow (Settings → Report a bug) is the reason
 
 ## 8. Summary
 
-- **Project license:** MPL-2.0 (free, F-Droid-accepted).
-- **Direct dependencies:** all MIT or BSD-3-Clause — permissive, free, and
-  MPL-2.0-compatible. No copyleft conflicts, no proprietary direct deps.
-- **Transitive set:** the full resolved tree (152 packages) was audited (§2) —
-  all permissive (BSD/MIT/Apache-2.0/MPL-2.0), no GMS/Firebase/proprietary.
-- **Native bits:** SQLite (public domain, built from source), AndroidX Media3 /
-  `media` / `core` (Apache-2.0, open source — the playback engine, not GMS), and
+- **Project license:** AGPL-3.0-or-later (free, F-Droid-accepted). Releases up
+  to and including v0.2.4 remain MPL-2.0 (§1).
+- **Direct dependencies:** MIT / BSD-3-Clause / Apache-2.0 — all permissive and
+  AGPL-compatible. No proprietary direct deps.
+- **Transitive set:** the full committed lockfile (160 entries) was audited from
+  each package's published archive (§2) — 100 BSD-3-Clause, 42 MIT, 6
+  Apache-2.0, 6 BSD-2-Clause, 1 MPL-2.0, plus 4 BSD-3-Clause SDK entries and 1
+  Unlicense vendored package. **No GPL, no LGPL, no proprietary, no unknown.**
+- **The one MPL-2.0 package** (`dbus`, via `bonsoir_linux`) is not marked
+  "Incompatible With Secondary Licenses", so MPL-2.0 §3.3 permits the AGPL
+  combination (§1, §3).
+- **Linux/Flatpak media stack:** FFmpeg `n9.0.1` (no `--enable-gpl`, no
+  `--enable-nonfree`), mpv `v0.41.0` (`-Dgpl=false` **with** every GPL-only
+  component explicitly disabled), libplacebo LGPL-2.1-or-later, libass ISC —
+  LGPL-2.1-or-later at worst, AGPL-compatible via the LGPLv3 upgrade path (§5.1).
+- **Rust core:** zero third-party crates (§5.2).
+- **Vendored code:** `third_party/just_audio_media_kit` stays under the
+  Unlicense and is **not** relicensed (§5.3).
+- **Android native bits:** SQLite (public domain, built from source), AndroidX
+  Media3 / `media` / `core` (Apache-2.0 — the playback engine, not GMS), and
   Android Keystore (AOSP). No Google Play Services / Firebase anywhere.
-- **Bottom line:** nothing in the dependency set — direct or transitive — blocks
-  F-Droid on licensing grounds.
+- **Bottom line:** no `GPL-2.0-only`, non-free, or unknown-license component was
+  found in the declared build path, and nothing in the dependency set blocks
+  either F-Droid or the move to AGPL-3.0-or-later.
 
 ## 9. Outstanding before submission
 
-1. ~~**Run the mechanical transitive audit.**~~ **Done** (§2): 152 resolved
-   packages, all permissive free software, no GMS/Firebase/proprietary pull-in.
-   Re-run on any dependency change (item 3).
-2. **Decide the `pubspec.lock` policy** for releases so the audited dependency
-   set is pinned at the tagged commit (see
-   [fdroid-build-recipe.md §4](./fdroid-build-recipe.md#4-reproducibility-notes)).
+1. ~~**Run the mechanical transitive audit.**~~ **Done** (§2): 160 lockfile
+   entries audited from their published archives; no GPL/LGPL/proprietary/unknown
+   license in the Dart set.
+2. ~~**Decide the `pubspec.lock` policy.**~~ **Done** — `pubspec.lock` is now
+   committed, so the audited set is pinned at the tagged commit.
 3. **Re-run this audit whenever a dependency is added or bumped**, and update the
-   tables above.
+   tables above. This includes the Flatpak media pins: a bump to FFmpeg or mpv
+   must re-confirm that `--enable-gpl` / `--enable-nonfree` are still absent and
+   that mpv's GPL-only components are still disabled (§5.1).
+4. **Re-check the LGPL relinking posture** if the media stack ever moves from
+   shared to static linking, which would change the obligations in §5.1.
 
 ## 10. Related docs
 

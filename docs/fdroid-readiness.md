@@ -27,7 +27,7 @@ availability.
   GitHub Release is marked "Broken release — do not install … startup
   regression"; alpha.25 was the hotfix that reverted it, and the target has since
   moved on to alpha.30.
-- **Groundwork in place:** a stable application ID, the MPL-2.0 license, a real
+- **Groundwork in place:** a stable application ID, the AGPL-3.0-or-later license, a real
   app/launcher icon, Fastlane-style store metadata under
   `fastlane/metadata/android/en-US/` (text plus the real icon, feature graphic,
   and eight real phone screenshots), a finished dependency/license audit, the
@@ -42,13 +42,15 @@ availability.
 | -------- | -------------------------------- |
 | Name     | Linthra                          |
 | App ID   | `io.github.thezupzup.linthra`    |
-| License  | MPL-2.0                          |
+| License  | AGPL-3.0-or-later                |
 
 - App ID is set as both the Android `namespace` and `applicationId` in
   `android/app/build.gradle` and must remain stable across releases.
-- License is declared in [`LICENSE`](../LICENSE) (Mozilla Public License 2.0),
-  an [FSF/OSI-approved free license](https://www.gnu.org/licenses/license-list.html)
-  accepted by F-Droid.
+- License is declared in [`LICENSE`](../LICENSE) (GNU Affero General Public
+  License v3.0 or later), an
+  [FSF/OSI-approved free license](https://www.gnu.org/licenses/license-list.html)
+  accepted by F-Droid. Releases up to and including v0.2.4 were published under
+  MPL-2.0 and remain under those terms.
 
 ## 3. Build-from-source requirements
 
@@ -112,16 +114,21 @@ Dev-only dependencies (`flutter_lints`, `flutter_test`, `drift_dev`,
 
 The full per-package license breakdown, the native/bundled-component review, and
 the methodology live in [docs/dependency-license-audit.md](./dependency-license-audit.md).
-All direct dependencies are permissive (MIT / BSD-3-Clause) and MPL-2.0
-compatible.
+All direct dependencies are permissive (MIT / BSD-3-Clause) and
+AGPL-3.0-or-later compatible.
 
-**Transitive audit — done.** The full resolved tree was walked with the pinned
-toolchain (`flutter pub get` + `flutter pub deps`): **152 packages**, every one a
-permissive free-software license (101 BSD-3-Clause, 34 MIT, 6 Apache-2.0,
-6 BSD-2-Clause, 2 MPL-2.0), with **no Google Play Services / Firebase / analytics
-/ ads / crash-reporting package anywhere** in the tree. The only native AAR is
-AndroidX Media3 (Apache-2.0, the playback engine — not GMS). Full results and
-methodology in [dependency-license-audit.md §2 & §5](./dependency-license-audit.md#2-how-this-audit-was-produced-and-its-limits).
+**Transitive audit — done.** The audit was re-run against the committed
+`pubspec.lock`, reading each package's license from its published archive at the
+locked version: **160 lockfile entries** — 100 BSD-3-Clause, 42 MIT, 6
+Apache-2.0, 6 BSD-2-Clause and 1 MPL-2.0 from pub.dev, plus 4 BSD-3-Clause
+Flutter SDK entries and 1 Unlicense vendored package — with **no GPL, no LGPL,
+no proprietary, no unknown license**, and **no Google Play Services / Firebase /
+analytics / ads / crash-reporting package anywhere** in the tree. The single
+MPL-2.0 package (`dbus`, via `bonsoir_linux`) is AGPL-compatible under MPL-2.0
+§3.3. The only native AAR is AndroidX Media3 (Apache-2.0, the playback engine —
+not GMS); the Linux/Flatpak media chain is LGPL-2.1-or-later built from pinned
+source. Full results and methodology in
+[dependency-license-audit.md §2 & §5](./dependency-license-audit.md#2-how-this-audit-was-produced-and-its-limits).
 
 **Action items:**
 - Verify each plugin builds cleanly on the F-Droid build server (some Flutter
@@ -142,7 +149,7 @@ where applicable. Current assessment:
 | `NonFreeAdd`       | **No** | The app promotes/installs no non-free add-ons. |
 | `NonFreeDep`       | **No** | Every resolved dependency is permissive free software (§4 transitive audit); the playback AAR is AndroidX Media3 (Apache-2.0), and Cast is the pure-Dart `cast` package — **not** the GMS Cast SDK. |
 | `NonFreeNet`       | **No** (see note) | The local-first core needs no network. The optional Jellyfin / Navidrome / Subsonic sources are user-supplied and point at free-software servers the user hosts — not a mandatory or promoted proprietary service. |
-| `UpstreamNonFree`  | **No** | The upstream project (this repo) is entirely MPL-2.0 free software; no non-free build inputs or assets (icons are generated from a committed SVG — §7). |
+| `UpstreamNonFree`  | **No** | The upstream project (this repo) is entirely AGPL-3.0-or-later free software; no non-free build inputs or assets (icons are generated from a committed SVG — §7). |
 | `KnownVuln`        | **No (as of this audit)** | No dependency in the resolved tree is a known-vulnerable version at audit time; re-check on dependency bumps. F-Droid's own scanner will flag any `KnownVuln` at submission. |
 | `NoSourceSince`    | **No** | Source is fully published and builds are from source. |
 
@@ -315,8 +322,8 @@ What each one shows, plus the privacy review and the still-optional extras, is i
   monotonic; auto-update is enabled off the tags (§6).
 - **Fastlane description refreshed** to match the current alpha, with the
   "unofficial / not affiliated" framing (§7).
-- Full transitive dependency/license audit complete (§4 — 152 packages, all
-  permissive, no GMS); Drift generated files committed so no codegen prebuild is
+- Full transitive dependency/license audit complete (§4 — 160 lockfile entries,
+  all AGPL-compatible, no GMS); Drift generated files committed so no codegen prebuild is
   needed; full permission set documented (§5).
 
 ## 9. Submission checklist (suggested order)
