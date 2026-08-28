@@ -269,18 +269,19 @@ the filled checklist below works. The app's summary/description are **not**
 restated here — F-Droid takes them from the Fastlane files (§6), which is what
 the maintainer asked for.
 
-> **License note.** Linthra is now AGPL-3.0-or-later. Tags up to and including
-> `v0.2.4` were published under MPL-2.0, so the `Builds` entry actually submitted
-> must point at a tag whose `LICENSE` matches the `License:` field in the
-> metadata. The target version named below predates the relicensing and is
-> refreshed when the submission is actually filed.
+> **License note.** Linthra's current source is AGPL-3.0-or-later, but this
+> historical submission template targets `v0.1.0-alpha.30`, which was published
+> under MPL-2.0. The template below therefore intentionally says MPL-2.0. The
+> first F-Droid update that points at a post-`v0.2.4` release must switch the
+> recipe/metadata `License:` field and this submission text to AGPL-3.0-or-later
+> in the same change.
 
 ---
 
 Adds Linthra, an open-source, local-first Android music player for local files
 and self-hosted servers (Jellyfin, Navidrome/Subsonic). Unofficial community
 client — not affiliated with Jellyfin, Navidrome, or Subsonic.
-AGPL-3.0-or-later; no ads, tracking, analytics, crash-reporting SDK, or Google
+MPL-2.0; no ads, tracking, analytics, crash-reporting SDK, or Google
 Play Services. Initial target: `v0.1.0-alpha.30` (versionCode `100030`); the
 broken `v0.1.0-alpha.24` is skipped. Early alpha, usable for testing.
 
