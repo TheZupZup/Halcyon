@@ -1,6 +1,6 @@
 # Linthra
 
-[![License: MPL-2.0](https://img.shields.io/badge/License-MPL--2.0-brightgreen.svg)](./LICENSE)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-brightgreen.svg)](./LICENSE)
 [![Platform: Android](https://img.shields.io/badge/platform-Android-3ddc84.svg)](#install)
 [![Platform: Linux](https://img.shields.io/badge/platform-Linux-FCC624.svg)](#install)
 [![Built with Flutter](https://img.shields.io/badge/built%20with-Flutter-02569B.svg)](https://flutter.dev)
@@ -154,4 +154,12 @@ architecture, and a page per feature.
 
 ## License
 
-[MPL-2.0](./LICENSE)
+[AGPL-3.0-or-later](./LICENSE)
+
+Linthra moved from MPL-2.0 to AGPL-3.0-or-later. Releases published before that
+change — up to and including **v0.2.4** — remain under the MPL-2.0 terms they
+were published under; that text is preserved at
+[docs/licenses/MPL-2.0.txt](./docs/licenses/MPL-2.0.txt). See
+[docs/license-transition.md](./docs/license-transition.md).
+
+Vendored third-party code in `third_party/` keeps its own upstream license.

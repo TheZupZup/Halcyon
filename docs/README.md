@@ -50,3 +50,18 @@ The full index of Linthra's docs. New to the project? Start with the
 | PR security surface guard | [pr-security-guard.md](./pr-security-guard.md) |
 | F-Droid readiness | [fdroid-readiness.md](./fdroid-readiness.md) |
 | Google Play readiness | [play-store-readiness.md](./play-store-readiness.md) |
+
+## Licensing & legal
+
+Linthra is **AGPL-3.0-or-later**. Releases up to and including v0.2.4 were
+published under MPL-2.0 and remain under those terms.
+
+| Topic | Doc |
+| --- | --- |
+| Current license (GNU AGPLv3) | [LICENSE](../LICENSE) |
+| Historical license texts | [licenses/](./licenses/README.md) · [MPL-2.0.txt](./licenses/MPL-2.0.txt) |
+| License transition record | [license-transition.md](./license-transition.md) |
+| Contributor consent record | [relicensing-consent.md](./relicensing-consent.md) |
+| Dependency & license audit | [dependency-license-audit.md](./dependency-license-audit.md) |
+| Branding / trademark policy | [TRADEMARKS.md](../TRADEMARKS.md) |
+| Privacy policy | [privacy-policy.md](./privacy-policy.md) |

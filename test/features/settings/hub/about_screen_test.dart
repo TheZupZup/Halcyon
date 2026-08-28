@@ -94,7 +94,7 @@ void main() {
       expect(find.text('Alpha'), findsNothing);
       expect(find.text('Source code'), findsOneWidget);
       expect(find.text('Releases'), findsOneWidget);
-      expect(find.text('License (MPL-2.0)'), findsOneWidget);
+      expect(find.text('License (AGPL-3.0-or-later)'), findsOneWidget);
     });
 
     testWidgets(

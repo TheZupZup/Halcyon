@@ -26,7 +26,7 @@ tagging), and the draft recipe at
 | ------- | ----------------------------- |
 | Name    | Linthra                       |
 | App ID  | `io.github.thezupzup.linthra` |
-| License | `MPL-2.0` (SPDX)              |
+| License | `AGPL-3.0-or-later` (SPDX)    |
 | Source  | https://github.com/TheZupZup/Linthra |
 | Issues  | https://github.com/TheZupZup/Linthra/issues |
 | Category| Multimedia                    |
@@ -107,7 +107,7 @@ What makes it a good fit for building from source:
   `build_runner` to run.
 - One native component, SQLite via `sqlite3_flutter_libs`, built from source
   (public domain). No prebuilt closed blobs, and no Google Play Services or
-  Firebase anywhere in the resolved tree (152 packages, all audited).
+  Firebase anywhere in the resolved tree (160 lockfile entries, all audited).
 - No GitHub Actions secrets or Play signing are involved in the from-source
   build.
 
@@ -158,9 +158,9 @@ The short version: there's nothing to declare.
 | Ads           | No  | No ad libraries or code. |
 | Tracking      | No  | No telemetry/analytics/crash SDK; on-device signals only; nothing is auto-sent. |
 | NonFreeAdd    | No  | It promotes or installs no non-free add-ons. |
-| NonFreeDep    | No  | All 152 resolved packages are permissive; playback is AndroidX Media3 (Apache-2.0); Cast is pure-Dart, not the GMS Cast SDK. |
+| NonFreeDep    | No  | All 160 resolved lockfile entries are free software (one MPL-2.0, rest permissive); playback is AndroidX Media3 (Apache-2.0); Cast is pure-Dart, not the GMS Cast SDK. |
 | NonFreeNet    | No  | The local-first core needs no network; Jellyfin/Navidrome/Subsonic are optional, user-supplied, free-software servers — none bundled, promoted, or required. |
-| UpstreamNonFree | No | The repo is entirely MPL-2.0; the icons are generated from a committed SVG. |
+| UpstreamNonFree | No | The repo is entirely AGPL-3.0-or-later; the icons are generated from a committed SVG. |
 | KnownVuln     | No  | Nothing in the resolved tree was a known-vulnerable version at audit time; F-Droid's scanner re-checks. |
 | NoSourceSince | No  | The source is fully published and builds from source. |
 
@@ -269,14 +269,21 @@ the filled checklist below works. The app's summary/description are **not**
 restated here — F-Droid takes them from the Fastlane files (§6), which is what
 the maintainer asked for.
 
+> **License note.** Linthra's current source is AGPL-3.0-or-later, but this
+> historical submission template targets `v0.1.0-alpha.30`, which was published
+> under MPL-2.0. The template below therefore intentionally says MPL-2.0. The
+> first F-Droid update that points at a post-`v0.2.4` release must switch the
+> recipe/metadata `License:` field and this submission text to AGPL-3.0-or-later
+> in the same change.
+
 ---
 
 Adds Linthra, an open-source, local-first Android music player for local files
 and self-hosted servers (Jellyfin, Navidrome/Subsonic). Unofficial community
-client — not affiliated with Jellyfin, Navidrome, or Subsonic. MPL-2.0; no ads,
-tracking, analytics, crash-reporting SDK, or Google Play Services. Initial
-target: `v0.1.0-alpha.30` (versionCode `100030`); the broken `v0.1.0-alpha.24`
-is skipped. Early alpha, usable for testing.
+client — not affiliated with Jellyfin, Navidrome, or Subsonic.
+MPL-2.0; no ads, tracking, analytics, crash-reporting SDK, or Google
+Play Services. Initial target: `v0.1.0-alpha.30` (versionCode `100030`); the
+broken `v0.1.0-alpha.24` is skipped. Early alpha, usable for testing.
 
 ### Required
 

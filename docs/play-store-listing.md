@@ -54,7 +54,7 @@ copy.
   only" default.
 - Casting to Chromecast-compatible devices on the local network (pure-Dart, no
   Google Play Services).
-- Open source (MPL-2.0), no ads, no telemetry, no forced sync.
+- Open source (AGPL-3.0-or-later), no ads, no telemetry, no forced sync.
 
 ## 4. What works today
 

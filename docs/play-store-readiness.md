@@ -25,7 +25,7 @@ identity, version source, and assets but differ on signing and submission.
   Releases. **Not** on Google Play, **not** on F-Droid; nothing publishes
   automatically.
 - **Groundwork in place:**
-  - Stable application ID `io.github.thezupzup.linthra` and MPL-2.0 license.
+  - Stable application ID `io.github.thezupzup.linthra` and AGPL-3.0-or-later license.
   - A real Linthra app/launcher icon (adaptive + legacy), a 512×512 listing
     icon, and a 1024×500 feature graphic under
     `fastlane/metadata/android/en-US/images/`, plus a dedicated **full-bleed**
@@ -50,15 +50,17 @@ identity, version source, and assets but differ on signing and submission.
 | ---------------- | -------------------------------- |
 | Name             | Linthra                          |
 | App ID           | `io.github.thezupzup.linthra`    |
-| License          | MPL-2.0                          |
+| License          | AGPL-3.0-or-later                |
 
 - The App ID is set as both the Android `namespace` and `applicationId` in
   `android/app/build.gradle`. On Google Play the **package name is permanent**
   once an app is created — it can never be changed for that listing, so it must
   be correct at first upload. It already matches the F-Droid plan and the
   GitHub-Release artifacts.
-- License is declared in [`LICENSE`](../LICENSE) (Mozilla Public License 2.0).
-  Play does not require a specific license, but Linthra remains open source.
+- License is declared in [`LICENSE`](../LICENSE) (GNU Affero General Public
+  License v3.0 or later). Play does not require a specific license, but Linthra
+  remains open source. Releases up to and including v0.2.4 were published under
+  MPL-2.0 and remain under those terms.
 
 ## 3. Release artifact
 
@@ -139,7 +141,7 @@ reusable copies under `fastlane/metadata/android/en-US/images/`):
 
 | Asset                 | Play requirement                                   | Status  |
 | --------------------- | -------------------------------------------------- | ------- |
-| **App icon**          | 512×512 PNG, 32-bit with alpha, **full-bleed square** (Play applies its own corner mask + shadow — do not pre-round). | Present (`assets/brand/linthra-play-store-icon-512.png`). |
+| **App icon**          | 512×512 PNG, 32-bit with alpha, **full-bleed square**. Play applies its own corner mask and shadow, so do not pre-round. | Present (`assets/brand/linthra-play-store-icon-512.png`). |
 | **Feature graphic**   | 1024×500 PNG/JPG. Required to publish on any track.| Present (`images/featureGraphic.png`). |
 | **Phone screenshots** | 2–8, each side 320–3840 px, long side ≤ 2× short.  | Real captures exist for F-Droid (`images/phoneScreenshots/`), but at 1008×2244 (≈9:20) they exceed Play's 2:1 limit — **crop before using on Play**. |
 | **7-inch tablet**     | Optional.                                          | Missing (optional). |

@@ -340,7 +340,7 @@ class _LinksCard extends StatelessWidget {
           const Divider(height: 0),
           _LinkRow(
             icon: Icons.gavel_outlined,
-            label: 'License (MPL-2.0)',
+            label: 'License (AGPL-3.0-or-later)',
             onTap: onOpenLicense,
           ),
         ],
