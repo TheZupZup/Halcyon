@@ -29,8 +29,9 @@ void main() {
     about = _read(root, 'lib/features/settings/hub/about_screen.dart');
     readme = _read(root, 'README.md');
     contributing = _read(root, 'CONTRIBUTING.md');
-    const String storePath = 'fastlane/metadata/android/en-US/full_description.txt';
-    fastlane = _read(root, storePath);
+    const String storeDir = 'fastlane/metadata/android/en-US';
+    const String storeFile = 'full_description.txt';
+    fastlane = _read(root, '$storeDir/$storeFile');
     historical = _read(root, 'docs/licenses/MPL-2.0.txt');
   });
 
