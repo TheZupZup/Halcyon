@@ -32,18 +32,24 @@ import '../repositories/playlist_repository.dart';
 ///  - `queue/<index>` — a position in the live play queue.
 ///  - `favorite/<index>` — a position in the (catalog-ordered) favourites list.
 ///  - `offline/<index>` — a position in the (catalog-ordered) downloaded list.
+///  - `page/<sectionId>/<start>-<end>` — a *browse page* container: the
+///    half-open window `[start, end)` of some other section's children. Always
+///    browsable, never playable (see [MediaBrowserTree] for why big sections are
+///    served as pages).
 ///
 /// The namespaces never collide: a bare category word (`albums`) never starts
 /// with the matching container prefix (`album/`), a container `album/<id>` has
 /// no trailing `/<index>`, and an album/artist id is a URL-safe base64url token
 /// (or an `al-`/`ar-`/`unknown-...` sentinel) that never itself contains a `/`.
+/// The `page/` prefix is likewise distinct from every playable-leaf prefix, so a
+/// page container can never be mistaken for — or resolved as — a track.
 ///
 /// Security invariant: every id is built only from non-secret, opaque ids — a
 /// derived album/artist grouping id, a local playlist id, a small integer index,
-/// or an opaque hash of the track uri (the Songs leaf). No id ever carries a
-/// `jellyfin:`/`subsonic:` uri, a local file path, a Jellyfin/Subsonic access
-/// token, or an authenticated stream URL; the stream URL is minted lazily at play
-/// time by the resolver, never here.
+/// a browse-page window (two integers), or an opaque hash of the track uri (the
+/// Songs leaf). No id ever carries a `jellyfin:`/`subsonic:` uri, a local file
+/// path, a Jellyfin/Subsonic access token, or an authenticated stream URL; the
+/// stream URL is minted lazily at play time by the resolver, never here.
 abstract final class MediaId {
   /// The root the platform requests first (audio_service's `browsableRootId`).
   static const String root = 'root';
@@ -70,6 +76,7 @@ abstract final class MediaId {
   static const String _playlistPrefix = 'playlist/';
   static const String _favoritePrefix = 'favorite/';
   static const String _offlinePrefix = 'offline/';
+  static const String _pagePrefix = 'page/';
 
   /// A playable leaf for a flat-"Songs" track, keyed by an opaque hash of the
   /// track's provider-namespaced [Track.uri]. Hashing (not the raw uri) keeps the
@@ -112,6 +119,41 @@ abstract final class MediaId {
 
   static String favoriteItem(int index) => '$_favoritePrefix$index';
   static String offlineItem(int index) => '$_offlinePrefix$index';
+
+  /// A *browse page* container: the half-open window `[start, end)` of the
+  /// children of [sectionId]. Browsable only — deliberately in its own `page/`
+  /// namespace so it can never be confused with (or resolved as) a playable
+  /// leaf, and deterministic: the same section at the same size always yields
+  /// the same page ids, so repeated browses are byte-identical.
+  ///
+  /// [sectionId] may itself contain a `/` (e.g. `album/<id>`); the window is
+  /// always the last `/`-segment, so parsing back is unambiguous.
+  static String browsePage(String sectionId, int start, int end) =>
+      '$_pagePrefix$sectionId/$start-$end';
+
+  static bool isBrowsePage(String id) => id.startsWith(_pagePrefix);
+
+  /// The section and window encoded in a `page/...` id, or null when [id] isn't
+  /// a well-formed page container. A malformed or hostile id (a negative bound,
+  /// an empty section, a nested `page/page/...`) yields null rather than
+  /// throwing, so a stale or crafted browse request is a safe dead-stop.
+  static BrowsePage? browsePageOf(String id) {
+    if (!isBrowsePage(id)) return null;
+    final String rest = id.substring(_pagePrefix.length);
+    final int slash = rest.lastIndexOf('/');
+    if (slash <= 0) return null;
+    final String sectionId = rest.substring(0, slash);
+    // A page of a page is never generated (sub-pages keep the original section
+    // id), so treat one as malformed rather than recursing into it.
+    if (sectionId.startsWith(_pagePrefix)) return null;
+    final String window = rest.substring(slash + 1);
+    final int dash = window.indexOf('-');
+    if (dash <= 0) return null;
+    final int? start = int.tryParse(window.substring(0, dash));
+    final int? end = int.tryParse(window.substring(dash + 1));
+    if (start == null || end == null || start < 0 || end <= start) return null;
+    return BrowsePage(sectionId: sectionId, start: start, end: end);
+  }
 
   static bool isLibraryTrack(String id) => id.startsWith(_libraryPrefix);
   static bool isQueueItem(String id) => id.startsWith(_queuePrefix);
@@ -187,6 +229,25 @@ abstract final class MediaId {
   }
 }
 
+/// The section and half-open window `[start, end)` a `page/...` container names.
+@immutable
+class BrowsePage {
+  const BrowsePage({
+    required this.sectionId,
+    required this.start,
+    required this.end,
+  });
+
+  /// The id of the section being paged (`library`, `albums`, `album/<id>`, …).
+  final String sectionId;
+
+  /// First child index in this page (inclusive).
+  final int start;
+
+  /// One past the last child index in this page (exclusive).
+  final int end;
+}
+
 /// One node in the browsable media tree, kept free of any `audio_service` type.
 ///
 /// Browsable nodes (categories/containers) have [playable] `false`; track leaves
@@ -248,16 +309,52 @@ class MediaPlaybackRequest {
 /// stale id yields an empty list / null rather than throwing, so a browse or
 /// selection request can never crash the media service.
 class MediaBrowserTree {
-  const MediaBrowserTree(
+  MediaBrowserTree(
     this._library, {
     PlaylistRepository? playlists,
     FavoritesRepository? favorites,
     DownloadRepository? downloads,
+    Duration catalogSnapshotTtl = _defaultCatalogSnapshotTtl,
   })  : _playlists = playlists,
         _favorites = favorites,
-        _downloads = downloads;
+        _downloads = downloads,
+        _catalogSnapshotTtl = catalogSnapshotTtl;
+
+  /// The largest number of children this tree ever returns for one browse
+  /// request. Sections bigger than this are served as `page/` containers.
+  ///
+  /// The bound exists because the whole child list is delivered to the media
+  /// browser client in a single Binder transaction, whose per-process buffer is
+  /// ~1 MB; a Songs response crosses that at roughly 1.5k tracks, and the
+  /// resulting `RemoteException` is swallowed by `MediaBrowserServiceCompat` —
+  /// the client simply never receives `onChildrenLoaded` and spins forever. At
+  /// this size a page of rich track rows is on the order of 150 kB, comfortably
+  /// inside the buffer even alongside other in-flight transactions.
+  static const int browsePageSize = 250;
+
+  /// How long one catalog read is reused across browse requests.
+  ///
+  /// Android Auto issues a burst of `getChildren` calls for a single user
+  /// action (and `audio_service` re-requests each node once more, because its
+  /// default `subscribeToChildren` stream is seeded and immediately triggers a
+  /// `notifyChildrenChanged`). Re-reading a 200k-row catalog for each of those
+  /// is the second half of the "endless scanning" symptom, and it would also let
+  /// the page windows shift mid-scroll if a sync landed between two requests.
+  /// One short-lived snapshot makes a browse session cheap *and* internally
+  /// consistent, while staying short enough that a freshly synced library shows
+  /// up without reconnecting.
+  static const Duration _defaultCatalogSnapshotTtl = Duration(seconds: 30);
 
   final MusicLibraryRepository _library;
+
+  final Duration _catalogSnapshotTtl;
+
+  /// The last catalog read, its timestamp, and the read currently in flight —
+  /// see [_defaultCatalogSnapshotTtl]. `_inFlight` collapses the concurrent
+  /// browse requests Android Auto issues into a single repository read.
+  List<Track>? _catalogSnapshot;
+  DateTime? _catalogSnapshotAt;
+  Future<List<Track>>? _catalogInFlight;
 
   /// User playlists, or null when not wired (tests, or a build without the
   /// playlist feature). When null, no Playlists node is offered.
@@ -274,40 +371,121 @@ class MediaBrowserTree {
   /// The children of [parentId], for the given live [playback] snapshot.
   /// Unknown parents yield an empty list rather than throwing, so an unexpected
   /// browse request can never crash the media service.
+  ///
+  /// The result is always at most [browsePageSize] nodes: a section with more
+  /// children than that is served as a list of `page/` containers spanning it
+  /// (see [_bounded]), so no browse response can ever outgrow the media
+  /// browser's Binder transaction — while every child stays reachable by
+  /// walking into the page it falls in.
   Future<List<MediaNode>> childrenOf(
     String parentId,
     PlaybackState playback,
   ) async {
-    switch (parentId) {
+    final BrowsePage? page = MediaId.browsePageOf(parentId);
+    if (page != null) {
+      final _Section section = await _sectionOf(page.sectionId, playback);
+      return _bounded(section, page.sectionId, page.start, page.end);
+    }
+    final _Section section = await _sectionOf(parentId, playback);
+    return _bounded(section, parentId, 0, section.length);
+  }
+
+  /// The children of [sectionId] as a lazily-indexable list, so paging a huge
+  /// section materializes only the window it returns. Unknown sections yield an
+  /// empty section rather than throwing.
+  Future<_Section> _sectionOf(String sectionId, PlaybackState playback) async {
+    switch (sectionId) {
       case MediaId.root:
-        return _rootNodes();
+        return _Section.of(await _rootNodes());
       case MediaId.library:
-        return _songNodes();
+        return _songSection();
       case MediaId.albums:
-        return _albumCategoryNodes();
+        return _Section.of(await _albumCategoryNodes());
       case MediaId.artists:
-        return _artistCategoryNodes();
+        return _Section.of(await _artistCategoryNodes());
       case MediaId.queue:
-        return _queueNodes(playback);
+        return _Section.of(_queueNodes(playback));
       case MediaId.playlists:
-        return _playlistCategoryNodes();
+        return _Section.of(await _playlistCategoryNodes());
       case MediaId.favorites:
-        return _favoriteNodes();
+        return _Section.of(await _favoriteNodes());
       case MediaId.offline:
-        return _offlineNodes();
+        return _Section.of(await _offlineNodes());
       case MediaId.empty:
-        return const <MediaNode>[];
+        return _Section.empty;
     }
-    if (MediaId.isAlbumCategory(parentId)) {
-      return _albumTrackNodes(MediaId.albumCategoryId(parentId));
+    if (MediaId.isAlbumCategory(sectionId)) {
+      return _Section.of(
+          await _albumTrackNodes(MediaId.albumCategoryId(sectionId)));
     }
-    if (MediaId.isArtistCategory(parentId)) {
-      return _artistTrackNodes(MediaId.artistCategoryId(parentId));
+    if (MediaId.isArtistCategory(sectionId)) {
+      return _Section.of(
+          await _artistTrackNodes(MediaId.artistCategoryId(sectionId)));
     }
-    if (MediaId.isPlaylistCategory(parentId)) {
-      return _playlistTrackNodes(MediaId.playlistCategoryId(parentId));
+    if (MediaId.isPlaylistCategory(sectionId)) {
+      return _Section.of(
+          await _playlistTrackNodes(MediaId.playlistCategoryId(sectionId)));
     }
-    return const <MediaNode>[];
+    return _Section.empty;
+  }
+
+  /// The window `[start, end)` of [section], bounded to [browsePageSize] nodes.
+  ///
+  /// A window that already fits is materialized as-is. A larger one is covered
+  /// by evenly sized `page/` containers instead — at most [browsePageSize] of
+  /// them, by growing the step in powers of [browsePageSize] — so browsing
+  /// recurses into narrower windows until it reaches real children. Two levels
+  /// already span 62 500 children and three span 15 million, so the tree stays
+  /// shallow for any realistic library.
+  ///
+  /// The split is a pure function of the window and the section's size, so
+  /// repeated browses of an unchanged section produce byte-identical page ids.
+  /// Out-of-range windows (a stale page id whose section has since shrunk) clamp
+  /// to what exists, and an empty one yields no children rather than throwing.
+  List<MediaNode> _bounded(
+    _Section section,
+    String sectionId,
+    int windowStart,
+    int windowEnd,
+  ) {
+    final int start = windowStart < 0 ? 0 : windowStart;
+    final int end = windowEnd > section.length ? section.length : windowEnd;
+    if (end <= start) return const <MediaNode>[];
+
+    final int span = end - start;
+    if (span <= browsePageSize) {
+      return <MediaNode>[
+        for (int i = start; i < end; i++) section.nodeAt(i),
+      ];
+    }
+
+    int step = browsePageSize;
+    while (span > step * browsePageSize) {
+      step *= browsePageSize;
+    }
+    final List<MediaNode> pages = <MediaNode>[];
+    for (int from = start; from < end; from += step) {
+      final int to = from + step > end ? end : from + step;
+      pages.add(MediaNode(
+        // Browsable, never playable: the `page/` namespace resolves to nothing
+        // in [resolve], so selecting a page row can't start playback.
+        id: MediaId.browsePage(sectionId, from, to),
+        title: '${from + 1} – $to',
+        subtitle: '${_pageLabel(section.nodeAt(from))} … '
+            '${_pageLabel(section.nodeAt(to - 1))}',
+      ));
+    }
+    return pages;
+  }
+
+  /// A page row's endpoint hint: the child's title, shortened so a long track
+  /// name can't push the row's subtitle out of the car's single line. Titles
+  /// only — never a uri or a path.
+  static String _pageLabel(MediaNode node) {
+    const int maxLength = 24;
+    final String title = node.title;
+    if (title.length <= maxLength) return title;
+    return '${title.substring(0, maxLength - 1).trimRight()}…';
   }
 
   /// Resolves a selected leaf [mediaId] to what should play, or null when it
@@ -316,6 +494,10 @@ class MediaBrowserTree {
     String mediaId,
     PlaybackState playback,
   ) async {
+    // A `page/` container is a browse-only node. It is checked first (and
+    // explicitly) so a page row can never be played, even if a future leaf
+    // namespace were to overlap it.
+    if (MediaId.isBrowsePage(mediaId)) return null;
     if (MediaId.isLibraryTrack(mediaId)) {
       final List<Track> tracks = await _allTracks();
       // Match by the uri hash, so two providers' same-id songs resolve to the
@@ -387,15 +569,22 @@ class MediaBrowserTree {
 
   Future<bool> _hasOffline() async => (await _downloadedKeys()).isNotEmpty;
 
-  Future<List<MediaNode>> _songNodes() async {
+  /// The flat Songs section, kept *lazy*: it reports the catalog size and builds
+  /// a leaf only for the index actually asked for. That is what keeps a 200k
+  /// library cheap to browse — a page request materializes 250 nodes, not
+  /// 200 000 of which 249 750 are immediately discarded.
+  Future<_Section> _songSection() async {
     final List<Track> tracks = await _allTracks();
-    if (tracks.isEmpty) return _placeholder('Sync your library first');
-    return <MediaNode>[
-      for (final Track track in tracks)
-        // Key the leaf by a hash of the provider-namespaced uri so two same-id
-        // songs from different providers get distinct, collision-free media ids.
-        _trackNode(MediaId.libraryTrack(track.uri), track),
-    ];
+    if (tracks.isEmpty) {
+      return _Section.of(_placeholder('Sync your library first'));
+    }
+    return _Section(
+      tracks.length,
+      // Key each leaf by a hash of the provider-namespaced uri so two same-id
+      // songs from different providers get distinct, collision-free media ids —
+      // and so a leaf id stays the same whichever page it was listed on.
+      (int i) => _trackNode(MediaId.libraryTrack(tracks[i].uri), tracks[i]),
+    );
   }
 
   Future<List<MediaNode>> _albumCategoryNodes() async {
@@ -603,11 +792,35 @@ class MediaBrowserTree {
 
   /// All catalog tracks, guarded so a catalog read error yields an empty list
   /// rather than throwing out of a browse/resolve.
-  Future<List<Track>> _allTracks() async {
+  ///
+  /// Served from a short-lived snapshot (see [_defaultCatalogSnapshotTtl]) so
+  /// the burst of browse requests behind one car interaction costs a single
+  /// catalog read and sees one consistent list — otherwise every page of a
+  /// large library would re-scan the whole catalog, and a sync landing
+  /// mid-scroll could shift the page windows underneath the user. Concurrent
+  /// callers share the in-flight read rather than each starting their own.
+  /// Failures are not cached, so a transient catalog error retries at once.
+  Future<List<Track>> _allTracks() {
+    final List<Track>? snapshot = _catalogSnapshot;
+    final DateTime? takenAt = _catalogSnapshotAt;
+    if (snapshot != null &&
+        takenAt != null &&
+        DateTime.now().difference(takenAt) < _catalogSnapshotTtl) {
+      return Future<List<Track>>.value(snapshot);
+    }
+    return _catalogInFlight ??= _readCatalog();
+  }
+
+  Future<List<Track>> _readCatalog() async {
     try {
-      return await _library.getAllTracks();
+      final List<Track> tracks = await _library.getAllTracks();
+      _catalogSnapshot = tracks;
+      _catalogSnapshotAt = DateTime.now();
+      return tracks;
     } catch (_) {
       return const <Track>[];
+    } finally {
+      _catalogInFlight = null;
     }
   }
 
@@ -644,3 +857,26 @@ class MediaBrowserTree {
     return '$albums • $songs';
   }
 }
+
+/// A browse section as a lazily-indexable list of nodes: how many children it
+/// has, and how to build the one at a given index.
+///
+/// Sections that are already materialized (albums, playlists, the queue) wrap
+/// their list with [_Section.of]; the flat Songs section stays lazy so paging a
+/// six-figure catalog builds only the page it returns.
+@immutable
+class _Section {
+  const _Section(this.length, this.nodeAt);
+
+  factory _Section.of(List<MediaNode> nodes) =>
+      _Section(nodes.length, (int i) => nodes[i]);
+
+  final int length;
+  final MediaNode Function(int index) nodeAt;
+
+  /// A section with no children — an unknown or dead-stop node.
+  static const _Section empty = _Section(0, _noNode);
+}
+
+MediaNode _noNode(int index) =>
+    throw StateError('empty browse section has no child at $index');

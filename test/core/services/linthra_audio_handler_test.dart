@@ -481,6 +481,200 @@ void main() {
       });
     });
 
+    // Regression coverage for #539, at the audio_service boundary: whatever the
+    // browse tree decides, the MediaItems this handler hands to
+    // MediaBrowserServiceCompat must stay a bounded, complete, playable-vs-
+    // browsable-correct set — that list is delivered to Android Auto in one
+    // Binder transaction, and an oversized one is dropped silently, leaving the
+    // car spinning forever.
+    group('large Songs catalogs page instead of flooding the browser (#539)',
+        () {
+      const int pageSize = MediaBrowserTree.browsePageSize;
+
+      List<Track> catalog(int n) => <Track>[
+            for (int i = 0; i < n; i++)
+              Track(
+                id: 'jellyfin:$i',
+                title: 'Song ${i.toString().padLeft(5, '0')}',
+                uri: 'jellyfin:https://host.example/Items/$i?api_key=SECRET',
+                artistName: 'Artist ${i % 40}',
+                albumName: 'Album ${i % 90}',
+              ),
+          ];
+
+      /// A handler over [tracks], torn down with the test.
+      LinthraAudioHandler handlerFor(List<Track> tracks) {
+        final controller = FakePlaybackController();
+        final handler = LinthraAudioHandler(
+          controller,
+          MediaBrowserTree(FakeMusicLibraryRepository(tracks: tracks)),
+        );
+        addTearDown(() async {
+          await handler.dispose();
+          await controller.dispose();
+        });
+        return handler;
+      }
+
+      /// Every playable MediaItem reachable under [parentId], descending
+      /// through page containers.
+      Future<List<audio.MediaItem>> leaves(
+        LinthraAudioHandler handler,
+        String parentId,
+      ) async {
+        final out = <audio.MediaItem>[];
+        for (final audio.MediaItem item
+            in await handler.getChildren(parentId)) {
+          if (MediaId.isBrowsePage(item.id)) {
+            out.addAll(await leaves(handler, item.id));
+          } else {
+            out.add(item);
+          }
+        }
+        return out;
+      }
+
+      test('no getChildren response exceeds the browse bound', () async {
+        final handler = handlerFor(catalog(4 * pageSize + 7));
+
+        final top = await handler.getChildren(MediaId.library);
+        expect(top.length, lessThanOrEqualTo(pageSize));
+        for (final page in top) {
+          expect((await handler.getChildren(page.id)).length,
+              lessThanOrEqualTo(pageSize));
+        }
+      });
+
+      test('every song still reaches Android Auto exactly once', () async {
+        final tracks = catalog(4 * pageSize + 7);
+        final handler = handlerFor(tracks);
+
+        final items = await leaves(handler, MediaId.library);
+
+        expect(items, hasLength(tracks.length));
+        expect(items.map((i) => i.id).toSet(), hasLength(tracks.length));
+        expect(items.map((i) => i.id),
+            tracks.map((t) => MediaId.libraryTrack(t.uri)));
+        expect(items.every((i) => i.playable == true), isTrue);
+      });
+
+      test('page rows are browsable containers, not playable items', () async {
+        final handler = handlerFor(catalog(4 * pageSize + 7));
+
+        final top = await handler.getChildren(MediaId.library);
+
+        expect(top, isNotEmpty);
+        expect(top.every((i) => MediaId.isBrowsePage(i.id)), isTrue);
+        expect(top.every((i) => i.playable == false), isTrue);
+        // A page row carries no track metadata that would make a head unit
+        // treat it as a song.
+        expect(top.every((i) => i.duration == null), isTrue);
+        expect(top.every((i) => i.artist == null), isTrue);
+      });
+
+      test('selecting a page row starts no playback', () async {
+        final controller = FakePlaybackController();
+        final handler = LinthraAudioHandler(
+          controller,
+          MediaBrowserTree(
+              FakeMusicLibraryRepository(tracks: catalog(4 * pageSize + 7))),
+        );
+        addTearDown(() async {
+          await handler.dispose();
+          await controller.dispose();
+        });
+
+        final page = (await handler.getChildren(MediaId.library)).first;
+        await handler.playFromMediaId(page.id);
+        await _settle();
+
+        expect(controller.playedTracks, isEmpty);
+        expect(controller.state.currentTrack, isNull);
+      });
+
+      test('selecting a paged song plays the whole catalog at its index',
+          () async {
+        final tracks = catalog(4 * pageSize + 7);
+        final controller = FakePlaybackController();
+        final handler = LinthraAudioHandler(
+          controller,
+          MediaBrowserTree(FakeMusicLibraryRepository(tracks: tracks)),
+        );
+        addTearDown(() async {
+          await handler.dispose();
+          await controller.dispose();
+        });
+
+        // The first row of the *third* page — a song that the old flat list
+        // would have buried past the Binder limit.
+        final pages = await handler.getChildren(MediaId.library);
+        final third = await handler.getChildren(pages[2].id);
+        await handler.playFromMediaId(third.first.id);
+        await _settle();
+
+        // The whole catalog became the queue, positioned on the selected song —
+        // exactly as an unpaged Songs selection always did.
+        final PlaybackState state = controller.state;
+        expect(controller.playedTracks, <Track>[tracks[2 * pageSize]]);
+        expect(state.currentTrack!.uri, tracks[2 * pageSize].uri);
+        expect(state.previous, hasLength(2 * pageSize));
+        expect(state.previous.length + 1 + state.upNext.length, tracks.length);
+      });
+
+      test('paged browse output stays token-, path- and scheme-free', () async {
+        final handler = handlerFor(catalog(pageSize + 5));
+
+        for (final audio.MediaItem item in <audio.MediaItem>[
+          ...await handler.getChildren(MediaId.library),
+          ...await leaves(handler, MediaId.library),
+        ]) {
+          for (final String text in <String>[
+            item.id,
+            item.title,
+            item.displaySubtitle ?? '',
+            item.artist ?? '',
+            item.album ?? '',
+          ]) {
+            expect(text, isNot(contains('api_key')));
+            expect(text.toLowerCase(), isNot(contains('secret')));
+            expect(text, isNot(contains('jellyfin:')));
+            expect(text, isNot(contains('://')));
+          }
+          expect(item.extras, anyOf(isNull, isEmpty));
+        }
+      });
+
+      test('repeated browse requests are byte-identical (no rebuild loop)',
+          () async {
+        final handler = handlerFor(catalog(4 * pageSize + 7));
+
+        List<String> shapeOf(List<audio.MediaItem> items) => <String>[
+              for (final i in items) '${i.id}|${i.title}|${i.playable}',
+            ];
+
+        final first = shapeOf(await handler.getChildren(MediaId.library));
+        final second = shapeOf(await handler.getChildren(MediaId.library));
+        final third = shapeOf(await handler.getChildren(MediaId.library));
+
+        expect(second, first);
+        expect(third, first);
+      });
+
+      test('a small library is untouched — still one flat Songs list',
+          () async {
+        final handler = handlerFor(_library);
+
+        final items = await handler.getChildren(MediaId.library);
+
+        expect(items.map((i) => i.id), [
+          MediaId.libraryTrack('/a.mp3'),
+          MediaId.libraryTrack('/b.mp3'),
+          MediaId.libraryTrack('/c.mp3'),
+        ]);
+        expect(items.every((i) => i.playable == true), isTrue);
+      });
+    });
+
     group('offline & favorites browsing', () {
       late FakePlaybackController offController;
       late LinthraAudioHandler offHandler;

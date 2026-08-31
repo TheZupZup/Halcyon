@@ -30,6 +30,7 @@ void _log(String message) => developer.log(message, name: _logName);
 /// fixed label set — never the id itself — so a track id, playlist id, URI, or
 /// token can never reach the log.
 String _categoryOf(String id) {
+  if (MediaId.isBrowsePage(id)) return 'browse-page';
   if (id == MediaId.root) return 'root';
   if (id == MediaId.library) return 'library';
   if (id == MediaId.albums) return 'albums';
@@ -193,6 +194,19 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
 
   // --- Android Auto / media browser ---------------------------------------
 
+  /// The children a media browser (Android Auto) asked for.
+  ///
+  /// [options] carries Android's `MediaBrowserCompat` browse options, including
+  /// `EXTRA_PAGE`/`EXTRA_PAGE_SIZE`, and they are deliberately **not** applied
+  /// here. `MediaBrowserServiceCompat` already slices the list this handler
+  /// returns against the very same options before delivering it
+  /// (`Result.onResultSent` → `applyOptions`), so an app that paged as well
+  /// would page twice: page 1 of an already-page-sized list is empty, and every
+  /// page after the first would come back blank. The contract through
+  /// `audio_service` is therefore "return this node's *complete* child list";
+  /// [MediaBrowserTree] keeps that list bounded by splitting big sections into
+  /// browsable `page/` containers instead, which the framework's own paging
+  /// still composes with correctly.
   @override
   Future<List<audio.MediaItem>> getChildren(
     String parentMediaId, [
