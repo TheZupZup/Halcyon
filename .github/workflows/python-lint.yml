@@ -1,8 +1,14 @@
 name: Python lint
 
 # Fast lint/format feedback for Linthra's Python tooling, so the Python under
-# scripts/, tool/ and tools/ gets the same kind of check Dart already gets from
-# `dart format --set-exit-if-changed` and `flutter analyze` in ci.yml.
+# scripts/, tool/ and tools/ gets the same kind of check the Dart format and
+# analysis steps in ci.yml already give Dart.
+#
+# Naming those steps by their literal command strings would trip the guardrail
+# in test/tooling/toolchain_pins_test.dart, which reads every workflow as text
+# and requires anything that looks like it runs the Flutter SDK to install it
+# through .github/actions/setup-flutter. That guard is right to be text-based,
+# and this job genuinely does not need the SDK.
 #
 # Only the three real Python trees are passed to Ruff, so nothing vendored or
 # generated can be linted by accident. ruff.toml excludes the same trees, which
