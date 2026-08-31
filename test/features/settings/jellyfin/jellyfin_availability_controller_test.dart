@@ -1,0 +1,197 @@
+import 'dart:async';
+
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:linthra/core/models/jellyfin_session.dart';
+import 'package:linthra/core/services/reachability.dart';
+import 'package:linthra/core/sources/jellyfin/jellyfin_exception.dart';
+import 'package:linthra/core/sources/source_availability.dart';
+import 'package:linthra/data/repositories/in_memory_jellyfin_session_store.dart';
+import 'package:linthra/data/repositories/jellyfin_session_store_provider.dart';
+import 'package:linthra/features/settings/jellyfin/jellyfin_availability_controller.dart';
+import 'package:linthra/features/settings/jellyfin/jellyfin_settings_controller.dart';
+import 'package:linthra/features/settings/jellyfin/jellyfin_settings_providers.dart';
+
+import '../../../core/sources/jellyfin/fake_jellyfin_client.dart';
+
+const JellyfinSession _session = JellyfinSession(
+  baseUrl: 'http://192.168.22.1:8096',
+  userId: 'user-1',
+  accessToken: 'tok',
+  deviceId: 'device-1',
+  userName: 'alice',
+);
+
+/// A client whose session probe is held open until the test releases it, so the
+/// `checking` window can be observed rather than raced.
+class _GatedJellyfinClient extends FakeJellyfinClient {
+  _GatedJellyfinClient();
+
+  Completer<void>? gate;
+
+  @override
+  Future<void> verifySession(JellyfinSession session) async {
+    final Completer<void>? held = gate;
+    if (held != null) await held.future;
+    return super.verifySession(session);
+  }
+}
+
+ProviderContainer _container({
+  JellyfinSession? saved,
+  required FakeJellyfinClient client,
+  Duration? poll,
+}) {
+  final container = ProviderContainer(
+    overrides: <Override>[
+      jellyfinSessionStoreProvider.overrideWithValue(
+        InMemoryJellyfinSessionStore(initialSession: saved),
+      ),
+      jellyfinClientProvider.overrideWithValue(client),
+      jellyfinAvailabilityPollIntervalProvider.overrideWithValue(poll),
+    ],
+  );
+  addTearDown(container.dispose);
+  container.listen(jellyfinAvailabilityProvider, (_, __) {});
+  return container;
+}
+
+Future<void> _settle() async {
+  for (int i = 0; i < 6; i++) {
+    await Future<void>.delayed(Duration.zero);
+  }
+}
+
+void main() {
+  test('reports notConfigured with no saved session, and never probes',
+      () async {
+    final client = FakeJellyfinClient();
+    final container = _container(client: client);
+    await _settle();
+    expect(container.read(jellyfinAvailabilityProvider).status,
+        SourceAvailability.notConfigured);
+    expect(client.verifyCount, 0,
+        reason: 'nothing configured means nothing to reach');
+  });
+
+  test('shows "checking" while the first probe is in flight, hiding nothing',
+      () async {
+    final client = _GatedJellyfinClient()..gate = Completer<void>();
+    final container = _container(saved: _session, client: client);
+    await _settle();
+
+    expect(container.read(jellyfinAvailabilityProvider).status,
+        SourceAvailability.checking);
+    // A library must not blink out while we are still asking.
+    expect(container.read(jellyfinAvailabilityProvider).hidesTracks, isFalse);
+
+    client.gate!.complete();
+    await _settle();
+    expect(container.read(jellyfinAvailabilityProvider).status,
+        SourceAvailability.available);
+  });
+
+  test('probes a restored session at startup and records the outcome',
+      () async {
+    final client =
+        FakeJellyfinClient(verifyError: JellyfinException.notReachable());
+    final container = _container(saved: _session, client: client);
+    await _settle();
+
+    expect(client.verifyCount, 1);
+    final state = container.read(jellyfinAvailabilityProvider);
+    expect(state.status, SourceAvailability.unreachable);
+    expect(state.lastCheckedAt, isNotNull);
+    expect(state.hidesTracks, isTrue);
+  });
+
+  test('an unwrapped transport fault is never reported as available', () async {
+    final client = _ThrowingClient();
+    final container = _container(saved: _session, client: client);
+    await _settle();
+    expect(container.read(jellyfinAvailabilityProvider).status,
+        SourceAvailability.unreachable);
+  });
+
+  test('noteReachability is ignored while nothing is configured', () async {
+    final client = FakeJellyfinClient();
+    final container = _container(client: client);
+    await _settle();
+
+    container
+        .read(jellyfinAvailabilityProvider.notifier)
+        .noteReachability(ReachabilityStatus.serverUnreachable);
+
+    expect(container.read(jellyfinAvailabilityProvider).status,
+        SourceAvailability.notConfigured);
+  });
+
+  test('a stale in-flight probe cannot overwrite a newer answer', () async {
+    final client = _GatedJellyfinClient()
+      ..gate = Completer<void>()
+      ..verifyError = JellyfinException.notReachable();
+    final container = _container(saved: _session, client: client);
+    await _settle();
+    expect(container.read(jellyfinAvailabilityProvider).status,
+        SourceAvailability.checking);
+
+    // The playback path learns the server is fine while the slow probe is still
+    // hanging; the probe's later, stale "unreachable" must not win.
+    container
+        .read(jellyfinAvailabilityProvider.notifier)
+        .noteReachability(ReachabilityStatus.reachable);
+    expect(container.read(jellyfinAvailabilityProvider).status,
+        SourceAvailability.available);
+
+    client.gate!.complete();
+    await _settle();
+    expect(container.read(jellyfinAvailabilityProvider).status,
+        SourceAvailability.available);
+  });
+
+  test('signing out returns to notConfigured without a probe', () async {
+    final client = FakeJellyfinClient();
+    final container = _container(saved: _session, client: client);
+    await _settle();
+    expect(container.read(jellyfinAvailabilityProvider).status,
+        SourceAvailability.available);
+
+    await container.read(jellyfinSettingsControllerProvider.notifier).clear();
+    await _settle();
+
+    expect(container.read(jellyfinAvailabilityProvider).status,
+        SourceAvailability.notConfigured);
+  });
+
+  test('the background poll re-probes a configured server', () async {
+    final client =
+        FakeJellyfinClient(verifyError: JellyfinException.notReachable());
+    final container = _container(
+      saved: _session,
+      client: client,
+      // The production override turns polling on; here it is compressed so the
+      // recovery can be observed without a 45 s wait.
+      poll: const Duration(milliseconds: 20),
+    );
+    await _settle();
+    expect(container.read(jellyfinAvailabilityProvider).status,
+        SourceAvailability.unreachable);
+
+    // Back on the network: the poll picks it up with no user action at all.
+    client.verifyError = null;
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    await _settle();
+
+    expect(container.read(jellyfinAvailabilityProvider).status,
+        SourceAvailability.available);
+    expect(client.verifyCount, greaterThan(1));
+  });
+}
+
+/// A client whose probe throws something the Jellyfin layer never wrapped.
+class _ThrowingClient extends FakeJellyfinClient {
+  @override
+  Future<void> verifySession(JellyfinSession session) async {
+    throw StateError('socket exploded');
+  }
+}

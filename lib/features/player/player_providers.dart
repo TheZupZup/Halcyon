@@ -18,6 +18,7 @@ import '../../core/services/playback_candidate_source.dart';
 import '../../core/services/playback_controller.dart';
 import '../../core/services/playback_reporting_service.dart';
 import '../../core/services/provider_reachability.dart';
+import '../../core/services/reachability.dart';
 import '../../core/services/reachability_aware_playable_uri_resolver.dart';
 import '../../core/services/remote_cache/remote_cache_resolver.dart';
 import '../../core/services/remote_cache/remote_playback_cache.dart';
@@ -45,6 +46,7 @@ import '../../data/repositories/download_repository_provider.dart';
 import '../../data/repositories/host_platform_provider.dart';
 import '../../data/repositories/play_history_repository_provider.dart';
 import '../../data/repositories/remote_cache_index_provider.dart';
+import '../settings/jellyfin/jellyfin_availability_controller.dart';
 import '../settings/jellyfin/jellyfin_settings_controller.dart';
 import '../settings/jellyfin/jellyfin_settings_providers.dart';
 import '../settings/plex/plex_settings_controller.dart';
@@ -97,13 +99,15 @@ final providerReachabilityProvider = Provider<ProviderReachability>((ref) {
 final remoteSourceRouterProvider = Provider<RoutingPlayableUriResolver>((ref) {
   PlayableUriResolver reachabilityAware(
     PlayableUriResolver inner,
-    String? Function() providerKey,
-  ) {
+    String? Function() providerKey, {
+    void Function(ReachabilityStatus status)? onReachabilityObserved,
+  }) {
     return ReachabilityAwarePlayableUriResolver(
       inner: inner,
       providerKey: providerKey,
       reachability: ref.read(providerReachabilityProvider),
       connectivity: ref.read(connectivityServiceProvider),
+      onReachabilityObserved: onReachabilityObserved,
     );
   }
 
@@ -116,6 +120,15 @@ final remoteSourceRouterProvider = Provider<RoutingPlayableUriResolver>((ref) {
             ? null
             : 'jellyfin:${jellyfinAccountFingerprint(source.session)}';
       },
+      // Let the library learn from what the player just found out: the first
+      // track that can't reach the server flips Jellyfin to unreachable (and the
+      // first that succeeds flips it back) without waiting for the background
+      // poll. Purely a visibility signal — see
+      // [JellyfinAvailabilityController.noteReachability]; no catalog row,
+      // download, playlist or session is touched by it.
+      onReachabilityObserved: (ReachabilityStatus status) => ref
+          .read(jellyfinAvailabilityProvider.notifier)
+          .noteReachability(status),
     ),
     reachabilityAware(
       SubsonicPlayableUriResolver(() => ref.read(subsonicMusicSourceProvider)),

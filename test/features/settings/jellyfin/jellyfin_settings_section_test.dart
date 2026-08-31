@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:linthra/core/models/jellyfin_session.dart';
 import 'package:linthra/core/sources/jellyfin/jellyfin_exception.dart';
 import 'package:linthra/data/repositories/in_memory_jellyfin_session_store.dart';
 import 'package:linthra/data/repositories/jellyfin_session_store_provider.dart';
@@ -49,7 +50,72 @@ Future<void> _fillForm(
   await tester.pump();
 }
 
+/// Pumps the section with a *saved* session, so the connected view renders, and
+/// with a probe outcome the test chooses.
+Future<void> _pumpConnected(
+  WidgetTester tester, {
+  JellyfinException? verifyError,
+}) async {
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: <Override>[
+        jellyfinAuthenticatorProvider
+            .overrideWithValue(FakeJellyfinAuthenticator()),
+        jellyfinSessionStoreProvider.overrideWithValue(
+          InMemoryJellyfinSessionStore(
+            initialSession: const JellyfinSession(
+              baseUrl: 'http://192.168.22.1:8096',
+              userId: 'user-1',
+              accessToken: 'tok',
+              deviceId: 'device-1',
+              userName: 'alice',
+            ),
+          ),
+        ),
+        jellyfinClientProvider
+            .overrideWithValue(FakeJellyfinClient(verifyError: verifyError)),
+      ],
+      child: const MaterialApp(
+        home: Scaffold(body: JellyfinSettingsSection()),
+      ),
+    ),
+  );
+  // Let the session load and the availability probe settle.
+  for (int i = 0; i < 8; i++) {
+    await tester.pump();
+  }
+}
+
 void main() {
+  group('JellyfinSettingsSection availability notice', () {
+    testWidgets('explains an unreachable server without offering sign-out as '
+        'the fix', (tester) async {
+      await _pumpConnected(tester, verifyError: JellyfinException.notReachable());
+
+      // The user is told the tracks are hidden, not lost — the whole point of
+      // #536, where removing the connection was the only apparent way out.
+      expect(find.textContaining("can't be reached right now"), findsOneWidget);
+      expect(find.textContaining('Nothing was deleted'), findsOneWidget);
+      expect(find.textContaining('come back'), findsOneWidget);
+      // The connection itself is untouched, so signing out stays an option the
+      // user chooses rather than one they're pushed into.
+      expect(find.text('Sign out & clear'), findsOneWidget);
+    });
+
+    testWidgets('names a rejected sign-in as the reason', (tester) async {
+      await _pumpConnected(tester, verifyError: JellyfinException.unauthorized());
+
+      expect(find.textContaining('rejected this sign-in'), findsOneWidget);
+      expect(find.textContaining('Nothing was deleted'), findsOneWidget);
+    });
+
+    testWidgets('says nothing when the server answers', (tester) async {
+      await _pumpConnected(tester);
+
+      expect(find.textContaining('hidden from your library'), findsNothing);
+    });
+  });
+
   group('JellyfinSettingsSection', () {
     testWidgets('shows the connection form when disconnected', (tester) async {
       await _pumpSection(tester, authenticator: FakeJellyfinAuthenticator());

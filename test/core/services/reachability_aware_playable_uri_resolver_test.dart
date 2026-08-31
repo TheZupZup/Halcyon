@@ -55,12 +55,14 @@ ReachabilityAwarePlayableUriResolver _build({
   required ProviderReachability reachability,
   String? Function()? providerKey,
   ConnectivityService? connectivity,
+  void Function(ReachabilityStatus status)? onReachabilityObserved,
 }) {
   return ReachabilityAwarePlayableUriResolver(
     inner: inner,
     providerKey: providerKey ?? () => 'jellyfin',
     reachability: reachability,
     connectivity: connectivity,
+    onReachabilityObserved: onReachabilityObserved,
   );
 }
 
@@ -285,6 +287,126 @@ void main() {
       final ResolvedPlayable resolved = await sub.resolve(s101);
       expect(resolved.source, PlaybackSource.streamingDirect);
       expect(subInner.calls, 1);
+    });
+
+    group('reachability observer', () {
+      test('reports a successful resolve as reachable', () async {
+        final observed = <ReachabilityStatus>[];
+        final resolver = _build(
+          inner: _FakeInner(),
+          reachability: CachingProviderReachability(),
+          onReachabilityObserved: observed.add,
+        );
+
+        await resolver.resolve(_track);
+
+        expect(observed, <ReachabilityStatus>[ReachabilityStatus.reachable]);
+      });
+
+      test('reports a server-level failure so the library can hide the source',
+          () async {
+        final observed = <ReachabilityStatus>[];
+        final resolver = _build(
+          inner:
+              _FakeInner(failWith: PlaybackResolutionErrorKind.serverUnreachable),
+          reachability: CachingProviderReachability(),
+          onReachabilityObserved: observed.add,
+        );
+
+        await expectLater(
+          resolver.resolve(_track),
+          throwsA(isA<PlaybackResolutionException>()),
+        );
+
+        expect(
+            observed, <ReachabilityStatus>[ReachabilityStatus.serverUnreachable]);
+      });
+
+      test('reports an expired session as an auth failure, not an outage',
+          () async {
+        final observed = <ReachabilityStatus>[];
+        final resolver = _build(
+          inner: _FakeInner(failWith: PlaybackResolutionErrorKind.sessionExpired),
+          reachability: CachingProviderReachability(),
+          onReachabilityObserved: observed.add,
+        );
+
+        await expectLater(
+          resolver.resolve(_track),
+          throwsA(isA<PlaybackResolutionException>()),
+        );
+
+        expect(observed, <ReachabilityStatus>[ReachabilityStatus.authFailure]);
+      });
+
+      test('stays silent for a track-specific failure', () async {
+        // "This one track has no stream" says nothing about the server, so the
+        // library must not hide the whole source over it.
+        final observed = <ReachabilityStatus>[];
+        final resolver = _build(
+          inner:
+              _FakeInner(failWith: PlaybackResolutionErrorKind.streamUnavailable),
+          reachability: CachingProviderReachability(),
+          onReachabilityObserved: observed.add,
+        );
+
+        await expectLater(
+          resolver.resolve(_track),
+          throwsA(isA<PlaybackResolutionException>()),
+        );
+
+        expect(observed, isEmpty);
+      });
+
+      test('stays silent for the remembered-outage fast-fail', () async {
+        // Only live attempts teach anything; replaying a cached outage would
+        // just re-assert what the observer already knows.
+        final reachability = CachingProviderReachability()
+          ..record('jellyfin', ReachabilityStatus.serverUnreachable);
+        final observed = <ReachabilityStatus>[];
+        final resolver = _build(
+          inner: _FakeInner(),
+          reachability: reachability,
+          onReachabilityObserved: observed.add,
+        );
+
+        await expectLater(
+          resolver.resolve(_track),
+          throwsA(isA<PlaybackResolutionException>()),
+        );
+
+        expect(observed, isEmpty);
+      });
+
+      test('reports the device being offline', () async {
+        final observed = <ReachabilityStatus>[];
+        final resolver = _build(
+          inner: _FakeInner(),
+          reachability: CachingProviderReachability(),
+          connectivity: _FakeConnectivity(NetworkStatus.offline),
+          onReachabilityObserved: observed.add,
+        );
+
+        await expectLater(
+          resolver.resolve(_track),
+          throwsA(isA<PlaybackResolutionException>()),
+        );
+
+        expect(
+            observed, <ReachabilityStatus>[ReachabilityStatus.networkUnavailable]);
+      });
+
+      test('an observer that throws never breaks playback', () async {
+        final resolver = _build(
+          inner: _FakeInner(),
+          reachability: CachingProviderReachability(),
+          onReachabilityObserved: (_) => throw StateError('observer bug'),
+        );
+
+        final ResolvedPlayable resolved = await resolver.resolve(_track);
+
+        expect(resolved.source, PlaybackSource.streamingDirect);
+      });
     });
   });
 }

@@ -31,6 +31,7 @@ import '../features/player/cast/cast_providers.dart';
 import '../features/player/favorites_providers.dart';
 import '../features/player/lyrics_providers.dart';
 import '../features/player/player_providers.dart';
+import '../features/settings/jellyfin/jellyfin_availability_controller.dart';
 
 /// Production [ProviderContainer] overrides — the same list `main()` applies
 /// before bootstrap. Tests build their own override list and may include these
@@ -60,6 +61,7 @@ List<Override> productionApplicationOverrides({
     currentlyPlayingTrackOverride,
     nowPlayingOverride,
     secureJellyfinSessionStoreOverride,
+    jellyfinAvailabilityPollOverride,
     sharedPreferencesJellyfinAutoSyncStoreOverride,
     secureSubsonicSessionStoreOverride,
     sharedPreferencesSubsonicAutoSyncStoreOverride,

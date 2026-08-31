@@ -18,6 +18,7 @@ import '../features/appearance/theme_mode_controller.dart';
 import '../features/library/remote_library_refresher.dart';
 import '../features/onboarding/onboarding_controller.dart';
 import '../features/player/player_providers.dart';
+import '../features/settings/jellyfin/jellyfin_availability_controller.dart';
 import '../features/support/support_actions_provider.dart';
 import '../features/support/supporter_entitlement.dart';
 import 'application_lifecycle.dart';
@@ -121,6 +122,11 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
         controller.onAppResumed();
       }
       ref.read(remoteLibraryRefresherProvider).refresh();
+      // Re-probe the configured music server: coming back to the app is the
+      // moment a LAN server the user walked away from is most likely reachable
+      // again. Requirement of #536 — the library restores itself, with no
+      // reconnect and no rescan, because nothing was removed to begin with.
+      unawaited(ref.read(jellyfinAvailabilityProvider.notifier).refresh());
     }
     if (state == AppLifecycleState.detached) {
       // Desktop only. On Android `detached` also fires when the Activity is

@@ -87,6 +87,20 @@ lib/
 - **`MusicLibraryRepository`** (`core/repositories/`) — the local SQLite cache
   the UI reads from. Sources *sync into* it; the UI never talks to a source
   directly. This is what keeps the app fast and fully offline.
+- **Source availability layer** (`core/sources/source_availability.dart`,
+  `core/catalog/available_tracks.dart`) — separates *configured* from
+  *reachable*. A saved server session is not a promise that the server can be
+  reached: a LAN-only address is unreachable the moment the device leaves the
+  network. Each source carries a `SourceAvailability`
+  (`notConfigured` / `checking` / `available` / `unreachable` /
+  `authenticationError`), established by a cheap session probe on startup, on app
+  resume, on a background poll, and from what the playback path already
+  discovered. `selectAvailableTracks` then narrows the stored catalog to the
+  *active library* before de-duplication, so an unreachable server's streamed
+  tracks drop out of every browse surface at once — while its downloaded copies
+  stay playable and local music is untouched. It is a **view, never a removal**:
+  no catalog row, playlist, favourite, download, or session is touched, so the
+  full library returns on its own when the server answers again.
 - **Unified library layer** (`core/catalog/track_unifier.dart`) — a pure,
   display-time transform that collapses the per-provider rows the repository
   stores (*source tracks*) into one *logical track* per song, keeping every copy
