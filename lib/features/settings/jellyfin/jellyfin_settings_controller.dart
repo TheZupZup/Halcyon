@@ -13,6 +13,7 @@ import '../../../core/sources/jellyfin/jellyfin_music_source.dart';
 import '../../../core/sources/jellyfin/jellyfin_server_capabilities.dart';
 import '../../../core/sources/jellyfin/jellyfin_track_mapper.dart';
 import '../../../core/sources/music_provider.dart';
+import '../../../core/sources/source_availability.dart';
 import '../../../data/repositories/favorites_repository_provider.dart';
 import '../../../data/repositories/jellyfin_session_store_provider.dart';
 import '../../../data/repositories/playlist_repository_provider.dart';
@@ -261,11 +262,18 @@ class JellyfinSettingsController extends Notifier<JellyfinSettingsState> {
   /// A secret-free diagnostics report for the "Copy Jellyfin diagnostics"
   /// action, assembled from display-safe state only — never the token,
   /// password, or a full authenticated URL (the address is reduced to its host).
-  String diagnosticsReport() {
+  ///
+  /// [availability] is the live result of the last reachability probe, passed in
+  /// by the caller (the settings section) rather than read here, so this
+  /// controller keeps no dependency on the availability notifier that watches
+  /// it. When it is supplied, a configured connection reports what the server
+  /// actually answered instead of a flat "connected" — the whole point of
+  /// separating *configured* from *reachable*.
+  String diagnosticsReport({SourceAvailability? availability}) {
     final String? version = state.serverVersion;
     return JellyfinDiagnostics.describe(
       appVersion: AppInfo.version,
-      connectionState: _connectionStateLabel(),
+      connectionState: _connectionStateLabel(availability),
       serverHost: JellyfinDiagnostics.hostOnly(state.baseUrl),
       serverName: state.serverName,
       serverVersion: version,
@@ -276,10 +284,12 @@ class JellyfinSettingsController extends Notifier<JellyfinSettingsState> {
     );
   }
 
-  String _connectionStateLabel() {
+  String _connectionStateLabel(SourceAvailability? availability) {
     switch (state.phase) {
       case JellyfinConnectionPhase.connected:
-        return 'connected';
+        return availability == null
+            ? 'connected'
+            : configuredSourceAvailabilityLabel(availability);
       case JellyfinConnectionPhase.tested:
         return 'tested (not signed in)';
       case JellyfinConnectionPhase.testing:

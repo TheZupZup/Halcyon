@@ -3,18 +3,24 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/catalog/logical_track.dart';
 import '../../core/catalog/track_unifier.dart';
 import '../../core/models/track.dart';
-import 'library_controller.dart';
+import 'source_availability_providers.dart';
 import 'source_preference_controller.dart';
 
 /// The library as unified [LogicalTrack]s: one item per song, with every
 /// provider copy retained as an ordered playback candidate.
 ///
 /// This is the single place display-level de-duplication happens. It recomputes
-/// whenever the catalog reloads (scan, sync, removal) or the source preference
-/// changes, so every browse surface that reads it stays consistent. The
-/// repository still stores all per-provider rows untouched — nothing is deleted.
+/// whenever the catalog reloads (scan, sync, removal), the source preference
+/// changes, or a source's reachability changes, so every browse surface that
+/// reads it stays consistent. The repository still stores all per-provider rows
+/// untouched — nothing is deleted.
+///
+/// It unifies the **active** library ([activeLibraryTracksProvider]) rather than
+/// the raw catalog, so a temporarily unreachable server's copies drop out of
+/// candidate lists too: a song that also exists locally keeps playing from the
+/// local copy instead of resolving to a server that isn't there.
 final libraryLogicalTracksProvider = Provider<List<LogicalTrack>>((ref) {
-  final List<Track> tracks = ref.watch(libraryControllerProvider).tracks;
+  final List<Track> tracks = ref.watch(activeLibraryTracksProvider);
   final priority = ref.watch(librarySourcePriorityProvider);
   return unifyTracks(tracks, priority);
 });

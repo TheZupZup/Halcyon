@@ -22,6 +22,7 @@ class AppDiagnosticsData {
     this.subsonicState,
     this.subsonicHost,
     this.libraryTrackCount,
+    this.unavailableTrackCount,
     this.localFolderSelected,
     this.localPersistedPermission,
     this.localScanFilesVisited,
@@ -60,8 +61,15 @@ class AppDiagnosticsData {
   /// otherwise — never a guess.
   final String? deviceModel;
 
-  /// The Jellyfin connection state label (e.g. `connected`), when Jellyfin has
-  /// been touched at all. Null when there is nothing to report.
+  /// The Jellyfin **availability** label — what the last probe actually found
+  /// (`connected`, `configured (unreachable)`, `configured (auth error)`,
+  /// `checking`, `disconnected`) — when Jellyfin has been touched at all. Null
+  /// when there is nothing to report.
+  ///
+  /// This is deliberately not "is a session saved?". A saved session for a
+  /// LAN-only address still reads `configured (unreachable)` from a coffee shop,
+  /// because reporting `connected` there is what sent bug reports chasing a
+  /// playback bug that was really a network one.
   final String? jellyfinState;
 
   /// The Jellyfin server address. Rendered host-only; never a full URL.
@@ -74,8 +82,17 @@ class AppDiagnosticsData {
   /// The Subsonic/Navidrome server address. Rendered host-only.
   final String? subsonicHost;
 
-  /// How many tracks are in the local catalog, when known.
+  /// How many tracks are in the local catalog, when known. Counts every stored
+  /// row, including those a currently-unreachable source has temporarily hidden —
+  /// nothing is deleted when a server goes away, so the stored count doesn't
+  /// change either.
   final int? libraryTrackCount;
+
+  /// How many of those stored tracks the active library is currently holding
+  /// back because their source is unreachable, when known. `0` in the ordinary
+  /// case. Reported so a "half my library vanished" report shows at a glance
+  /// that the tracks are hidden, not lost.
+  final int? unavailableTrackCount;
 
   /// Whether a local music folder is currently selected, when known. The folder
   /// path/URI itself is never carried — only its presence.
@@ -210,6 +227,9 @@ abstract final class AppDiagnostics {
       if (subsonicHost != null) 'Subsonic host: $subsonicHost',
       if (data.libraryTrackCount != null)
         'Library tracks: ${data.libraryTrackCount}',
+      if (data.unavailableTrackCount != null && data.unavailableTrackCount! > 0)
+        'Unavailable tracks (hidden, not deleted): '
+            '${data.unavailableTrackCount}',
       if (data.localFolderSelected != null)
         'Local folder: ${data.localFolderSelected! ? 'selected' : 'not selected'}',
       if (data.localPersistedPermission != null)

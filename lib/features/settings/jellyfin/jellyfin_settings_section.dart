@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/dimens.dart';
 import '../../../core/sources/jellyfin/jellyfin_server_capabilities.dart';
+import '../../../core/sources/source_availability.dart';
 import '../../library/remote_library_refresher.dart';
+import 'jellyfin_availability_controller.dart';
 import 'jellyfin_settings_controller.dart';
 import 'jellyfin_settings_state.dart';
 import 'jellyfin_sync_controller.dart';
@@ -98,9 +100,12 @@ class _JellyfinSettingsSectionState
   /// paste it into a bug report. The report is assembled by the controller and,
   /// by construction, carries no token, password, or full authenticated URL.
   Future<void> _copyDiagnostics() async {
-    final String report = ref
-        .read(jellyfinSettingsControllerProvider.notifier)
-        .diagnosticsReport();
+    final String report =
+        ref.read(jellyfinSettingsControllerProvider.notifier).diagnosticsReport(
+              // The live probe result, so a saved session for a server the device
+              // can't currently reach reports that instead of "connected".
+              availability: ref.read(jellyfinAvailabilityProvider).status,
+            );
     await Clipboard.setData(ClipboardData(text: report));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -108,6 +113,31 @@ class _JellyfinSettingsSectionState
         content: Text('Jellyfin diagnostics copied (no password or token).'),
       ),
     );
+  }
+
+  /// The line explaining that a *configured* server can't be reached right now,
+  /// or `null` when there's nothing to explain.
+  ///
+  /// This is what closes the loop for the user in #536: without it, Jellyfin
+  /// tracks quietly leaving the library would look like data loss. It says
+  /// plainly that nothing was deleted and that the music comes back on its own,
+  /// so nobody reaches for "sign out" to get a usable library again.
+  static String? _availabilityNotice(SourceAvailability availability) {
+    switch (availability) {
+      case SourceAvailability.unreachable:
+        return "Your Jellyfin server can't be reached right now, so its tracks "
+            'are hidden from your library. Nothing was deleted — they come back '
+            'automatically when the server is reachable again. Downloaded '
+            'tracks stay playable.';
+      case SourceAvailability.authenticationError:
+        return 'Your Jellyfin server rejected this sign-in, so its tracks are '
+            'hidden from your library. Nothing was deleted — sign in again to '
+            'restore them. Downloaded tracks stay playable.';
+      case SourceAvailability.available:
+      case SourceAvailability.checking:
+      case SourceAvailability.notConfigured:
+        return null;
+    }
   }
 
   /// Show the diagnostics action once there's something worth reporting: a live
@@ -123,6 +153,10 @@ class _JellyfinSettingsSectionState
         ref.watch(jellyfinSettingsControllerProvider);
     final JellyfinSyncState syncState =
         ref.watch(jellyfinSyncControllerProvider);
+    // Why the library looks short right now. Only shown for a *proven* failure,
+    // so a connection that is merely being re-checked says nothing.
+    final String? availabilityNotice =
+        _availabilityNotice(ref.watch(jellyfinAvailabilityProvider).status);
     final ThemeData theme = Theme.of(context);
 
     return Card(
@@ -157,6 +191,10 @@ class _JellyfinSettingsSectionState
               )
             else
               _buildForm(theme, state),
+            if (state.isConnected && availabilityNotice != null) ...[
+              const SizedBox(height: AppSpacing.md),
+              _StatusLine(message: availabilityNotice, isError: true),
+            ],
             if (state.errorMessage != null) ...[
               const SizedBox(height: AppSpacing.md),
               _StatusLine(message: state.errorMessage!, isError: true),

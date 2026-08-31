@@ -43,10 +43,12 @@ class ReachabilityAwarePlayableUriResolver implements PlayableUriResolver {
     required String? Function() providerKey,
     required ProviderReachability reachability,
     ConnectivityService? connectivity,
+    void Function(ReachabilityStatus status)? onReachabilityObserved,
   })  : _inner = inner,
         _providerKey = providerKey,
         _reachability = reachability,
-        _connectivity = connectivity;
+        _connectivity = connectivity,
+        _onReachabilityObserved = onReachabilityObserved;
 
   final PlayableUriResolver _inner;
 
@@ -61,6 +63,29 @@ class ReachabilityAwarePlayableUriResolver implements PlayableUriResolver {
   /// connectivity backend is wired) the offline short-circuit is simply skipped
   /// and reachability is judged purely from probe outcomes.
   final ConnectivityService? _connectivity;
+
+  /// Optional observer told what each *live* attempt learned about the server,
+  /// so the app's source-availability state can follow the truth the playback
+  /// path already discovered instead of waiting out a background poll.
+  ///
+  /// Deliberately narrow: it is handed a [ReachabilityStatus] and nothing else —
+  /// no track, no catalog handle — so an observer can update a visibility flag
+  /// and cannot be grown into something that removes library rows off the back
+  /// of a per-track resolution error. Never fired for the remembered-outage
+  /// fast-fail (step 2), which teaches nothing new. Failures are swallowed: an
+  /// observer must never be able to break playback.
+  final void Function(ReachabilityStatus status)? _onReachabilityObserved;
+
+  void _observe(ReachabilityStatus status) {
+    final void Function(ReachabilityStatus)? observer = _onReachabilityObserved;
+    if (observer == null) return;
+    try {
+      observer(status);
+    } catch (_) {
+      // An observer is a listener, not a participant; its failure is not the
+      // player's problem.
+    }
+  }
 
   @override
   bool handles(Track track) => _inner.handles(track);
@@ -80,6 +105,7 @@ class ReachabilityAwarePlayableUriResolver implements PlayableUriResolver {
     //    returns this is false again, so a reconnect is never blocked by a stale
     //    "offline" the way a cached value would be.
     if (await _isOffline()) {
+      _observe(ReachabilityStatus.networkUnavailable);
       throw _failFast(ReachabilityStatus.networkUnavailable);
     }
 
@@ -97,11 +123,15 @@ class ReachabilityAwarePlayableUriResolver implements PlayableUriResolver {
     try {
       final ResolvedPlayable resolved = await _inner.resolve(track);
       _reachability.record(key, ReachabilityStatus.reachable);
+      _observe(ReachabilityStatus.reachable);
       return resolved;
     } on PlaybackResolutionException catch (error) {
       final ReachabilityStatus? status =
           reachabilityFromPlaybackError(error.kind);
-      if (status != null) _reachability.record(key, status);
+      if (status != null) {
+        _reachability.record(key, status);
+        _observe(status);
+      }
       rethrow;
     }
   }
