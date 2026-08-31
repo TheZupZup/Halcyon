@@ -143,7 +143,7 @@ import sys
 import urllib.request
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from toolchain_pins import (
     TOOL_NAMES,

@@ -1,0 +1,40 @@
+# Ruff configuration for Linthra's Python tooling.
+#
+# Linthra is a Flutter app, not a Python package: there is no library to build,
+# publish or install, so this lives in ruff.toml rather than a root
+# pyproject.toml, which would suggest a Python distribution that does not exist.
+#
+# The Python that is linted is the developer/release tooling:
+#   * scripts/            — release, toolchain and repository-integrity checks
+#   * tool/branding/      — icon generation
+#   * tools/large_library/ — SQLite fixture generation and benchmarks
+#
+# Local twin of the CI job (.github/workflows/python-lint.yml):
+#   ruff check scripts tool tools
+#   ruff format --check scripts tool tools
+
+# Matches the Python that every Linthra workflow sets up (actions/setup-python
+# with python-version "3.11") and that the scripts are run with locally.
+target-version = "py311"
+
+# Nothing here is Python, but an explicit exclude keeps a bare `ruff check .`
+# from ever wandering into vendored or generated trees if Python appears in
+# one later.
+extend-exclude = [
+  "build",
+  "third_party",
+]
+
+[lint]
+# Ruff's default set (E4/E7/E9 pycodestyle + F pyflakes) plus two rules that
+# catch real problems rather than taste:
+#   I  — import sorting, so import blocks stop drifting between scripts.
+#   B  — flake8-bugbear, for genuine bug shapes (mutable default arguments,
+#        loop-variable capture in closures, ...).
+#
+# Deliberately not selected: E501 (line-too-long). `ruff format` already owns
+# line width, and E501 only ever fires on the lines the formatter cannot split
+# (long URLs, literal SHA-256 digests, error strings quoted verbatim from the
+# tools they wrap), so enabling it would mean scattering `# noqa` through the
+# existing scripts for no correctness gain.
+select = ["E4", "E7", "E9", "F", "I", "B"]
