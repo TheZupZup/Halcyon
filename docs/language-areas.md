@@ -38,7 +38,7 @@ Keep it small. Anything that could live in Dart should — the runner exists to 
 
 Python should remove repetitive maintainer work or create useful developer fixtures. Linthra already uses Python in release/branding tooling; `tools/large_library/` adds deterministic 200k-track SQLite generation and query benchmarks using only the standard library. `scripts/check_linux_runner.py` is a good shape to copy: a config invariant that no compiler would catch, checked against its real sources of truth, with unit tests beside it.
 
-Ruff lints and format-checks this code on every PR that touches it. Run `ruff check .` and `ruff format --check .` from the repository root before pushing; the configuration is in `ruff.toml` and the setup is described in [development.md](development.md#python-tooling-checks-ruff).
+Ruff lints and format-checks this code on every PR that touches it. Run `ruff check scripts tool tools` and `ruff format --check scripts tool tools` before pushing — those paths are the linted scope, and are what CI passes. The rules are in `ruff.toml` and the setup is described in [development.md](development.md#python-tooling-checks-ruff).
 
 ## SQL / database performance
 

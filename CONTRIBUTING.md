@@ -64,8 +64,8 @@ For the other areas:
 - `tools/large_library/` contains the Python and SQLite large-library tooling.
 - Python tooling (`scripts/`, `tool/`, `tools/`) is checked with
   [Ruff](https://docs.astral.sh/ruff/). Before pushing a Python change, run
-  `ruff check .` and `ruff format --check .` from the repository root — the same
-  two commands CI runs. Details are in
+  `ruff check scripts tool tools` and `ruff format --check scripts tool tools` —
+  the same two commands, with the same paths, that CI runs. Details are in
   [docs/development.md](./docs/development.md#python-tooling-checks-ruff).
 
 ## Before you start

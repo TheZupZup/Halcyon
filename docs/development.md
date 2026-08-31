@@ -277,16 +277,20 @@ in `tool/branding/`, and the large-library fixtures and benchmarks in
 files. Run the same two checks locally:
 
 ```bash
-pip install 'ruff==0.15.8'   # the version CI pins
-ruff check .                 # lint
-ruff format --check .        # formatting (drop --check to apply)
+pip install 'ruff==0.15.8'                  # the version CI pins
+ruff check scripts tool tools              # lint
+ruff format --check scripts tool tools     # formatting (drop --check to apply)
 ```
 
-Configuration lives in `ruff.toml` at the repository root. It scopes Ruff to the
-three Python trees above, so running the commands bare from the root reports
-exactly what CI gates on. CI pins the Ruff version for the same reason it pins
-Flutter: a new release can add rules or change formatter output, and that should
-land as its own reviewable bump rather than turning an unrelated PR red.
+Pass those three paths — they are what CI passes, and they are what defines the
+linted scope. `ruff.toml` at the repository root holds the rules and a few
+excludes, but it does not restrict Ruff to those trees, so a bare `ruff check .`
+is a *different* check: it would also report a Python file added elsewhere in the
+repository, which this workflow never looks at.
+
+CI pins the Ruff version for the same reason it pins Flutter: a new release can
+add rules or change formatter output, and that should land as its own reviewable
+bump rather than turning an unrelated PR red.
 
 ### Generating Drift files in CI
 

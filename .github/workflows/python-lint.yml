@@ -10,11 +10,10 @@ name: Python lint
 # through .github/actions/setup-flutter. That guard is right to be text-based,
 # and this job genuinely does not need the SDK.
 #
-# Only the three real Python trees are passed to Ruff, so nothing vendored or
-# generated can be linted by accident. ruff.toml excludes the same trees, which
-# means the local twin of this job is either the two commands below or simply
-# `ruff check .` and `ruff format --check .` from the repository root — both
-# report exactly what this job gates on.
+# The linted scope is exactly the three paths passed on the command line below,
+# so nothing vendored or generated can be linted by accident. ruff.toml sets the
+# rules, not the scope — it only adds excludes — so the local twin of this job is
+# the two commands below with those same paths, not a bare `ruff check .`.
 on:
   pull_request:
     paths:
