@@ -74,13 +74,15 @@ def version_from_tag(tag):
 
     if minor > _MAX_MINOR:
         raise VersionError(
-            'Minor version {} in tag "{}" exceeds the supported range '
-            "(0..{}).".format(minor, tag, _MAX_MINOR)
+            'Minor version {} in tag "{}" exceeds the supported range (0..{}).'.format(
+                minor, tag, _MAX_MINOR
+            )
         )
     if patch > _MAX_PATCH:
         raise VersionError(
-            'Patch version {} in tag "{}" exceeds the supported range '
-            "(0..{}).".format(patch, tag, _MAX_PATCH)
+            'Patch version {} in tag "{}" exceeds the supported range (0..{}).'.format(
+                patch, tag, _MAX_PATCH
+            )
         )
 
     if tier is None:
@@ -96,12 +98,7 @@ def version_from_tag(tag):
         rank = _TIER_BASE[tier] + pre_n
         name = "{}.{}.{}-{}.{}".format(major, minor, patch, tier, pre_n)
 
-    code = (
-        major * _MAJOR_WEIGHT
-        + minor * _MINOR_WEIGHT
-        + patch * _PATCH_WEIGHT
-        + rank
-    )
+    code = major * _MAJOR_WEIGHT + minor * _MINOR_WEIGHT + patch * _PATCH_WEIGHT + rank
     if code <= 0 or code > _MAX_VERSION_CODE:
         raise VersionError(
             'Derived versionCode {} for tag "{}" is outside the valid Android '
@@ -122,9 +119,7 @@ def update_pubspec(path, version_name, version_code):
     version_line = re.compile(r"^version:[ \t]*(\S+)[ \t]*$", re.MULTILINE)
     match = version_line.search(text)
     if not match:
-        raise VersionError(
-            "pubspec.yaml at {} has no `version:` line.".format(path)
-        )
+        raise VersionError("pubspec.yaml at {} has no `version:` line.".format(path))
     if match.group(1) == full:
         return False
     new_text = version_line.sub("version: {}".format(full), text, count=1)
@@ -140,14 +135,10 @@ def update_app_info(path, version_name):
     """
     if not path.exists():
         raise VersionError(
-            "lib/core/app_info.dart not found at {}; refusing to guess.".format(
-                path
-            )
+            "lib/core/app_info.dart not found at {}; refusing to guess.".format(path)
         )
     text = path.read_text()
-    pattern = re.compile(
-        r"(static\s+const\s+String\s+_devVersionName\s*=\s*)'[^']*'"
-    )
+    pattern = re.compile(r"(static\s+const\s+String\s+_devVersionName\s*=\s*)'[^']*'")
     matches = pattern.findall(text)
     if not matches:
         raise VersionError(

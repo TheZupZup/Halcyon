@@ -1,0 +1,63 @@
+name: Python lint
+
+# Fast lint/format feedback for Linthra's Python tooling, so the Python under
+# scripts/, tool/ and tools/ gets the same kind of check the Dart format and
+# analysis steps in ci.yml already give Dart.
+#
+# Naming those steps by their literal command strings would trip the guardrail
+# in test/tooling/toolchain_pins_test.dart, which reads every workflow as text
+# and requires anything that looks like it runs the Flutter SDK to install it
+# through .github/actions/setup-flutter. That guard is right to be text-based,
+# and this job genuinely does not need the SDK.
+#
+# The linted scope is exactly the three paths passed on the command line below,
+# so nothing vendored or generated can be linted by accident. ruff.toml sets the
+# rules, not the scope — it only adds excludes — so the local twin of this job is
+# the two commands below with those same paths, not a bare `ruff check .`.
+on:
+  pull_request:
+    paths:
+      - "ruff.toml"
+      - ".github/workflows/python-lint.yml"
+      - "scripts/**.py"
+      - "tool/**.py"
+      - "tools/**.py"
+  push:
+    branches: [main]
+    paths:
+      - "ruff.toml"
+      - ".github/workflows/python-lint.yml"
+      - "scripts/**.py"
+      - "tool/**.py"
+      - "tools/**.py"
+
+permissions:
+  contents: read
+
+jobs:
+  ruff:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Same Python every other Linthra workflow sets up, and the version
+      # ruff.toml targets.
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      # Pinned exactly. A new Ruff release can add rules or change formatter
+      # output, which would turn an unrelated PR red for reasons its author did
+      # not cause; bumping the pin is then its own reviewable change, the same
+      # way .flutter-version is.
+      - name: Install Ruff
+        run: python3 -m pip install --quiet "ruff==0.15.8"
+
+      - name: Lint
+        run: ruff check scripts tool tools
+
+      - name: Verify formatting
+        run: ruff format --check scripts tool tools

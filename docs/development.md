@@ -267,6 +267,31 @@ SDK locally avoids spurious `dart format` diffs from formatter changes in newer
 Dart releases. The automatic `ci.yml` workflow is **code-quality only**; native
 builds and optional release signing live in separate workflows.
 
+### Python tooling checks (Ruff)
+
+Linthra's Python — the release/toolchain scripts in `scripts/`, icon generation
+in `tool/branding/`, and the large-library fixtures and benchmarks in
+`tools/large_library/` — is linted and format-checked by
+[Ruff](https://docs.astral.sh/ruff/) in the **Python lint** workflow
+(`.github/workflows/python-lint.yml`), which runs on every PR that touches those
+files. Run the same two checks locally:
+
+```bash
+pip install 'ruff==0.15.8'                  # the version CI pins
+ruff check scripts tool tools              # lint
+ruff format --check scripts tool tools     # formatting (drop --check to apply)
+```
+
+Pass those three paths — they are what CI passes, and they are what defines the
+linted scope. `ruff.toml` at the repository root holds the rules and a few
+excludes, but it does not restrict Ruff to those trees, so a bare `ruff check .`
+is a *different* check: it would also report a Python file added elsewhere in the
+repository, which this workflow never looks at.
+
+CI pins the Ruff version for the same reason it pins Flutter: a new release can
+add rules or change formatter output, and that should land as its own reviewable
+bump rather than turning an unrelated PR red.
+
 ### Generating Drift files in CI
 
 Drift/SQLite persistence relies on `build_runner` code generation, which can be

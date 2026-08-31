@@ -24,6 +24,7 @@ and is read as a git blob without checking out the PR tree. The checker itself
 analyses git objects only; the working tree remains on the trusted default
 branch throughout.
 """
+
 from __future__ import annotations
 
 import argparse

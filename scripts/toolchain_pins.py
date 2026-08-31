@@ -241,9 +241,7 @@ def replace_pin(text: str, name: str, version: str) -> str:
     """
     t = tool(name)
     find_pin(text, name)  # raises unless there is exactly one place to edit
-    return t.pattern.sub(
-        lambda m: f"{m.group(1)}{version}{m.group(3)}", text, count=1
-    )
+    return t.pattern.sub(lambda m: f"{m.group(1)}{version}{m.group(3)}", text, count=1)
 
 
 def read_pin_file(repo_root: Path, name: str) -> str:

@@ -57,7 +57,9 @@ def load_voice(path: Path | None) -> dict[str, Any]:
     voice.update(custom)
     max_bullets = voice.get("max_bullets")
     if not isinstance(max_bullets, int) or not 1 <= max_bullets <= 10:
-        raise AnnouncementError("voice config max_bullets must be an integer from 1 to 10")
+        raise AnnouncementError(
+            "voice config max_bullets must be an integer from 1 to 10"
+        )
     return voice
 
 
@@ -223,9 +225,7 @@ def write_outputs(announcement: dict[str, str], output_dir: Path) -> None:
     (output_dir / "title.txt").write_text(
         announcement["title"] + "\n", encoding="utf-8"
     )
-    (output_dir / "body.md").write_text(
-        announcement["body"] + "\n", encoding="utf-8"
-    )
+    (output_dir / "body.md").write_text(announcement["body"] + "\n", encoding="utf-8")
     (output_dir / "announcement.json").write_text(
         json.dumps(announcement, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",

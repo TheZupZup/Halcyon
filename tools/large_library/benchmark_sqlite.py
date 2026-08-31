@@ -33,7 +33,9 @@ QUERIES: tuple[tuple[str, str, tuple[object, ...]], ...] = (
 )
 
 
-def query_plan(connection: sqlite3.Connection, sql: str, params: tuple[object, ...]) -> str:
+def query_plan(
+    connection: sqlite3.Connection, sql: str, params: tuple[object, ...]
+) -> str:
     rows = connection.execute(f"EXPLAIN QUERY PLAN {sql}", params).fetchall()
     return " | ".join(str(row[3]) for row in rows)
 
@@ -78,8 +80,7 @@ def main() -> None:
             )
             results.append((name, average_ms, p95_ms, max_ms))
             print(
-                f"{name:16} avg={average_ms:8.3f} ms "
-                f"p95={p95_ms:8.3f} ms plan={plan}"
+                f"{name:16} avg={average_ms:8.3f} ms p95={p95_ms:8.3f} ms plan={plan}"
             )
 
             # Every benchmark query has a matching index in schema.sql. A full
@@ -97,9 +98,7 @@ def main() -> None:
 
         total_average_ms = sum(average_ms for _, average_ms, _, _ in results)
         average_query_ms = total_average_ms / len(results)
-        slowest_name, _, _, slowest_max_ms = max(
-            results, key=lambda result: result[3]
-        )
+        slowest_name, _, _, slowest_max_ms = max(results, key=lambda result: result[3])
 
         print()
         print("benchmark summary")

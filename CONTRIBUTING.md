@@ -62,6 +62,11 @@ For the other areas:
   debugging it locally — on Fedora Atomic (Kinoite/Silverblue) or anywhere
   else — is [docs/flatpak-development.md](./docs/flatpak-development.md).
 - `tools/large_library/` contains the Python and SQLite large-library tooling.
+- Python tooling (`scripts/`, `tool/`, `tools/`) is checked with
+  [Ruff](https://docs.astral.sh/ruff/). Before pushing a Python change, run
+  `ruff check scripts tool tools` and `ruff format --check scripts tool tools` —
+  the same two commands, with the same paths, that CI runs. Details are in
+  [docs/development.md](./docs/development.md#python-tooling-checks-ruff).
 
 ## Before you start
 

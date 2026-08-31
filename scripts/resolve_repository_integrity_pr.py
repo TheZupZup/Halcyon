@@ -28,6 +28,7 @@ their own pull request.
 Every unresolved, ambiguous, or mismatched case exits non-zero and no comment is
 written. There is no best-effort path.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -190,7 +191,11 @@ def _login(value: object, field: str) -> str:
 
 
 def _identifier(value: object, field: str, maximum: int) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= maximum:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 1 <= value <= maximum
+    ):
         raise BindingError(f"invalid {field}")
     return value
 
@@ -199,10 +204,16 @@ def trusted_run(event: object, repository: str) -> RunFacts:
     """Establish that this event is the scanner's own run in this repository."""
     payload = _mapping(event, "workflow event")
     run = _mapping(payload.get("workflow_run"), "workflow run")
-    _exact(_mapping(payload.get("repository"), "event repository").get("full_name"),
-           repository, "event repository")
-    _exact(_mapping(run.get("repository"), "run repository").get("full_name"),
-           repository, "run repository")
+    _exact(
+        _mapping(payload.get("repository"), "event repository").get("full_name"),
+        repository,
+        "event repository",
+    )
+    _exact(
+        _mapping(run.get("repository"), "run repository").get("full_name"),
+        repository,
+        "run repository",
+    )
     _exact(run.get("event"), SCANNER_EVENT, "triggering event")
     _exact(run.get("path"), SCANNER_WORKFLOW_PATH, "scanner workflow path")
     _exact(run.get("name"), SCANNER_WORKFLOW_NAME, "scanner workflow name")
@@ -211,16 +222,22 @@ def trusted_run(event: object, repository: str) -> RunFacts:
     if not isinstance(pull_requests, list):
         raise BindingError("invalid pull request list")
     numbers = tuple(
-        _identifier(_mapping(entry, "pull request").get("number"), "pull request number",
-                    MAX_PR_NUMBER)
+        _identifier(
+            _mapping(entry, "pull request").get("number"),
+            "pull request number",
+            MAX_PR_NUMBER,
+        )
         for entry in pull_requests
     )
     return RunFacts(
         run_id=_identifier(run.get("id"), "run id", 2**53 - 1),
         head_sha=_sha(run.get("head_sha"), "run head SHA"),
         head_repository=_repository(
-            _mapping(run.get("head_repository"), "run head repository").get("full_name"),
-            "run head repository"),
+            _mapping(run.get("head_repository"), "run head repository").get(
+                "full_name"
+            ),
+            "run head repository",
+        ),
         head_branch=_branch(run.get("head_branch"), "run head branch"),
         repository=repository,
         pull_requests=numbers,
@@ -279,9 +296,15 @@ def resolve(event: object, payload: object, repository: str) -> Binding:
     else:
         raise BindingError("workflow run identifies more than one PR")
 
-    return Binding(pr_number=pr_number, head_sha=head_sha, head_repository=head_repository,
-                   head_branch=run.head_branch, repository=repository, run_id=run.run_id,
-                   pr_source=source)
+    return Binding(
+        pr_number=pr_number,
+        head_sha=head_sha,
+        head_repository=head_repository,
+        head_branch=run.head_branch,
+        repository=repository,
+        run_id=run.run_id,
+        pr_source=source,
+    )
 
 
 def _head_repository_of(pull_request: dict) -> str | None:
@@ -325,15 +348,22 @@ def select_candidate(candidates: object, binding: Binding) -> int:
         pull_request = _mapping(entry, "associated pull request")
         base = pull_request.get("base")
         base_repo = base.get("repo") if isinstance(base, dict) else None
-        if not isinstance(base_repo, dict) or base_repo.get("full_name") != binding.repository:
+        if (
+            not isinstance(base_repo, dict)
+            or base_repo.get("full_name") != binding.repository
+        ):
             continue
         if _head_repository_of(pull_request) != binding.head_repository:
             continue
-        numbers.add(_identifier(pull_request.get("number"), "associated PR number",
-                                MAX_PR_NUMBER))
+        numbers.add(
+            _identifier(
+                pull_request.get("number"), "associated PR number", MAX_PR_NUMBER
+            )
+        )
     if len(numbers) != 1:
         raise BindingError(
-            f"{len(numbers)} pull requests match this run's head; refusing to guess")
+            f"{len(numbers)} pull requests match this run's head; refusing to guess"
+        )
     resolved = numbers.pop()
     if resolved != binding.pr_number:
         raise BindingError("report PR number is not the PR this run's head belongs to")
@@ -350,14 +380,21 @@ def verify_pull_request(pull_request: object, binding: Binding) -> tuple[bool, B
     if _identifier(live.get("number"), "PR number", MAX_PR_NUMBER) != binding.pr_number:
         raise BindingError("API returned a different pull request")
     base = _mapping(live.get("base"), "PR base")
-    if _mapping(base.get("repo"), "PR base repository").get("full_name") != binding.repository:
+    if (
+        _mapping(base.get("repo"), "PR base repository").get("full_name")
+        != binding.repository
+    ):
         raise BindingError("pull request does not belong to this repository")
     if _head_repository_of(live) != binding.head_repository:
-        raise BindingError("pull request head repository does not match the scanned head")
+        raise BindingError(
+            "pull request head repository does not match the scanned head"
+        )
     head = _mapping(live.get("head"), "PR head")
     if binding.head_branch is not None:
         if _branch(head.get("ref"), "PR head branch") != binding.head_branch:
-            raise BindingError("pull request head branch does not match the scanned head")
+            raise BindingError(
+                "pull request head branch does not match the scanned head"
+            )
     head_sha = _sha(head.get("sha"), "PR head SHA")
     # Both are read from the live pull request, so the re-derivation the reporter
     # performs cannot be steered by anything the scanner run wrote.
@@ -383,7 +420,9 @@ def verify_pull_request(pull_request: object, binding: Binding) -> tuple[bool, B
     bound = replace(
         binding,
         base_sha=_sha(base.get("sha"), "PR base SHA"),
-        pr_author=_login(_mapping(live.get("user"), "PR author").get("login"), "PR author"),
+        pr_author=_login(
+            _mapping(live.get("user"), "PR author").get("login"), "PR author"
+        ),
     )
     # Out-of-order synchronize runs must never restore an older verdict over a
     # newer one. A moved head is not an error, it is a superseded report.
@@ -452,7 +491,8 @@ def api_get(path: str, token: str) -> object:
         if len(collected) > MAX_CANDIDATES:
             raise BindingError(
                 f"GitHub returned more than {MAX_CANDIDATES} results for {path}; "
-                "refusing to select from a set this large")
+                "refusing to select from a set this large"
+            )
         if url is None:
             return collected
     raise BindingError(f"GitHub pagination for {path} did not terminate")
@@ -464,8 +504,9 @@ def _read_json(path: Path, limit: int, label: str) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def decide(event: object, payload: object, repository: str,
-           fetch: Callable[[str], object]) -> tuple[Binding, bool]:
+def decide(
+    event: object, payload: object, repository: str, fetch: Callable[[str], object]
+) -> tuple[Binding, bool]:
     """Resolve, then confirm against the API. Returns (binding, may_write)."""
     binding = resolve(event, payload, repository)
     # Path segments are re-derived, never interpolated from report text: both
@@ -478,7 +519,8 @@ def decide(event: object, payload: object, repository: str,
         # binding rather than merely suggestive.
         select_candidate(fetch(association_path(binding)), binding)
     may_write, binding = verify_pull_request(
-        fetch(f"/repos/{owner_repo}/pulls/{binding.pr_number}"), binding)
+        fetch(f"/repos/{owner_repo}/pulls/{binding.pr_number}"), binding
+    )
     return binding, may_write
 
 
@@ -504,25 +546,33 @@ def main(argv: list[str] | None = None) -> int:
         repository = _repository(args.repository, "repository")
         event = _read_json(args.event, MAX_EVENT_BYTES, "workflow event")
         payload = _read_json(args.report, MAX_REPORT_BYTES, "report")
-        binding, may_write = decide(event, payload, repository,
-                                    lambda path: api_get(path, token))
+        binding, may_write = decide(
+            event, payload, repository, lambda path: api_get(path, token)
+        )
     except (BindingError, ValueError, OSError, urllib.error.URLError) as exc:
-        print(f"::error::Repository integrity reporter refused to comment: {exc}",
-              file=sys.stderr)
+        print(
+            f"::error::Repository integrity reporter refused to comment: {exc}",
+            file=sys.stderr,
+        )
         _emit("post", "false")
         return 1
 
     if not may_write:
-        print(f"PR #{binding.pr_number} has moved past {binding.head_sha}; "
-              "leaving the existing comment untouched.")
+        print(
+            f"PR #{binding.pr_number} has moved past {binding.head_sha}; "
+            "leaving the existing comment untouched."
+        )
         _emit("post", "false")
         return 0
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(binding.as_dict(), sort_keys=True) + "\n",
-                           encoding="utf-8")
-    print(f"Bound report to PR #{binding.pr_number} at {binding.head_sha} "
-          f"(resolved from {binding.pr_source}).")
+    args.output.write_text(
+        json.dumps(binding.as_dict(), sort_keys=True) + "\n", encoding="utf-8"
+    )
+    print(
+        f"Bound report to PR #{binding.pr_number} at {binding.head_sha} "
+        f"(resolved from {binding.pr_source})."
+    )
     _emit("post", "true")
     _emit("pr_number", str(binding.pr_number))
     return 0

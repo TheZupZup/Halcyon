@@ -1,0 +1,56 @@
+# Ruff configuration for Linthra's Python tooling.
+#
+# Linthra is a Flutter app, not a Python package: there is no library to build,
+# publish or install, so this lives in ruff.toml rather than a root
+# pyproject.toml, which would suggest a Python distribution that does not exist.
+#
+# The Python that is linted is the developer/release tooling:
+#   * scripts/            — release, toolchain and repository-integrity checks
+#   * tool/branding/      — icon generation
+#   * tools/large_library/ — SQLite fixture generation and benchmarks
+#
+# Local twin of the CI job (.github/workflows/python-lint.yml):
+#   ruff check scripts tool tools
+#   ruff format --check scripts tool tools
+
+# Matches the Python that every Linthra workflow sets up (actions/setup-python
+# with python-version "3.11") and that the scripts are run with locally.
+target-version = "py311"
+
+# These are excludes, not an allowlist: Ruff still walks whatever path it is
+# given, minus the entries below. The linted scope is set by the paths passed on
+# the command line — `scripts tool tools`, in CI and in the docs — so a bare
+# `ruff check .` is NOT the same check: it would also report a Python file added
+# anywhere else in the repository, which CI does not look at. Always pass the
+# three paths.
+extend-exclude = [
+  # Vendored and generated trees. Neither holds Python today; excluding them
+  # means neither can start being linted by accident. third_party/ in
+  # particular is upstream source held to upstream's style, exactly as
+  # analysis_options.yaml already excludes it from `flutter analyze`.
+  "build",
+  "third_party",
+
+  # Not in the linted scope anyway — the CI paths do not include it — but named
+  # here so the decision is recorded rather than implicit: issue #353 scopes
+  # Ruff to scripts/, tool/ and tools/, and test/tooling/ holds the Python unit
+  # tests for those scripts. They are tooling too and should be linted, but
+  # bringing them in means reformatting nine more files, which belongs in its
+  # own follow-up PR rather than riding along here. Adding test/tooling to the
+  # CI paths and re-running `ruff format` is the whole of that change.
+  "test/tooling",
+]
+
+[lint]
+# Ruff's default set (E4/E7/E9 pycodestyle + F pyflakes) plus two rules that
+# catch real problems rather than taste:
+#   I  — import sorting, so import blocks stop drifting between scripts.
+#   B  — flake8-bugbear, for genuine bug shapes (mutable default arguments,
+#        loop-variable capture in closures, ...).
+#
+# Deliberately not selected: E501 (line-too-long). `ruff format` already owns
+# line width, and E501 only ever fires on the lines the formatter cannot split
+# (long URLs, literal SHA-256 digests, error strings quoted verbatim from the
+# tools they wrap), so enabling it would mean scattering `# noqa` through the
+# existing scripts for no correctness gain.
+select = ["E4", "E7", "E9", "F", "I", "B"]

@@ -16,9 +16,7 @@ from typing import Any
 
 TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
 OAUTH_BASE = "https://oauth.reddit.com"
-DEFAULT_USER_AGENT = (
-    "linux:io.github.thezupzup.linthra.releases:v1 (by /u/TheZupZup)"
-)
+DEFAULT_USER_AGENT = "linux:io.github.thezupzup.linthra.releases:v1 (by /u/TheZupZup)"
 
 
 class RedditPublishError(RuntimeError):
@@ -32,18 +30,14 @@ def _required_env(name: str) -> str:
     return value
 
 
-def _request_json(
-    request: urllib.request.Request, *, context: str
-) -> dict[str, Any]:
+def _request_json(request: urllib.request.Request, *, context: str) -> dict[str, Any]:
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         # Do not print the body: auth failures can include request details and
         # there is no reason to risk reflecting credentials into Actions logs.
-        raise RedditPublishError(
-            f"{context} failed with HTTP {exc.code}"
-        ) from exc
+        raise RedditPublishError(f"{context} failed with HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
         raise RedditPublishError(f"{context} failed: {exc.reason}") from exc
 
@@ -102,7 +96,9 @@ def find_existing_announcement(
     payload = _request_json(request, context="Reddit duplicate check")
     children = payload.get("data", {}).get("children", [])
     if not isinstance(children, list):
-        raise RedditPublishError("Reddit duplicate check returned an unexpected listing")
+        raise RedditPublishError(
+            "Reddit duplicate check returned an unexpected listing"
+        )
 
     for child in children:
         if not isinstance(child, dict):
@@ -161,9 +157,7 @@ def submit_post(
                 safe_errors.append(f"{item[0]}: {item[1]}")
             else:
                 safe_errors.append("unknown Reddit API error")
-        raise RedditPublishError(
-            "Reddit rejected the post: " + "; ".join(safe_errors)
-        )
+        raise RedditPublishError("Reddit rejected the post: " + "; ".join(safe_errors))
 
     data_result = json_result.get("data")
     if not isinstance(data_result, dict):
