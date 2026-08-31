@@ -138,7 +138,7 @@ SECURE_STORAGE_SCOPED_EXCEPTION = re.compile(
 # `/` alone is far too common in CMake (every ${VAR}/sub path), so this looks
 # for a quoted or bare token that starts at a real filesystem root.
 ABSOLUTE_PATH_PATTERN = re.compile(
-    r'(?<![\w$/{])/(?:home|Users|root|opt|usr/local|tmp|var|mnt|media)/[\w./-]+'
+    r"(?<![\w$/{])/(?:home|Users|root|opt|usr/local|tmp|var|mnt|media)/[\w./-]+"
 )
 
 
@@ -165,7 +165,9 @@ def _extract(text: str, pattern: str, what: str, where: Path) -> str:
     if not matches:
         raise CheckError(f"{where}: could not find {what}")
     if len(matches) > 1:
-        raise CheckError(f"{where}: found {len(matches)} definitions of {what}, expected 1")
+        raise CheckError(
+            f"{where}: found {len(matches)} definitions of {what}, expected 1"
+        )
     return matches[0]
 
 
@@ -286,9 +288,7 @@ def desktop_entry_problems(root: Path) -> list[str]:
         if actual is None:
             problems.append(f"{where}: no {key}=, expected {expected!r} ({source})")
         elif actual != expected:
-            problems.append(
-                f"{where}: {key}={actual!r} but {source} says {expected!r}"
-            )
+            problems.append(f"{where}: {key}={actual!r} but {source} says {expected!r}")
 
     require("Type", "Application", "a launchable desktop entry")
     require("Name", app_display_name(root), "lib/core/app_info.dart AppInfo.name")
@@ -463,9 +463,7 @@ def check(root: Path) -> list[str]:
 
     def compare(label: str, actual: str, expected: str, source: str) -> None:
         if actual != expected:
-            problems.append(
-                f"{label} is {actual!r} but {source} says {expected!r}"
-            )
+            problems.append(f"{label} is {actual!r} but {source} says {expected!r}")
 
     compare(
         "linux/CMakeLists.txt APPLICATION_ID",

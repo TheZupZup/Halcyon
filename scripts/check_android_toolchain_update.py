@@ -236,7 +236,9 @@ def load_index(url: str, path: Optional[str]) -> Tuple[str, str]:
         with urllib.request.urlopen(url, timeout=_FETCH_TIMEOUT_SECONDS) as response:
             raw = response.read(_MAX_INDEX_BYTES + 1)
     except Exception as error:  # network, TLS, HTTP status
-        raise CheckError(f"could not fetch the release index from {url}: {error}") from error
+        raise CheckError(
+            f"could not fetch the release index from {url}: {error}"
+        ) from error
     if len(raw) > _MAX_INDEX_BYTES:
         raise CheckError(
             f"{url} returned more than {_MAX_INDEX_BYTES} bytes; refusing to parse it"
@@ -460,7 +462,9 @@ def classify(current: Version, latest: Version) -> str:
     return STATUS_PATCH
 
 
-def evaluate(name: str, current: Version, found: Candidates, origin: str) -> Dict[str, str]:
+def evaluate(
+    name: str, current: Version, found: Candidates, origin: str
+) -> Dict[str, str]:
     """Everything the workflow needs to know about one tool."""
     t = tool(name)
 
@@ -494,8 +498,7 @@ def evaluate(name: str, current: Version, found: Candidates, origin: str) -> Dic
         # but an index that has never heard of the version we ship is worth a
         # human's eye.
         notes.append(
-            f"the pinned version {format_version(current)} is not listed in "
-            f"{origin}"
+            f"the pinned version {format_version(current)} is not listed in {origin}"
         )
 
     major_available = latest[0] > current[0]
@@ -547,7 +550,9 @@ def parse_versions_files(values: List[str], tools: List[str]) -> Dict[str, str]:
     return mapping
 
 
-def build_results(args: argparse.Namespace, repo_root: Path) -> Dict[str, Dict[str, str]]:
+def build_results(
+    args: argparse.Namespace, repo_root: Path
+) -> Dict[str, Dict[str, str]]:
     tools: List[str] = [args.tool] if args.tool else list(TOOL_NAMES)
 
     if args.current is not None and len(tools) != 1:
@@ -560,7 +565,9 @@ def build_results(args: argparse.Namespace, repo_root: Path) -> Dict[str, Dict[s
     results: Dict[str, Dict[str, str]] = {}
     for name in tools:
         t = tool(name)
-        current_text = args.current if args.current is not None else read_pin(repo_root, name)
+        current_text = (
+            args.current if args.current is not None else read_pin(repo_root, name)
+        )
         current = parse_version(
             current_text,
             "--current" if args.current is not None else t.pin_file,
@@ -663,8 +670,7 @@ def write_github_output(path: str, results: Dict[str, Dict[str, str]]) -> None:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Detect newer stable Gradle / AGP / Kotlin releases than the "
-            "pinned ones."
+            "Detect newer stable Gradle / AGP / Kotlin releases than the pinned ones."
         ),
     )
     parser.add_argument(

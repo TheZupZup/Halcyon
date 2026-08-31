@@ -74,8 +74,7 @@ BASELINE_FRACTION = 0.80
 VARIANTS = (
     ("neon", (0xB1, 0x4D, 0xFF), (0x22, 0xE0, 0xD6), (0.55, 0.85, 0.70, 0.45)),
     ("gold", (0xFF, 0xE0, 0x8A), (0xE6, 0xA2, 0x00), (0.46, 0.70, 0.56, 0.34)),
-    ("blackwhite", (0xFF, 0xFF, 0xFF), (0xFF, 0xFF, 0xFF),
-     (0.46, 0.70, 0.56, 0.34)),
+    ("blackwhite", (0xFF, 0xFF, 0xFF), (0xFF, 0xFF, 0xFF), (0.46, 0.70, 0.56, 0.34)),
 )
 
 # Every launcher-icon variant must share the *default Classic launcher icon's*
@@ -114,9 +113,7 @@ VARIANT_BACKGROUNDS = {
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RES_DIR = REPO_ROOT / "android/app/src/main/res"
-FASTLANE_IMAGES = (
-    REPO_ROOT / "fastlane/metadata/android/en-US/images"
-)
+FASTLANE_IMAGES = REPO_ROOT / "fastlane/metadata/android/en-US/images"
 # Brand assets that aren't part of any store-listing folder (e.g. the Google
 # Play high-res icon, which is uploaded by hand in Play Console).
 BRAND_DIR = REPO_ROOT / "assets/brand"
@@ -164,8 +161,13 @@ def _bar_color(y: float, top: float, bottom: float) -> tuple[int, int, int]:
 
 
 def _in_rounded_rect(
-    x: float, y: float, left: float, top: float, right: float,
-    bottom: float, radius: float,
+    x: float,
+    y: float,
+    left: float,
+    top: float,
+    right: float,
+    bottom: float,
+    radius: float,
 ) -> bool:
     if x < left or x > right or y < top or y > bottom:
         return False
@@ -177,7 +179,11 @@ def _in_rounded_rect(
 
 
 def _in_capsule(
-    x: float, y: float, cx: float, half_width: float, top: float,
+    x: float,
+    y: float,
+    cx: float,
+    half_width: float,
+    top: float,
     bottom: float,
 ) -> bool:
     if abs(x - cx) > half_width:
@@ -209,8 +215,7 @@ def _bars(region_left: float, region_top: float, region_size: float):
     return bars
 
 
-def _variant_bars(region_left: float, region_top: float, region_size: float,
-                  heights):
+def _variant_bars(region_left: float, region_top: float, region_size: float, heights):
     """Bar capsules for a variant, sharing the *classic* mark's optical box.
 
     Lays the variant's bar pattern out with the classic footprint, gap-to-bar
@@ -223,8 +228,10 @@ def _variant_bars(region_left: float, region_top: float, region_size: float,
     variant fits the same footprint with proportionally thinner bars.
     """
     count = len(heights)
-    bar_width = region_size * VARIANT_GROUP_FOOTPRINT / (
-        count + VARIANT_GAP_TO_BAR * (count - 1)
+    bar_width = (
+        region_size
+        * VARIANT_GROUP_FOOTPRINT
+        / (count + VARIANT_GAP_TO_BAR * (count - 1))
     )
     gap = bar_width * VARIANT_GAP_TO_BAR
     group_width = count * bar_width + (count - 1) * gap
@@ -246,7 +253,11 @@ def _variant_bars(region_left: float, region_top: float, region_size: float,
 
 
 def _grad_color(
-    y: float, top: float, bottom: float, c_top, c_bottom,
+    y: float,
+    top: float,
+    bottom: float,
+    c_top,
+    c_bottom,
 ) -> tuple[int, int, int]:
     """A vertical gradient from [c_top] at [top] to [c_bottom] at [bottom],
     clamped outside the span — the variant twin of [_bar_color] (which is the
@@ -264,8 +275,15 @@ def _grad_color(
 
 
 def _render_variant(
-    width: int, height: int, ss: int, *, mode: str,
-    gradient_top, gradient_bottom, heights, tile_bg=None,
+    width: int,
+    height: int,
+    ss: int,
+    *,
+    mode: str,
+    gradient_top,
+    gradient_bottom,
+    heights,
+    tile_bg=None,
 ) -> bytearray:
     """Renders a variant launcher icon: the same dark squircle as the classic
     tile (mode "tile") or a transparent adaptive foreground (mode "foreground"),
@@ -291,9 +309,7 @@ def _render_variant(
         tile_right = sw - margin
         tile_bottom = (sh + region) / 2 - margin
         corner = (tile_right - tile_left) * 0.225
-        bars = _variant_bars(
-            tile_left, tile_top, tile_right - tile_left, heights
-        )
+        bars = _variant_bars(tile_left, tile_top, tile_right - tile_left, heights)
     else:  # "foreground": bars in the adaptive safe zone, transparent elsewhere
         safe = region * 0.62
         bars = _variant_bars((sw - safe) / 2, (sh - safe) / 2, safe, heights)
@@ -307,9 +323,7 @@ def _render_variant(
     hi = bytearray(sw * sh * 4)
     for sy in range(sh):
         bg = tile_bg if tile_bg is not None else _bg_row(sy, sh)
-        bar = _grad_color(
-            sy, bar_top, bar_bottom, gradient_top, gradient_bottom
-        )
+        bar = _grad_color(sy, bar_top, bar_bottom, gradient_top, gradient_bottom)
         row = sy * sw * 4
         for sx in range(sw):
             r = g = b = a = 0
@@ -317,7 +331,7 @@ def _render_variant(
                 sx, sy, tile_left, tile_top, tile_right, tile_bottom, corner
             ):
                 r, g, b, a = bg[0], bg[1], bg[2], 255
-            for (cx, hw, top, bottom) in bars:
+            for cx, hw, top, bottom in bars:
                 if _in_capsule(sx, sy, cx, hw, top, bottom):
                     r, g, b, a = bar[0], bar[1], bar[2], 255
                     break
@@ -331,7 +345,8 @@ def _render_variant(
 
 
 def _write_adaptive_xml(
-    variant_id: str, background: str = DEFAULT_ADAPTIVE_BACKGROUND,
+    variant_id: str,
+    background: str = DEFAULT_ADAPTIVE_BACKGROUND,
 ) -> None:
     """Writes the per-variant adaptive-icon XML (the [background] drawable + this
     variant's foreground) to mipmap-anydpi-v26/ic_launcher_<id>.xml."""
@@ -411,7 +426,7 @@ def _render(width: int, height: int, ss: int, *, mode: str) -> bytearray:
                 sx, sy, tile_left, tile_top, tile_right, tile_bottom, corner
             ):
                 r, g, b, a = bg[0], bg[1], bg[2], 255
-            for (cx, hw, top, bottom) in bars:
+            for cx, hw, top, bottom in bars:
                 if _in_capsule(sx, sy, cx, hw, top, bottom):
                     r, g, b, a = bar[0], bar[1], bar[2], 255
                     break
@@ -458,12 +473,14 @@ def _write_png(path: Path, width: int, height: int, rgba: bytearray) -> None:
     stride = width * 4
     for y in range(height):
         raw.append(0)  # filter type 0 (None)
-        raw.extend(rgba[y * stride:(y + 1) * stride])
+        raw.extend(rgba[y * stride : (y + 1) * stride])
 
     def chunk(tag: bytes, data: bytes) -> bytes:
         body = tag + data
-        return struct.pack(">I", len(data)) + body + struct.pack(
-            ">I", zlib.crc32(body) & 0xFFFFFFFF
+        return (
+            struct.pack(">I", len(data))
+            + body
+            + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
         )
 
     ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
@@ -485,7 +502,9 @@ def main() -> None:
         rgba = _render(size, size, ss=3, mode="foreground")
         _write_png(
             RES_DIR / f"mipmap-{density}/ic_launcher_foreground.png",
-            size, size, rgba,
+            size,
+            size,
+            rgba,
         )
 
     icon = _render(512, 512, ss=3, mode="tile")
@@ -511,24 +530,36 @@ def main() -> None:
         )
         for density, size in LEGACY_SIZES.items():
             rgba = _render_variant(
-                size, size, ss=3, mode="tile",
-                gradient_top=gradient_top, gradient_bottom=gradient_bottom,
-                heights=heights, tile_bg=tile_bg,
+                size,
+                size,
+                ss=3,
+                mode="tile",
+                gradient_top=gradient_top,
+                gradient_bottom=gradient_bottom,
+                heights=heights,
+                tile_bg=tile_bg,
             )
             _write_png(
                 RES_DIR / f"mipmap-{density}/ic_launcher_{variant_id}.png",
-                size, size, rgba,
+                size,
+                size,
+                rgba,
             )
         for density, size in FOREGROUND_SIZES.items():
             rgba = _render_variant(
-                size, size, ss=3, mode="foreground",
-                gradient_top=gradient_top, gradient_bottom=gradient_bottom,
+                size,
+                size,
+                ss=3,
+                mode="foreground",
+                gradient_top=gradient_top,
+                gradient_bottom=gradient_bottom,
                 heights=heights,
             )
             _write_png(
-                RES_DIR
-                / f"mipmap-{density}/ic_launcher_{variant_id}_foreground.png",
-                size, size, rgba,
+                RES_DIR / f"mipmap-{density}/ic_launcher_{variant_id}_foreground.png",
+                size,
+                size,
+                rgba,
             )
         _write_adaptive_xml(variant_id, background=adaptive_background)
 

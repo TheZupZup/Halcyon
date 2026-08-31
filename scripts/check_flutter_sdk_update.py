@@ -110,8 +110,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # scripts/setup_flutter.sh's default platform; the version/channel data in the
 # macOS and Windows manifests is the same set of releases.
 DEFAULT_RELEASES_URL = (
-    "https://storage.googleapis.com/flutter_infra_release/releases/"
-    "releases_linux.json"
+    "https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json"
 )
 
 # A stable Flutter version is a bare triple. Nothing else is accepted, from the
@@ -188,9 +187,7 @@ def read_pin(repo_root: Path) -> str:
     return pin_file.read_text(encoding="utf-8").strip()
 
 
-def load_manifest(
-    releases_file: Optional[str], releases_url: str
-) -> Dict[str, Any]:
+def load_manifest(releases_file: Optional[str], releases_url: str) -> Dict[str, Any]:
     """Load the release manifest from a file or the official URL."""
     if releases_file is not None:
         path = Path(releases_file)
@@ -262,9 +259,7 @@ def stable_releases(manifest: Dict[str, Any]) -> StableSet:
     notes: List[str] = []
     for index, release in enumerate(releases):
         if not isinstance(release, dict):
-            raise CheckError(
-                f"{origin} entry #{index} is not an object: {release!r}"
-            )
+            raise CheckError(f"{origin} entry #{index} is not an object: {release!r}")
         channel = release.get("channel")
         version_text = release.get("version")
         if channel != _STABLE_CHANNEL:
@@ -275,9 +270,7 @@ def stable_releases(manifest: Dict[str, Any]) -> StableSet:
             skipped.append(str(error))
             continue
         archive = release.get("archive")
-        if not isinstance(archive, str) or not archive.startswith(
-            _ARCHIVE_PREFIX
-        ):
+        if not isinstance(archive, str) or not archive.startswith(_ARCHIVE_PREFIX):
             # A stable row must name the archive that `scripts/setup_flutter.sh`
             # would download, and it must live under stable/. Missing, null,
             # empty or pointing elsewhere all contradict the channel claim, so
@@ -452,9 +445,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--github-output",
         help="Append key=value lines for GitHub Actions to this file.",
     )
-    parser.add_argument(
-        "--json", action="store_true", help="Print the result as JSON."
-    )
+    parser.add_argument("--json", action="store_true", help="Print the result as JSON.")
     parser.add_argument(
         "--quiet", action="store_true", help="Suppress the human-readable report."
     )

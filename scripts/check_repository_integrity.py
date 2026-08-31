@@ -72,6 +72,7 @@ def _clamp_report_field(value: str) -> str:
     keep = MAX_REPORT_FIELD_CHARS - len(_TRUNCATION_SUFFIX)
     return _TRUNCATION_SUFFIX + value[-keep:]
 
+
 # Files that must be able to hold literal attack strings, because they are the
 # fixtures this guard is tested against. Only lines carrying the explicit marker
 # below are exempted, and only inside these exact paths.
@@ -80,27 +81,58 @@ SELF_TEST_FIXTURE_PATHS = frozenset({"test/tooling/check_repository_integrity_te
 FIXTURE_EXEMPTION_MARKER = "integrity-guard-fixture"
 
 _EXTERNAL_BLOCKED_PATHS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"^\.vscode/", re.I), "VS Code workspace configuration is maintainer-controlled"),
-    (re.compile(r"^\.idea/", re.I), "IDE project configuration is maintainer-controlled"),
-    (re.compile(r"(?:^|/).*\.code-workspace$", re.I), "VS Code workspace file is maintainer-controlled"),
-    (re.compile(r"^\.github/workflows/"), "GitHub Actions workflows are maintainer-controlled"),
-    (re.compile(r"^\.github/actions/"), "GitHub composite actions are maintainer-controlled"),
-    (re.compile(r"^(?:scripts|tool|tools)/"), "repository automation scripts are maintainer-controlled"),
-    (re.compile(r"(?:^|/)CODEOWNERS$"), "code-ownership policy is maintainer-controlled"),
-    (re.compile(r"^\.github/dependabot\.ya?ml$"), "dependency-update policy is maintainer-controlled"),
-    (re.compile(r"^\.gitattributes$"), "Git diff/attribute policy is maintainer-controlled"),
+    (
+        re.compile(r"^\.vscode/", re.I),
+        "VS Code workspace configuration is maintainer-controlled",
+    ),
+    (
+        re.compile(r"^\.idea/", re.I),
+        "IDE project configuration is maintainer-controlled",
+    ),
+    (
+        re.compile(r"(?:^|/).*\.code-workspace$", re.I),
+        "VS Code workspace file is maintainer-controlled",
+    ),
+    (
+        re.compile(r"^\.github/workflows/"),
+        "GitHub Actions workflows are maintainer-controlled",
+    ),
+    (
+        re.compile(r"^\.github/actions/"),
+        "GitHub composite actions are maintainer-controlled",
+    ),
+    (
+        re.compile(r"^(?:scripts|tool|tools)/"),
+        "repository automation scripts are maintainer-controlled",
+    ),
+    (
+        re.compile(r"(?:^|/)CODEOWNERS$"),
+        "code-ownership policy is maintainer-controlled",
+    ),
+    (
+        re.compile(r"^\.github/dependabot\.ya?ml$"),
+        "dependency-update policy is maintainer-controlled",
+    ),
+    (
+        re.compile(r"^\.gitattributes$"),
+        "Git diff/attribute policy is maintainer-controlled",
+    ),
     (re.compile(r"^\.gitmodules$"), "Git submodule policy is maintainer-controlled"),
 )
 
 # The self-test paths are maintainer-controlled by construction: an external PR
 # cannot add (or mark) a line that the fixture exemption would then skip.
-EXTERNAL_BLOCKED_PATHS: tuple[tuple[re.Pattern[str], str], ...] = _EXTERNAL_BLOCKED_PATHS + tuple(
-    (
-        re.compile(rf"^{re.escape(path)}$"),
-        "repository-integrity self-test fixtures are maintainer-controlled",
+EXTERNAL_BLOCKED_PATHS: tuple[tuple[re.Pattern[str], str], ...] = (
+    _EXTERNAL_BLOCKED_PATHS
+    + tuple(
+        (
+            re.compile(rf"^{re.escape(path)}$"),
+            "repository-integrity self-test fixtures are maintainer-controlled",
+        )
+        for path in sorted(SELF_TEST_FIXTURE_PATHS)
     )
-    for path in sorted(SELF_TEST_FIXTURE_PATHS)
 )
+
 
 def _u16(data: bytes, offset: int) -> int:
     return int.from_bytes(data[offset : offset + 2], "big")
@@ -127,7 +159,12 @@ def _valid_woff(data: bytes, signature: bytes, header_size: int) -> bool:
 
 def _valid_sfnt(data: bytes) -> bool:
     """TrueType/OpenType: searchRange and friends are derived from numTables."""
-    if len(data) < 12 or data[:4] not in (b"\x00\x01\x00\x00", b"true", b"typ1", b"OTTO"):
+    if len(data) < 12 or data[:4] not in (
+        b"\x00\x01\x00\x00",
+        b"true",
+        b"typ1",
+        b"OTTO",
+    ):
         return False
     num_tables = _u16(data, 4)
     if num_tables == 0 or len(data) < 12 + 16 * num_tables:
@@ -177,7 +214,10 @@ def _valid_gif(data: bytes) -> bool:
     """
     if len(data) < 14 or data[:6] not in (b"GIF87a", b"GIF89a"):
         return False
-    if int.from_bytes(data[6:8], "little") == 0 or int.from_bytes(data[8:10], "little") == 0:
+    if (
+        int.from_bytes(data[6:8], "little") == 0
+        or int.from_bytes(data[8:10], "little") == 0
+    ):
         return False
 
     flags = data[10]
@@ -304,7 +344,11 @@ def _valid_pdf(data: bytes) -> bool:
 
 def _valid_ico(data: bytes) -> bool:
     """Header, directory, and every entry pointing at real image bytes."""
-    if len(data) < 6 or data[:2] != b"\x00\x00" or data[2:4] not in (b"\x01\x00", b"\x02\x00"):
+    if (
+        len(data) < 6
+        or data[:2] != b"\x00\x00"
+        or data[2:4] not in (b"\x01\x00", b"\x02\x00")
+    ):
         return False
     count = int.from_bytes(data[4:6], "little")
     directory_end = 6 + 16 * count
@@ -323,7 +367,18 @@ def _valid_ico(data: bytes) -> bool:
 # objects, xref table, trailer and %%EOF — so the binary backstop would reject
 # legitimate documents. Its structural validator carries the weight instead.
 BINARY_ASSET_SUFFIXES = frozenset(
-    {".woff", ".woff2", ".ttf", ".otf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico"}
+    {
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".otf",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".ico",
+    }
 )
 
 ASSET_VALIDATORS: dict[str, tuple[str, "Callable[[bytes], bool]"]] = {
@@ -343,8 +398,21 @@ ASSET_VALIDATORS: dict[str, tuple[str, "Callable[[bytes], bool]"]] = {
 # Extensions the guard treats as inert assets. Nothing here should ever carry
 # the executable bit, so the mode is checked independently of the contents.
 ASSET_SUFFIXES = frozenset(
-    {".woff", ".woff2", ".ttf", ".otf", ".eot", ".png", ".jpg", ".jpeg",
-     ".gif", ".webp", ".ico", ".pdf", ".svg"}
+    {
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".otf",
+        ".eot",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".ico",
+        ".pdf",
+        ".svg",
+    }
 )
 
 
@@ -382,22 +450,22 @@ EXECUTABLE_ASSET_EXTENSIONS = (
 )
 _EXECUTABLE_ASSET_RE = re.compile(
     rf"""(?ix)
-    \b(?:{'|'.join(_INTERPRETERS)})
+    \b(?:{"|".join(_INTERPRETERS)})
     \b[^\n\r]{{0,240}}
-    \.(?:{'|'.join(EXECUTABLE_ASSET_EXTENSIONS)})\b
+    \.(?:{"|".join(EXECUTABLE_ASSET_EXTENSIONS)})\b
     |
     \bchmod\b[^\n\r]{{0,120}}\+x[^\n\r]{{0,160}}
-    \.(?:{'|'.join(EXECUTABLE_ASSET_EXTENSIONS)})\b
+    \.(?:{"|".join(EXECUTABLE_ASSET_EXTENSIONS)})\b
     |
     (?:^|[;&|()])\s*(?:source|\.)\s+[^\n\r]{{0,240}}
-    \.(?:{'|'.join(EXECUTABLE_ASSET_EXTENSIONS)})\b
+    \.(?:{"|".join(EXECUTABLE_ASSET_EXTENSIONS)})\b
     """
 )
 
 _NUMERIC_CHMOD_ASSET_RE = re.compile(
     rf"""(?ix)
     \bchmod\b[^\n\r]{{0,120}}?\b(?P<mode>[0-7]{{3,4}})\b
-    [^\n\r]{{0,160}}\.(?:{'|'.join(EXECUTABLE_ASSET_EXTENSIONS)})\b
+    [^\n\r]{{0,160}}\.(?:{"|".join(EXECUTABLE_ASSET_EXTENSIONS)})\b
     """
 )
 
@@ -439,9 +507,14 @@ def run_git(*args: str, text: bool = True) -> str | bytes:
 
 def changed_files(base: str, head: str) -> list[str]:
     raw = run_git(
-        "-c", "core.quotePath=false",
-        "diff", "--name-only", "-z", "--no-renames",
-        f"{base}...{head}", "--",
+        "-c",
+        "core.quotePath=false",
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        f"{base}...{head}",
+        "--",
     )
     assert isinstance(raw, str)
     return [item for item in raw.split("\0") if item]
@@ -529,7 +602,9 @@ def _ignore_state(rules: list[str], entry: str) -> tuple[bool, str | None]:
 def check_ignore_policy(head: str) -> list[Finding]:
     text = blob_text(head, ".gitignore")
     if text is None:
-        return [Finding(head, ".gitignore", "required repository .gitignore is missing")]
+        return [
+            Finding(head, ".gitignore", "required repository .gitignore is missing")
+        ]
     rules = _ignore_rules(text)
 
     findings: list[Finding] = []
@@ -547,7 +622,9 @@ def check_ignore_policy(head: str) -> list[Finding]:
             )
         else:
             findings.append(
-                Finding(head, ".gitignore", f"required ignore entry `{entry}` was removed")
+                Finding(
+                    head, ".gitignore", f"required ignore entry `{entry}` was removed"
+                )
             )
     return findings
 
@@ -587,7 +664,9 @@ def check_asset_modes(head: str, files: list[str]) -> list[Finding]:
             continue
         if git_mode(head, path) == "100755":
             findings.append(
-                Finding(head, path, "asset file is committed with the executable bit set")
+                Finding(
+                    head, path, "asset file is committed with the executable bit set"
+                )
             )
     return findings
 
@@ -608,12 +687,20 @@ def check_asset_magic(head: str, files: list[str]) -> list[Finding]:
             # that is pure text is a polyglot candidate regardless of how well
             # it fakes a header, so reject it before the format check.
             findings.append(
-                Finding(head, path, f"file extension claims {label} but the file is entirely text")
+                Finding(
+                    head,
+                    path,
+                    f"file extension claims {label} but the file is entirely text",
+                )
             )
             continue
         if not is_valid(data):
             findings.append(
-                Finding(head, path, f"file extension claims {label} but the file is not a valid {label}")
+                Finding(
+                    head,
+                    path,
+                    f"file extension claims {label} but the file is not a valid {label}",
+                )
             )
     return findings
 
@@ -657,7 +744,9 @@ def check_active_svg(head: str, files: list[str]) -> list[Finding]:
             continue
         text = blob_text(head, path)
         if text is not None and svg_is_active(text):
-            findings.append(Finding(head, path, "SVG contains active/external executable content"))
+            findings.append(
+                Finding(head, path, "SVG contains active/external executable content")
+            )
     return findings
 
 
@@ -690,11 +779,15 @@ def asset_execution_finding(path: str, text: str) -> Finding | None:
     normalised = re.sub(r"\\\r?\n", "", "".join(scannable))
     for line in re.split(r"[\r\n]", normalised):
         if _EXECUTABLE_ASSET_RE.search(line):
-            return Finding("", path, "text invokes or marks an asset file as executable")
+            return Finding(
+                "", path, "text invokes or marks an asset file as executable"
+            )
         for match in _NUMERIC_CHMOD_ASSET_RE.finditer(line):
             permission_digits = match.group("mode")[-3:]
             if any(int(digit) & 1 for digit in permission_digits):
-                return Finding("", path, "text invokes or marks an asset file as executable")
+                return Finding(
+                    "", path, "text invokes or marks an asset file as executable"
+                )
     return None
 
 
@@ -730,19 +823,40 @@ def actionable(finding: Finding) -> Finding:
     """
     reason = finding.reason.lower()
     if "executable bit" in reason:
-        rule, remediation = "asset-executable-mode", "Remove the executable permission from the asset and recommit the mode change."
+        rule, remediation = (
+            "asset-executable-mode",
+            "Remove the executable permission from the asset and recommit the mode change.",
+        )
     elif "file extension claims" in reason:
-        rule, remediation = "invalid-disguised-asset", "Replace the invalid asset with a real file of the declared asset type."
+        rule, remediation = (
+            "invalid-disguised-asset",
+            "Replace the invalid asset with a real file of the declared asset type.",
+        )
     elif "svg contains" in reason:
-        rule, remediation = "active-svg-content", "Remove scripts, event handlers, foreign objects, and external active references from the SVG."
+        rule, remediation = (
+            "active-svg-content",
+            "Remove scripts, event handlers, foreign objects, and external active references from the SVG.",
+        )
     elif "invokes or marks an asset" in reason:
-        rule, remediation = "asset-execution-command", "Remove commands that execute the asset or grant it executable permission."
+        rule, remediation = (
+            "asset-execution-command",
+            "Remove commands that execute the asset or grant it executable permission.",
+        )
     elif "gitignore" in reason or "ignore entry" in reason:
-        rule, remediation = "protected-ignore-policy", "Restore the required .idea/ and .vscode/ ignore rules without later negations."
+        rule, remediation = (
+            "protected-ignore-policy",
+            "Restore the required .idea/ and .vscode/ ignore rules without later negations.",
+        )
     elif "symlink" in reason:
-        rule, remediation = "external-symlink", "Remove the Git symlink or move the repository-control change to a maintainer-owned PR."
+        rule, remediation = (
+            "external-symlink",
+            "Remove the Git symlink or move the repository-control change to a maintainer-owned PR.",
+        )
     elif "maintainer-controlled" in reason:
-        rule, remediation = "external-maintainer-controlled-path", "Recreate or rebase the legitimate feature work onto a clean main history, or move this repository-control change to a maintainer-owned PR."
+        rule, remediation = (
+            "external-maintainer-controlled-path",
+            "Recreate or rebase the legitimate feature work onto a clean main history, or move this repository-control change to a maintainer-owned PR.",
+        )
     else:
         rule, remediation = finding.rule, finding.remediation
     return replace(finding, rule=rule, remediation=remediation)
@@ -762,8 +876,15 @@ def commit_parents(commit: str) -> list[str]:
 
 def changed_files_between(old: str, new: str) -> list[str]:
     raw = run_git(
-        "-c", "core.quotePath=false", "diff", "--name-only", "-z",
-        "--no-renames", old, new, "--",
+        "-c",
+        "core.quotePath=false",
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        old,
+        new,
+        "--",
     )
     assert isinstance(raw, str)
     return [item for item in raw.split("\0") if item]
@@ -783,7 +904,9 @@ def commit_introduced_files(commit: str) -> list[str]:
     parents = commit_parents(commit)
     if not parents:
         return changed_files_between(EMPTY_TREE, commit)
-    changed_by_parent = [set(changed_files_between(parent, commit)) for parent in parents]
+    changed_by_parent = [
+        set(changed_files_between(parent, commit)) for parent in parents
+    ]
     return sorted(set.intersection(*changed_by_parent))
 
 
@@ -799,7 +922,9 @@ def introduced_commits(base: str, head: str) -> list[str]:
     return raw.split()
 
 
-def scan_tree(commit: str, files: list[str], external: bool, *, check_ignore: bool) -> list[Finding]:
+def scan_tree(
+    commit: str, files: list[str], external: bool, *, check_ignore: bool
+) -> list[Finding]:
     findings: list[Finding] = []
     if check_ignore:
         findings.extend(check_ignore_policy(commit))
@@ -821,7 +946,9 @@ def scan(base: str, head: str, pr_author: str, repo_owner: str) -> list[Finding]
     findings: list[Finding] = []
     for commit in introduced_commits(base, head):
         files = commit_introduced_files(commit)
-        findings.extend(scan_tree(commit, files, external, check_ignore=".gitignore" in files))
+        findings.extend(
+            scan_tree(commit, files, external, check_ignore=".gitignore" in files)
+        )
 
     # Preserve the final-tree check as defense in depth, but do not attribute a
     # historical violation to a later merge merely because it remains present
@@ -852,8 +979,14 @@ def write_report(path: Path, findings: list[Finding]) -> None:
         )
 
 
-def write_json_report(path: Path, findings: list[Finding], *, pr_number: int,
-                      head: str, head_repository: str) -> None:
+def write_json_report(
+    path: Path,
+    findings: list[Finding],
+    *,
+    pr_number: int,
+    head: str,
+    head_repository: str,
+) -> None:
     """Write the machine-readable artifact the trusted reporter consumes.
 
     The list is capped to the bound the reporter enforces. Without the cap a PR
@@ -872,7 +1005,9 @@ def write_json_report(path: Path, findings: list[Finding], *, pr_number: int,
         "truncated": len(findings) - len(reported),
         "findings": [finding.as_dict() for finding in reported],
     }
-    path.write_text(json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -893,12 +1028,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         findings = scan(args.base, args.head, args.pr_author, args.repo_owner)
     except IntegrityError as exc:
-        print(f"::error::Repository integrity scan failed closed: {exc}", file=sys.stderr)
+        print(
+            f"::error::Repository integrity scan failed closed: {exc}", file=sys.stderr
+        )
         return 2
 
     write_report(Path(args.report), findings)
-    write_json_report(Path(args.json_report), findings, pr_number=args.pr_number,
-                      head=args.head, head_repository=args.head_repository)
+    write_json_report(
+        Path(args.json_report),
+        findings,
+        pr_number=args.pr_number,
+        head=args.head,
+        head_repository=args.head_repository,
+    )
 
     if findings:
         print("Repository integrity guard blocked the PR:")

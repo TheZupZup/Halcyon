@@ -223,7 +223,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     file_mode = args.before_file is not None or args.after_file is not None
     if file_mode:
         if args.base is not None or args.head is not None:
-            parser.error("--before-file/--after-file cannot be combined with --base/--head")
+            parser.error(
+                "--before-file/--after-file cannot be combined with --base/--head"
+            )
         if args.before_file is None or args.after_file is None:
             parser.error("--before-file and --after-file must be given together")
     elif args.base is None:

@@ -49,7 +49,12 @@ SENSITIVE_PATH_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     # tools/large_library/ is run by the large-library workflow.
     (re.compile(r"^(?:scripts|tool|tools)/"), "repository automation script"),
     (re.compile(r"^(pubspec\.ya?ml|pubspec\.lock)$"), "dependency manifest / lockfile"),
-    (re.compile(r"^android/.*(AndroidManifest\.xml|\.gradle(?:\.kts)?|gradle\.properties)$"), "Android permissions / build configuration"),
+    (
+        re.compile(
+            r"^android/.*(AndroidManifest\.xml|\.gradle(?:\.kts)?|gradle\.properties)$"
+        ),
+        "Android permissions / build configuration",
+    ),
     # The Gradle wrapper decides which Gradle is downloaded and from where
     # (distributionUrl), and the wrapper jar is executed by every Android
     # build. The repository's own toolchain guard covers only the automated
@@ -64,13 +69,19 @@ SENSITIVE_PATH_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     # release APK by android-release-build.yml. The other trees do not exist
     # today; naming them keeps a future `flutter create --platforms=` from
     # landing unclassified privileged code.
-    (re.compile(r"^(?:android|ios|macos|windows)/.*\.(?:kt|java|swift|m|mm)$"), "platform / native app code"),
+    (
+        re.compile(r"^(?:android|ios|macos|windows)/.*\.(?:kt|java|swift|m|mm)$"),
+        "platform / native app code",
+    ),
     (re.compile(r"(?:^|/)gradle/wrapper/"), "build toolchain distribution / wrapper"),
     (re.compile(r"^\.[a-z0-9]+-version$"), "build toolchain pin"),
     # linux/ is the desktop runner; native/ holds the C++ DSP library and the
     # Rust core, both compiled by CI and the Rust one also executed by it
     # (`cargo run --locked` in rust-core.yml).
-    (re.compile(r"^(?:linux|native)/.*\.(?:cc|cpp|cxx|c|h|hpp|hxx|rs|cmake)$"), "native code"),
+    (
+        re.compile(r"^(?:linux|native)/.*\.(?:cc|cpp|cxx|c|h|hpp|hxx|rs|cmake)$"),
+        "native code",
+    ),
     (re.compile(r"(?:^|/)CMakeLists\.txt$"), "native build configuration"),
     # A Cargo dependency may carry a build script, which runs at build time on
     # the CI machine — the same trust boundary pubspec.yaml crosses.
@@ -81,30 +92,71 @@ SENSITIVE_PATH_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     # text is a legal boundary, and signing material is the release identity.
     (re.compile(r"(?:^|/)analysis_options\.ya?ml$"), "static analysis configuration"),
     (re.compile(r"(?:^|/)(?:LICENSE|COPYING|NOTICE)(?:$|\.)"), "licensing"),
-    (re.compile(r"(?:^|/)key\.properties$|\.(?:jks|keystore)$"), "release signing material"),
+    (
+        re.compile(r"(?:^|/)key\.properties$|\.(?:jks|keystore)$"),
+        "release signing material",
+    ),
     # metadata/*.yml is the F-Droid build recipe: its Builds entries carry
     # sudo/prebuild/build commands, and docs/fdroid-submission.md has the
     # maintainer copy it into fdroiddata and run a full build from it. The
     # fastlane changelog and description text beside it really is just text,
     # and stays ordinary.
     (re.compile(r"^metadata/.*\.ya?ml$"), "F-Droid build recipe"),
-    (re.compile(r"^lib/.*(?:auth|credential|token|session|secure|secret)", re.I), "authentication / credential handling"),
-    (re.compile(r"^lib/.*(?:network|http|client|socket|provider|source)", re.I), "network / provider boundary"),
-    (re.compile(r"^lib/.*(?:database|repository|store|storage|persistence|cache)", re.I), "persistent storage"),
+    (
+        re.compile(r"^lib/.*(?:auth|credential|token|session|secure|secret)", re.I),
+        "authentication / credential handling",
+    ),
+    (
+        re.compile(r"^lib/.*(?:network|http|client|socket|provider|source)", re.I),
+        "network / provider boundary",
+    ),
+    (
+        re.compile(
+            r"^lib/.*(?:database|repository|store|storage|persistence|cache)", re.I
+        ),
+        "persistent storage",
+    ),
     # `.gitattributes` can change how git renders a diff (for example marking a
     # path `-diff`), which is a direct attack on this scanner's input.
     (re.compile(r"(?:^|/)\.gitattributes$"), "git diff / attribute behavior"),
     (re.compile(r"(?:^|/)CODEOWNERS$"), "code ownership / review routing"),
-    (re.compile(r"^(?:\.gitmodules|\.github/dependabot\.ya?ml)$"), "supply-chain configuration"),
+    (
+        re.compile(r"^(?:\.gitmodules|\.github/dependabot\.ya?ml)$"),
+        "supply-chain configuration",
+    ),
 )
 
 SENSITIVE_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"\b(?:HttpClient|WebSocket|Socket)\b|package:http/|\bhttp\.(?:get|post|put|delete|patch)\b"), "new network-capable code"),
-    (re.compile(r"\b(?:SharedPreferences|FlutterSecureStorage|File|Directory|RandomAccessFile)\s*\("), "new local persistence / filesystem access"),
-    (re.compile(r"\b(?:writeAsString|writeAsBytes|openWrite|setString|setStringList)\s*\("), "new write-to-disk behavior"),
+    (
+        re.compile(
+            r"\b(?:HttpClient|WebSocket|Socket)\b|package:http/|\bhttp\.(?:get|post|put|delete|patch)\b"
+        ),
+        "new network-capable code",
+    ),
+    (
+        re.compile(
+            r"\b(?:SharedPreferences|FlutterSecureStorage|File|Directory|RandomAccessFile)\s*\("
+        ),
+        "new local persistence / filesystem access",
+    ),
+    (
+        re.compile(
+            r"\b(?:writeAsString|writeAsBytes|openWrite|setString|setStringList)\s*\("
+        ),
+        "new write-to-disk behavior",
+    ),
     (re.compile(r"\b(?:MethodChannel|EventChannel)\s*\("), "new platform channel"),
-    (re.compile(r"\b(?:authorization|bearer|access[_-]?token|api[_-]?key|password|credential)\b", re.I), "credential-sensitive logic"),
-    (re.compile(r"\b(?:schemaVersion|MigrationStrategy|createIndex|alterTable)\b"), "database schema / migration"),
+    (
+        re.compile(
+            r"\b(?:authorization|bearer|access[_-]?token|api[_-]?key|password|credential)\b",
+            re.I,
+        ),
+        "credential-sensitive logic",
+    ),
+    (
+        re.compile(r"\b(?:schemaVersion|MigrationStrategy|createIndex|alterTable)\b"),
+        "database schema / migration",
+    ),
 )
 
 
@@ -147,6 +199,7 @@ _EXEC_WRAPPER = (
     r"(?:(?:sudo|env|command|exec|nohup|nice|stdbuf|setsid|ionice|timeout)\s+"
     r"(?:[-\w=./]+\s+)*)*"
 )
+
 
 # The download half of the download-then-execute rules, shared by the blocked
 # tier (the file is run) and the sensitive tier (it is only made runnable).
@@ -192,7 +245,9 @@ _PR_TARGET_TRIGGER = _split_literal("pull_request", "_target")
 # would leave a trivial bypass.
 BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (
-        re.compile(rf"\bProcess{_SEP}\.{_SEP}(?:run|runSync|start|startSync|killPid)\b"),
+        re.compile(
+            rf"\bProcess{_SEP}\.{_SEP}(?:run|runSync|start|startSync|killPid)\b"
+        ),
         "runtime process execution",
     ),
     # Anything but an explicit `false`: `true` enables a shell, and a variable
@@ -224,7 +279,10 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         "runtime FFI / dynamic library loading",
     ),
-    (re.compile(rf"\b{_PR_TARGET_TRIGGER}\b"), f"{_PR_TARGET_TRIGGER} workflow trigger"),
+    (
+        re.compile(rf"\b{_PR_TARGET_TRIGGER}\b"),
+        f"{_PR_TARGET_TRIGGER} workflow trigger",
+    ),
     (
         re.compile(
             r"""\bpermissions\s*:\s*['"]?write-all\b|^[ \t]*['"]?write-all['"]?[ \t]*$""",
@@ -254,13 +312,11 @@ BLOCKED_ADDITION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         # keeps this precise: fetching a data file and separately running an
         # unrelated local script does not match.
         re.compile(
-            _download_to_file(_SH_GAP)
-            + rf"(?:[\s;&|(]{_EXEC_WRAPPER}(?:/\S+/)?"
+            _download_to_file(_SH_GAP) + rf"(?:[\s;&|(]{_EXEC_WRAPPER}(?:/\S+/)?"
             rf"(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node){_SH_GAP}+"
             # `. f` and `source f` execute the file in the current shell, which
             # is the same capability by a different spelling.
-            rf"|(?:^|[\n;&|(]){_SH_GAP}*(?:\.|source){_SH_GAP}+)"
-            + _SAME_TARGET
+            rf"|(?:^|[\n;&|(]){_SH_GAP}*(?:\.|source){_SH_GAP}+)" + _SAME_TARGET
         ),
         "download-then-execute shell pattern",
     ),
@@ -698,7 +754,12 @@ def classify(
     return dedupe(sensitive), dedupe(blocked)
 
 
-def write_report(report_path: Path, files: list[str], sensitive: list[Finding], blocked: list[Finding]) -> None:
+def write_report(
+    report_path: Path,
+    files: list[str],
+    sensitive: list[Finding],
+    blocked: list[Finding],
+) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     # backslashreplace: a pathname byte that is not valid UTF-8 survives as a
     # surrogate in `path`, and must render readably here rather than raising.
@@ -709,13 +770,17 @@ def write_report(report_path: Path, files: list[str], sensitive: list[Finding], 
             report.write("### Blocked high-risk additions\n\n")
             for finding in blocked:
                 report.write(f"- `{finding.path}` — {finding.reason}\n")
-            report.write("\nThese patterns require redesign or a separate maintainer-controlled implementation; an approval does not bypass them.\n\n")
+            report.write(
+                "\nThese patterns require redesign or a separate maintainer-controlled implementation; an approval does not bypass them.\n\n"
+            )
         if sensitive:
             report.write("### Sensitive surfaces requiring maintainer review\n\n")
             for finding in sensitive:
                 report.write(f"- `{finding.path}` — {finding.reason}\n")
         else:
-            report.write("No security-sensitive trust boundary was detected in this diff.\n")
+            report.write(
+                "No security-sensitive trust boundary was detected in this diff.\n"
+            )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -735,7 +800,10 @@ def main(argv: list[str] | None = None) -> int:
         files = changed_files(args.base, args.head)
         sources, unresolved_paths = changed_sources(args.base, args.head)
     except ScannerError as error:
-        print(f"::error::PR security surface scan could not inspect the diff: {error}", file=sys.stderr)
+        print(
+            f"::error::PR security surface scan could not inspect the diff: {error}",
+            file=sys.stderr,
+        )
         return 2
 
     sensitive, blocked = classify(files, sources, unresolved_paths)
@@ -743,7 +811,9 @@ def main(argv: list[str] | None = None) -> int:
     write_report(Path(args.report), files, sensitive, blocked)
 
     if args.github_output:
-        with open(args.github_output, "a", encoding="utf-8", errors="backslashreplace") as output:
+        with open(
+            args.github_output, "a", encoding="utf-8", errors="backslashreplace"
+        ) as output:
             output.write(f"sensitive={'true' if sensitive else 'false'}\n")
             output.write(f"blocked={'true' if blocked else 'false'}\n")
 
