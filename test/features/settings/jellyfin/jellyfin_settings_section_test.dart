@@ -88,9 +88,11 @@ Future<void> _pumpConnected(
 
 void main() {
   group('JellyfinSettingsSection availability notice', () {
-    testWidgets('explains an unreachable server without offering sign-out as '
+    testWidgets(
+        'explains an unreachable server without offering sign-out as '
         'the fix', (tester) async {
-      await _pumpConnected(tester, verifyError: JellyfinException.notReachable());
+      await _pumpConnected(tester,
+          verifyError: JellyfinException.notReachable());
 
       // The user is told the tracks are hidden, not lost — the whole point of
       // #536, where removing the connection was the only apparent way out.
@@ -103,7 +105,8 @@ void main() {
     });
 
     testWidgets('names a rejected sign-in as the reason', (tester) async {
-      await _pumpConnected(tester, verifyError: JellyfinException.unauthorized());
+      await _pumpConnected(tester,
+          verifyError: JellyfinException.unauthorized());
 
       expect(find.textContaining('rejected this sign-in'), findsOneWidget);
       expect(find.textContaining('Nothing was deleted'), findsOneWidget);

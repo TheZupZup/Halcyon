@@ -20,7 +20,8 @@ import 'library_controller.dart';
 final sourceAvailabilityProvider =
     Provider<Map<String, SourceAvailability>>((ref) {
   return <String, SourceAvailability>{
-    MusicProviders.jellyfin.sourceId: ref.watch(jellyfinAvailabilityProvider).status,
+    MusicProviders.jellyfin.sourceId:
+        ref.watch(jellyfinAvailabilityProvider).status,
   };
 });
 
@@ -30,7 +31,8 @@ final unavailableSourceIdsProvider = Provider<Set<String>>((ref) {
   final Map<String, SourceAvailability> availability =
       ref.watch(sourceAvailabilityProvider);
   return <String>{
-    for (final MapEntry<String, SourceAvailability> entry in availability.entries)
+    for (final MapEntry<String, SourceAvailability> entry
+        in availability.entries)
       if (entry.value.hidesTracks) entry.key,
   };
 });

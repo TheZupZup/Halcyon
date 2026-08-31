@@ -100,13 +100,12 @@ class _JellyfinSettingsSectionState
   /// paste it into a bug report. The report is assembled by the controller and,
   /// by construction, carries no token, password, or full authenticated URL.
   Future<void> _copyDiagnostics() async {
-    final String report = ref
-        .read(jellyfinSettingsControllerProvider.notifier)
-        .diagnosticsReport(
-          // The live probe result, so a saved session for a server the device
-          // can't currently reach reports that instead of "connected".
-          availability: ref.read(jellyfinAvailabilityProvider).status,
-        );
+    final String report =
+        ref.read(jellyfinSettingsControllerProvider.notifier).diagnosticsReport(
+              // The live probe result, so a saved session for a server the device
+              // can't currently reach reports that instead of "connected".
+              availability: ref.read(jellyfinAvailabilityProvider).status,
+            );
     await Clipboard.setData(ClipboardData(text: report));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(

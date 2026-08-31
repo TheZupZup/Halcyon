@@ -307,8 +307,8 @@ void main() {
           () async {
         final observed = <ReachabilityStatus>[];
         final resolver = _build(
-          inner:
-              _FakeInner(failWith: PlaybackResolutionErrorKind.serverUnreachable),
+          inner: _FakeInner(
+              failWith: PlaybackResolutionErrorKind.serverUnreachable),
           reachability: CachingProviderReachability(),
           onReachabilityObserved: observed.add,
         );
@@ -318,15 +318,16 @@ void main() {
           throwsA(isA<PlaybackResolutionException>()),
         );
 
-        expect(
-            observed, <ReachabilityStatus>[ReachabilityStatus.serverUnreachable]);
+        expect(observed,
+            <ReachabilityStatus>[ReachabilityStatus.serverUnreachable]);
       });
 
       test('reports an expired session as an auth failure, not an outage',
           () async {
         final observed = <ReachabilityStatus>[];
         final resolver = _build(
-          inner: _FakeInner(failWith: PlaybackResolutionErrorKind.sessionExpired),
+          inner:
+              _FakeInner(failWith: PlaybackResolutionErrorKind.sessionExpired),
           reachability: CachingProviderReachability(),
           onReachabilityObserved: observed.add,
         );
@@ -344,8 +345,8 @@ void main() {
         // library must not hide the whole source over it.
         final observed = <ReachabilityStatus>[];
         final resolver = _build(
-          inner:
-              _FakeInner(failWith: PlaybackResolutionErrorKind.streamUnavailable),
+          inner: _FakeInner(
+              failWith: PlaybackResolutionErrorKind.streamUnavailable),
           reachability: CachingProviderReachability(),
           onReachabilityObserved: observed.add,
         );
@@ -392,8 +393,8 @@ void main() {
           throwsA(isA<PlaybackResolutionException>()),
         );
 
-        expect(
-            observed, <ReachabilityStatus>[ReachabilityStatus.networkUnavailable]);
+        expect(observed,
+            <ReachabilityStatus>[ReachabilityStatus.networkUnavailable]);
       });
 
       test('an observer that throws never breaks playback', () async {

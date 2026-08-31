@@ -80,8 +80,13 @@ class _FixedPreference extends SourcePreferenceController {
 /// The library repository is seeded exactly as a completed Jellyfin sync plus a
 /// local folder scan would leave it, so "what is stored" and "what is shown" can
 /// be compared directly.
-Future<({ProviderContainer container, FakeJellyfinClient client, InMemoryMusicLibraryRepository repository, InMemoryJellyfinSessionStore sessionStore})>
-    _boot({
+Future<
+    ({
+      ProviderContainer container,
+      FakeJellyfinClient client,
+      InMemoryMusicLibraryRepository repository,
+      InMemoryJellyfinSessionStore sessionStore
+    })> _boot({
   JellyfinException? verifyError,
   Set<String> offlineKeys = const <String>{},
 }) async {
@@ -145,8 +150,7 @@ void main() {
         SourceAvailability.unreachable,
       );
       // The active library holds only what can actually be played.
-      expect(_uris(c.read(libraryUnifiedTracksProvider)),
-          _uris(_localTracks));
+      expect(_uris(c.read(libraryUnifiedTracksProvider)), _uris(_localTracks));
       // Albums and artists are derived from the same set, so no browse surface
       // can offer a route back to a hidden track.
       expect(
@@ -178,8 +182,8 @@ void main() {
       // And nothing was deleted from the catalog: every stored row is still
       // there, ready to reappear.
       final List<Track> stored = await boot.repository.getAllTracks();
-      expect(_uris(stored),
-          containsAll(<String>['jellyfin:101', 'jellyfin:102']));
+      expect(
+          _uris(stored), containsAll(<String>['jellyfin:101', 'jellyfin:102']));
       expect(stored, hasLength(4));
       expect(c.read(unavailableTrackCountProvider), 2);
     });

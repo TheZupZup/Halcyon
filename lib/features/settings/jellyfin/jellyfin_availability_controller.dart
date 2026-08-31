@@ -82,7 +82,8 @@ class JellyfinAvailabilityController extends Notifier<SourceAvailabilityState> {
       return const SourceAvailabilityState.notConfigured();
     }
 
-    final Duration? interval = ref.read(jellyfinAvailabilityPollIntervalProvider);
+    final Duration? interval =
+        ref.read(jellyfinAvailabilityPollIntervalProvider);
     if (interval != null && interval > Duration.zero) {
       _poll = Timer.periodic(interval, (_) => unawaited(refresh()));
     }
