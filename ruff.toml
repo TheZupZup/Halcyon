@@ -17,12 +17,25 @@
 # with python-version "3.11") and that the scripts are run with locally.
 target-version = "py311"
 
-# Nothing here is Python, but an explicit exclude keeps a bare `ruff check .`
-# from ever wandering into vendored or generated trees if Python appears in
-# one later.
+# Keeps a bare `ruff check .` / `ruff format --check .` reporting exactly what
+# the CI job gates on, so a contributor who runs Ruff from the repository root
+# never sees a failure CI does not enforce.
 extend-exclude = [
+  # Vendored and generated trees. Neither holds Python today; excluding them
+  # means neither can start being linted by accident. third_party/ in
+  # particular is upstream source held to upstream's style, exactly as
+  # analysis_options.yaml already excludes it from `flutter analyze`.
   "build",
   "third_party",
+
+  # The one real exception, and it is deliberate rather than a rule being
+  # switched off: issue #353 scopes Ruff to scripts/, tool/ and tools/, and
+  # test/tooling/ holds the Python unit tests for those scripts. They are
+  # tooling too and should be linted, but bringing them in means reformatting
+  # nine more files, which belongs in its own follow-up PR rather than riding
+  # along here. Removing this entry and re-running `ruff format` is the whole
+  # of that change.
+  "test/tooling",
 ]
 
 [lint]

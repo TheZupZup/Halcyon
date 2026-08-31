@@ -1,0 +1,58 @@
+name: Python lint
+
+# Fast lint/format feedback for Linthra's Python tooling, so the Python under
+# scripts/, tool/ and tools/ gets the same kind of check Dart already gets from
+# `dart format --set-exit-if-changed` and `flutter analyze` in ci.yml.
+#
+# Only the three real Python trees are passed to Ruff, so nothing vendored or
+# generated can be linted by accident. ruff.toml excludes the same trees, which
+# means the local twin of this job is either the two commands below or simply
+# `ruff check .` and `ruff format --check .` from the repository root — both
+# report exactly what this job gates on.
+on:
+  pull_request:
+    paths:
+      - "ruff.toml"
+      - ".github/workflows/python-lint.yml"
+      - "scripts/**.py"
+      - "tool/**.py"
+      - "tools/**.py"
+  push:
+    branches: [main]
+    paths:
+      - "ruff.toml"
+      - ".github/workflows/python-lint.yml"
+      - "scripts/**.py"
+      - "tool/**.py"
+      - "tools/**.py"
+
+permissions:
+  contents: read
+
+jobs:
+  ruff:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Same Python every other Linthra workflow sets up, and the version
+      # ruff.toml targets.
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      # Pinned exactly. A new Ruff release can add rules or change formatter
+      # output, which would turn an unrelated PR red for reasons its author did
+      # not cause; bumping the pin is then its own reviewable change, the same
+      # way .flutter-version is.
+      - name: Install Ruff
+        run: python3 -m pip install --quiet "ruff==0.15.8"
+
+      - name: Lint
+        run: ruff check scripts tool tools
+
+      - name: Verify formatting
+        run: ruff format --check scripts tool tools
