@@ -70,6 +70,7 @@ class LocalMusicSettingsSection extends ConsumerWidget {
                 folderLabel: FolderLocation.parse(folder).displayLabel,
                 persisted: persisted,
                 report: report,
+                host: host,
               )
             else
               Text(
@@ -134,11 +135,15 @@ class _SelectedFolderView extends StatelessWidget {
     required this.folderLabel,
     required this.persisted,
     required this.report,
+    required this.host,
   });
 
   final String folderLabel;
   final bool? persisted;
   final LocalScanReport? report;
+
+  /// Which platform's folder chooser the recovery hint should name.
+  final HostPlatform host;
 
   @override
   Widget build(BuildContext context) {
@@ -173,7 +178,7 @@ class _SelectedFolderView extends StatelessWidget {
         ],
         if (report != null) ...[
           const SizedBox(height: AppSpacing.sm),
-          _ScanSummary(report: report!),
+          _ScanSummary(report: report!, host: host),
         ],
       ],
     );
@@ -188,9 +193,12 @@ class _SelectedFolderView extends StatelessWidget {
 /// only booleans and counts (never a path, file name, or raw error), so nothing
 /// private about the user's library can reach the card.
 class _ScanSummary extends StatelessWidget {
-  const _ScanSummary({required this.report});
+  const _ScanSummary({required this.report, required this.host});
 
   final LocalScanReport report;
+
+  /// The platform whose folder chooser the hint points the user back to.
+  final HostPlatform host;
 
   @override
   Widget build(BuildContext context) {
@@ -199,7 +207,7 @@ class _ScanSummary extends StatelessWidget {
     // A scan that threw produced no trustworthy counts, so the breakdown is
     // dropped and only the status + hint are shown.
     final String? counts = report.hadError ? null : _counts(report);
-    final String? hint = _hint(report);
+    final String? hint = _hint(report, host);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -255,10 +263,11 @@ class _ScanSummary extends StatelessWidget {
   }
 
   /// A calm, non-blaming next step when the scan imported nothing. Two shapes: a
-  /// likely access problem (the SD-card / lost-grant case) versus a folder that
-  /// simply held no recognized audio. Both point at re-picking the folder with
-  /// the Android chooser; neither faults the user.
-  static String? _hint(LocalScanReport report) {
+  /// likely access problem (the SD-card / lost-grant / unreachable-folder case)
+  /// versus a folder that simply held no recognized audio. Both point at
+  /// re-picking the folder in the chooser the user actually has; neither faults
+  /// the user.
+  static String? _hint(LocalScanReport report, HostPlatform host) {
     if (report.importedTracks > 0) {
       return null;
     }
@@ -269,12 +278,23 @@ class _ScanSummary extends StatelessWidget {
       final String sdNote =
           report.isContentUri ? ' — common with SD cards' : '';
       return "Linthra couldn't read this folder$sdNote. Select it again with "
-          "Android's folder chooser to restore access.";
+          '${_chooserName(host)} to restore access.';
     }
     return "This folder doesn't seem to contain audio Linthra recognizes. Check "
         'that it has supported audio files (like MP3, M4A, FLAC, or OGG), or '
-        "select the folder again with Android's folder chooser.";
+        'select the folder again with ${_chooserName(host)}.';
   }
+
+  /// What to call the chooser the user re-picks the folder in.
+  ///
+  /// Android's is the system folder chooser (SAF), and saying so is the
+  /// clearest phrasing there. On a desktop it is the system's own chooser —
+  /// inside the Flatpak, the xdg-desktop-portal one — so naming Android's would
+  /// send the user looking for something that is not on their machine. This
+  /// keys off the platform rather than the report's `isContentUri`, which is a
+  /// storage kind: a legacy filesystem selection on Android is still Android.
+  static String _chooserName(HostPlatform host) =>
+      host.isAndroid ? "Android's folder chooser" : 'the system folder chooser';
 }
 
 /// One line of calm guidance (info icon + muted text) shown when a scan needs a

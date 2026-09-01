@@ -203,6 +203,9 @@ void main() {
         'without blaming the user', (tester) async {
       await _pump(
         tester,
+        // A SAF folder is an Android selection, and the hint names Android's
+        // chooser — asserted with an injected host so it holds on any machine.
+        host: HostPlatform.android,
         initialFolder: _safFolder,
         report: const LocalScanReport(
           folderSelected: true,
@@ -245,10 +248,71 @@ void main() {
       expect(find.textContaining('restore access'), findsOneWidget);
     });
 
+    testWidgets(
+        'on Linux, an unreadable folder points at the system chooser, not '
+        "Android's", (tester) async {
+      // The Flatpak case this has to get right: a portal folder that was
+      // revoked or unplugged. Access is reported as fine here so the only
+      // recovery text on screen is the scan hint itself.
+      await _pump(
+        tester,
+        host: HostPlatform.linux,
+        readability: const _FixedReadability(true),
+        initialFolder: '/home/me/Music',
+        report: const LocalScanReport.failure(
+          folderSelected: true,
+          isContentUri: false,
+          error: LocalScanError.folderUnavailable,
+        ),
+      );
+
+      expect(find.textContaining("Android's folder chooser"), findsNothing);
+      // Still a clear way back: reselect the folder in the chooser Linux has.
+      expect(find.textContaining("couldn't read this folder"), findsOneWidget);
+      expect(
+          find.textContaining('Select it again with the system folder '
+              'chooser'),
+          findsOneWidget);
+      expect(find.textContaining('restore access'), findsOneWidget);
+      // The SD-card aside is an Android storage note; a desktop path is not it.
+      expect(find.textContaining('SD cards'), findsNothing);
+    });
+
+    testWidgets(
+        'on Linux, an empty scan suggests reselecting in the system chooser',
+        (tester) async {
+      await _pump(
+        tester,
+        host: HostPlatform.linux,
+        readability: const _FixedReadability(true),
+        initialFolder: '/home/me/Music',
+        report: const LocalScanReport(
+          folderSelected: true,
+          isContentUri: false,
+          filesVisited: 5,
+          audioCandidates: 0,
+          importedTracks: 0,
+          skippedUnsupported: 5,
+          readFailures: 0,
+        ),
+      );
+
+      expect(find.textContaining("Android's folder chooser"), findsNothing);
+      expect(find.textContaining('supported audio files'), findsOneWidget);
+      expect(
+        find.textContaining(
+          'select the folder again with the system folder chooser',
+        ),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('a failed scan shows a gentle status and a reselect hint',
         (tester) async {
       await _pump(
         tester,
+        // A SAF selection, so the Android wording is the right one here.
+        host: HostPlatform.android,
         initialFolder: _safFolder,
         report: const LocalScanReport.failure(
           folderSelected: true,
