@@ -189,17 +189,30 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
   /// [_lastQueueStart] to get the absolute position in history + current +
   /// up-next, which then maps onto the controller's history/up-next jumps.
   ///
-  /// Out-of-range — a stale row from a window published before the queue
-  /// shrank — and the current row are safe no-ops. It never bypasses the
+  /// The row is validated against the **published window** before it is
+  /// translated, not merely against the controller's queue afterwards. Those
+  /// are different checks once the window has slid: with a 200k queue and a
+  /// window at 99 950, row 255 does not exist (the window is 250 rows) yet its
+  /// absolute position 100 205 sits comfortably inside the controller's queue.
+  /// Validating only the translated index would accept that row and jump to a
+  /// track the car never showed. So a row outside what was actually published
+  /// is rejected up front.
+  ///
+  /// Out-of-range — a stale row from a window published before the queue moved
+  /// or shrank — and the current row are safe no-ops. It never bypasses the
   /// controller, so Cast routing and "no duplicate local playback" hold exactly
   /// as for a skip.
   @override
   Future<void> skipToQueueItem(int index) async {
-    if (index < 0) return;
+    // Only rows that exist in the queue this handler last published are real.
+    final int publishedLength = _lastQueueTracks?.length ?? 0;
+    if (index < 0 || index >= publishedLength) return;
+
     final PlaybackState state = _controller.state;
     final int historyLength = state.previous.length;
-    final int total = _queueTracksFor(state).length;
+    final int total = _queueLengthOf(state);
     final int absolute = _lastQueueStart + index;
+    // The queue can still have shrunk since that window was published.
     if (absolute < 0 || absolute >= total) return;
     if (absolute < historyLength) {
       await _controller.playFromHistory(absolute);
@@ -306,14 +319,9 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
     // is lost — the car just sees a slice of it, and the window follows playback.
     // Like the media item, it is pushed only when the window's contents, order,
     // or offset change — never on a position tick (which would thrash the list).
-    final List<Track> allTracks = _queueTracksFor(state);
-    final int start =
-        _publishedQueueStart(allTracks.length, state.previous.length);
-    final List<Track> window = allTracks.sublist(
-        start,
-        start + maxPublishedQueueItems > allTracks.length
-            ? allTracks.length
-            : start + maxPublishedQueueItems);
+    final int total = _queueLengthOf(state);
+    final int start = _publishedQueueStart(total, state.previous.length);
+    final List<Track> window = _publishedWindow(state, start, total);
     if (!_seeded ||
         start != _lastQueueStart ||
         !_sameQueue(window, _lastQueueTracks)) {
@@ -455,16 +463,42 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
     return start;
   }
 
-  /// The live queue as one flat, ordered list: history, then the current track,
-  /// then up-next. This is the *full* queue; only a window of it
-  /// ([_publishedQueueStart]) is published to the platform session, and
-  /// [skipToQueueItem] maps a published row back onto this list.
-  static List<Track> _queueTracksFor(PlaybackState state) {
+  /// How many tracks the controller's queue holds, as the flat
+  /// history + current + up-next list the published window indexes into.
+  ///
+  /// Counted rather than materialized: this runs on every state event, position
+  /// ticks included, and a logical queue may hold 200k tracks. Concatenating it
+  /// several times a second just to read a length (or to slice 250 rows off it)
+  /// would allocate the whole library over and over for no benefit.
+  static int _queueLengthOf(PlaybackState state) =>
+      state.previous.length +
+      (state.currentTrack == null ? 0 : 1) +
+      state.upNext.length;
+
+  /// The track at flat position [index] of history + current + up-next, without
+  /// building that list. Callers stay inside `0 ..< _queueLengthOf(state)`.
+  static Track _queueTrackAt(PlaybackState state, int index) {
+    final List<Track> previous = state.previous;
+    if (index < previous.length) return previous[index];
     final Track? current = state.currentTrack;
+    if (current == null) return state.upNext[index - previous.length];
+    if (index == previous.length) return current;
+    return state.upNext[index - previous.length - 1];
+  }
+
+  /// The rows to publish: at most [maxPublishedQueueItems] tracks starting at
+  /// flat position [start] of a queue holding [total] of them. Materializes only
+  /// what is published — 250 tracks at most, whatever the queue's real size.
+  static List<Track> _publishedWindow(
+    PlaybackState state,
+    int start,
+    int total,
+  ) {
+    final int end = start + maxPublishedQueueItems > total
+        ? total
+        : start + maxPublishedQueueItems;
     return <Track>[
-      ...state.previous,
-      if (current != null) current,
-      ...state.upNext,
+      for (int i = start; i < end; i++) _queueTrackAt(state, i),
     ];
   }
 

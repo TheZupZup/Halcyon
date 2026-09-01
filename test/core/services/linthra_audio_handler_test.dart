@@ -1113,6 +1113,403 @@ void main() {
       });
     });
 
+    // Follow-up coverage for #539 review point 3: a published row must be
+    // validated against the window that was actually published, before it is
+    // translated to an absolute position. Those are different checks once the
+    // window has slid — an out-of-window row can still translate to a perfectly
+    // valid absolute index, and would then jump to a track the car never showed.
+    group('published queue rows are validated before translation (#539)', () {
+      const int maxQueue = LinthraAudioHandler.maxPublishedQueueItems;
+      const int history = LinthraAudioHandler.publishedQueueHistory;
+
+      List<Track> catalog(int n) => <Track>[
+            for (int i = 0; i < n; i++)
+              Track(
+                id: 'jellyfin:$i',
+                title: 'Song ${i.toString().padLeft(6, '0')}',
+                uri: 'jellyfin:track/$i',
+              ),
+          ];
+
+      (LinthraAudioHandler, FakePlaybackController) rig(List<Track> tracks) {
+        final controller = FakePlaybackController();
+        final handler = LinthraAudioHandler(
+          controller,
+          MediaBrowserTree(FakeMusicLibraryRepository(tracks: tracks)),
+        );
+        addTearDown(() async {
+          await handler.dispose();
+          await controller.dispose();
+        });
+        return (handler, controller);
+      }
+
+      /// A handler whose published window sits in the middle of a long queue,
+      /// so `_lastQueueStart` is well above zero and the off-by-window bug is
+      /// reachable.
+      Future<(LinthraAudioHandler, FakePlaybackController, List<Track>)>
+          midWindow() async {
+        final tracks = catalog(20000);
+        final (handler, controller) = rig(tracks);
+        await handler.playFromMediaId(MediaId.libraryTrack(tracks[10000].uri));
+        await _settle();
+        // Window start is 10000 - history; the current row sits at `history`.
+        expect(handler.queue.value, hasLength(maxQueue));
+        expect(handler.playbackState.value.queueIndex, history);
+        return (handler, controller, tracks);
+      }
+
+      test('row 0 and the last published row are valid', () async {
+        final (handler, controller, tracks) = await midWindow();
+        const int start = 10000 - history;
+
+        await handler.skipToQueueItem(0);
+        await _settle();
+        expect(controller.state.currentTrack!.uri, tracks[start].uri);
+
+        // Back to the middle, then the final published row.
+        await handler.playFromMediaId(MediaId.libraryTrack(tracks[10000].uri));
+        await _settle();
+        await handler.skipToQueueItem(maxQueue - 1);
+        await _settle();
+        expect(controller.state.currentTrack!.uri,
+            tracks[start + maxQueue - 1].uri);
+      });
+
+      test('row 250 is a no-op even though its absolute index is valid',
+          () async {
+        final (handler, controller, tracks) = await midWindow();
+
+        // The window is [9950, 10200). Row 250 translates to absolute 10200 —
+        // a real track in the controller's 20 000-track queue — but it was
+        // never published, so it must be rejected.
+        const int absolute = (10000 - history) + maxQueue;
+        expect(absolute, lessThan(tracks.length),
+            reason: 'the translated index must be valid for this to bite');
+
+        final int playsBefore = controller.playedTracks.length;
+        await handler.skipToQueueItem(maxQueue);
+        await _settle();
+
+        expect(controller.playedTracks, hasLength(playsBefore));
+        expect(controller.state.currentTrack!.uri, tracks[10000].uri);
+      });
+
+      test('row 255 is a no-op even though its absolute index is valid',
+          () async {
+        final (handler, controller, tracks) = await midWindow();
+
+        const int absolute = (10000 - history) + 255;
+        expect(absolute, lessThan(tracks.length));
+
+        final int playsBefore = controller.playedTracks.length;
+        await handler.skipToQueueItem(255);
+        await _settle();
+
+        expect(controller.playedTracks, hasLength(playsBefore));
+        expect(controller.state.currentTrack!.uri, tracks[10000].uri);
+      });
+
+      test('a negative row is a no-op', () async {
+        final (handler, controller, tracks) = await midWindow();
+        final int playsBefore = controller.playedTracks.length;
+
+        await handler.skipToQueueItem(-1);
+        await handler.skipToQueueItem(-999);
+        await _settle();
+
+        expect(controller.playedTracks, hasLength(playsBefore));
+        expect(controller.state.currentTrack!.uri, tracks[10000].uri);
+      });
+
+      test('every valid row maps to the exact track it displays', () async {
+        final (handler, controller, tracks) = await midWindow();
+        final published = handler.queue.value;
+
+        for (final int row in <int>[
+          0,
+          1,
+          history - 1,
+          history + 1,
+          maxQueue ~/ 2,
+          maxQueue - 2,
+          maxQueue - 1,
+        ]) {
+          await handler
+              .playFromMediaId(MediaId.libraryTrack(tracks[10000].uri));
+          await _settle();
+          final String shown = handler.queue.value[row].title;
+          await handler.skipToQueueItem(row);
+          await _settle();
+          expect(controller.state.currentTrack!.title, shown,
+              reason: 'row $row');
+        }
+        expect(published, hasLength(maxQueue));
+      });
+
+      test('the published current row stays a no-op and never restarts',
+          () async {
+        final (handler, controller, tracks) = await midWindow();
+        final int playsBefore = controller.playedTracks.length;
+
+        await handler.skipToQueueItem(history); // the current row
+        await _settle();
+
+        expect(controller.playedTracks, hasLength(playsBefore));
+        expect(controller.state.currentTrack!.uri, tracks[10000].uri);
+      });
+
+      test('rows are rejected before anything has been published', () async {
+        // Nothing playing: the published queue is empty, so every row is stale.
+        final (handler, controller) = rig(catalog(20000));
+
+        await handler.skipToQueueItem(0);
+        await handler.skipToQueueItem(10);
+        await _settle();
+
+        expect(controller.playedTracks, isEmpty);
+        expect(controller.state.currentTrack, isNull);
+      });
+    });
+
+    // Follow-up coverage for #539 review point 2: the robustness target is a
+    // *logical* queue of up to 200 000 tracks. The controller may own all of
+    // them; the media session must never be handed them. This suite proves the
+    // native payload is a function of the window size, not the queue size.
+    //
+    // Deliberately efficient: the 200k catalog is built once for the group and
+    // the assertions are O(window), not O(queue). The exhaustive traversal
+    // tests live in the smaller-catalog groups above.
+    group('a 200k logical queue never reaches the media session (#539)', () {
+      const int target = 200000;
+      const int maxQueue = LinthraAudioHandler.maxPublishedQueueItems;
+      const int history = LinthraAudioHandler.publishedQueueHistory;
+
+      // Built once on first use and shared by every test in this group.
+      late final List<Track> huge = <Track>[
+        for (int i = 0; i < target; i++)
+          Track(
+            id: 'jellyfin:$i',
+            title: 'Song ${i.toString().padLeft(6, '0')}',
+            uri: 'jellyfin:track/$i',
+          ),
+      ];
+
+      /// A rig that records every queue the handler ever publishes, so a test
+      /// can prove no oversized payload was emitted at any point — not just
+      /// that the final one happens to be small.
+      (LinthraAudioHandler, FakePlaybackController, List<int>) rig() {
+        final controller = FakePlaybackController();
+        final handler = LinthraAudioHandler(
+          controller,
+          MediaBrowserTree(FakeMusicLibraryRepository(tracks: huge)),
+        );
+        final publishedLengths = <int>[];
+        final sub =
+            handler.queue.listen((items) => publishedLengths.add(items.length));
+        addTearDown(() async {
+          await sub.cancel();
+          await handler.dispose();
+          await controller.dispose();
+        });
+        return (handler, controller, publishedLengths);
+      }
+
+      /// Asserts the session-facing invariants that must hold after any change
+      /// of current track, for a queue of [target] tracks positioned at [index].
+      void expectBoundedAt(
+        LinthraAudioHandler handler,
+        FakePlaybackController controller,
+        int index,
+      ) {
+        final published = handler.queue.value;
+        final int? active = handler.playbackState.value.queueIndex;
+
+        // The controller owns the whole logical queue...
+        expect(
+            controller.state.previous.length +
+                1 +
+                controller.state.upNext.length,
+            target,
+            reason: 'controller queue at $index');
+        // ...the session sees only a window of it.
+        expect(published.length, lessThanOrEqualTo(maxQueue),
+            reason: 'published rows at $index');
+        expect(published, hasLength(maxQueue), reason: 'window full at $index');
+        // The current track is inside the window, at a valid row...
+        expect(active, isNotNull, reason: 'queueIndex at $index');
+        expect(active, inInclusiveRange(0, published.length - 1),
+            reason: 'queueIndex in range at $index');
+        // ...and that row really is what is playing.
+        expect(published[active!].title, huge[index].title,
+            reason: 'highlighted row at $index');
+        expect(controller.state.currentTrack!.uri, huge[index].uri,
+            reason: 'current track at $index');
+      }
+
+      test('selecting near the beginning keeps the payload bounded', () async {
+        final (handler, controller, lengths) = rig();
+
+        await handler.playFromMediaId(MediaId.libraryTrack(huge[3].uri));
+        await _settle();
+
+        expectBoundedAt(handler, controller, 3);
+        expect(handler.playbackState.value.queueIndex, 3);
+        expect(lengths.every((n) => n <= maxQueue), isTrue);
+      });
+
+      test('selecting around index 100 000 keeps the payload bounded',
+          () async {
+        final (handler, controller, lengths) = rig();
+
+        await handler.playFromMediaId(MediaId.libraryTrack(huge[100000].uri));
+        await _settle();
+
+        expectBoundedAt(handler, controller, 100000);
+        expect(handler.playbackState.value.queueIndex, history);
+        expect(lengths.every((n) => n <= maxQueue), isTrue);
+      });
+
+      test('selecting the last track keeps the payload bounded', () async {
+        final (handler, controller, lengths) = rig();
+
+        await handler.playFromMediaId(MediaId.libraryTrack(huge.last.uri));
+        await _settle();
+
+        expectBoundedAt(handler, controller, target - 1);
+        // At the end the window slides back so it is still full, and the
+        // current track is its final row.
+        expect(handler.playbackState.value.queueIndex, maxQueue - 1);
+        expect(lengths.every((n) => n <= maxQueue), isTrue);
+      });
+
+      test('no queue emission ever carries the whole 200k queue', () async {
+        final (handler, controller, lengths) = rig();
+
+        // Exercise the paths that republish: a selection, skips, and a jump.
+        await handler.playFromMediaId(MediaId.libraryTrack(huge[100000].uri));
+        await _settle();
+        await handler.skipToNext();
+        await handler.skipToNext();
+        await handler.skipToPrevious();
+        await handler.skipToQueueItem(history + 5);
+        await _settle();
+
+        expect(lengths, isNotEmpty);
+        expect(lengths.reduce((a, b) => a > b ? a : b),
+            lessThanOrEqualTo(maxQueue));
+        // Even summed across every republish, the session saw a small multiple
+        // of the window — never anything proportional to 200 000.
+        expect(lengths.reduce((a, b) => a + b), lessThan(20 * maxQueue));
+        expect(
+            controller.state.previous.length +
+                1 +
+                controller.state.upNext.length,
+            target);
+      });
+
+      test('skipToQueueItem maps correctly inside a middle window', () async {
+        final (handler, controller, _) = rig();
+        await handler.playFromMediaId(MediaId.libraryTrack(huge[100000].uri));
+        await _settle();
+
+        const int start = 100000 - history;
+
+        await handler.skipToQueueItem(0);
+        await _settle();
+        expect(controller.state.currentTrack!.uri, huge[start].uri);
+
+        await handler.playFromMediaId(MediaId.libraryTrack(huge[100000].uri));
+        await _settle();
+        await handler.skipToQueueItem(maxQueue - 1);
+        await _settle();
+        expect(
+            controller.state.currentTrack!.uri, huge[start + maxQueue - 1].uri);
+      });
+
+      test('rows 250 and 255 stay no-ops though their absolute index is valid',
+          () async {
+        final (handler, controller, _) = rig();
+        await handler.playFromMediaId(MediaId.libraryTrack(huge[100000].uri));
+        await _settle();
+
+        // The window is [99 950, 100 200). Rows 250 and 255 translate to
+        // 100 200 and 100 205 — real tracks in the 200k controller queue that
+        // were never published.
+        for (final int row in <int>[maxQueue, 255]) {
+          expect((100000 - history) + row, lessThan(target),
+              reason: 'translated index must be valid for row $row to bite');
+        }
+
+        final int playsBefore = controller.playedTracks.length;
+        await handler.skipToQueueItem(maxQueue);
+        await handler.skipToQueueItem(255);
+        await handler.skipToQueueItem(-1);
+        await _settle();
+
+        expect(controller.playedTracks, hasLength(playsBefore));
+        expect(controller.state.currentTrack!.uri, huge[100000].uri);
+      });
+
+      test('next and previous keep the sliding window correct', () async {
+        final (handler, controller, lengths) = rig();
+        await handler.playFromMediaId(MediaId.libraryTrack(huge[100000].uri));
+        await _settle();
+
+        for (int step = 1; step <= 3; step++) {
+          await handler.skipToNext();
+          await _settle();
+          expectBoundedAt(handler, controller, 100000 + step);
+        }
+        for (int step = 2; step >= 0; step--) {
+          await handler.skipToPrevious();
+          await _settle();
+          expectBoundedAt(handler, controller, 100000 + step);
+        }
+        expect(lengths.every((n) => n <= maxQueue), isTrue);
+      });
+
+      test('position ticks do not rebuild the 200k queue', () async {
+        // The bridge must materialize only what it publishes. Rebuilding the
+        // flat history+current+up-next list on every state event — position
+        // ticks arrive several times a second — costs a full 200k allocation
+        // each time even when the window is unchanged and nothing is
+        // republished. Measured on this suite: ~2 785 ms before, ~16 ms after,
+        // for 300 ticks (about a minute of playback). The threshold is
+        // deliberately loose — 30x the observed cost, still 5x under the old
+        // one — so it catches a regression to O(queue) without being timing
+        // flaky.
+        final (handler, controller, lengths) = rig();
+        await controller.playTracks(huge, startIndex: 100000);
+        await _settle();
+        final int publishesAfterSelect = lengths.length;
+
+        final Stopwatch sw = Stopwatch()..start();
+        for (int i = 0; i < 300; i++) {
+          controller.emit(controller.state
+              .copyWith(position: Duration(milliseconds: i * 200)));
+        }
+        await _settle();
+        sw.stop();
+
+        // Nothing about the window changed, so nothing was republished...
+        expect(lengths, hasLength(publishesAfterSelect));
+        // ...and the ticks stayed cheap.
+        expect(sw.elapsedMilliseconds, lessThan(500),
+            reason: 'position ticks look O(queue), not O(window)');
+      });
+
+      test('a 200k selection starts exactly one track — no duplicate playback',
+          () async {
+        final (handler, controller, _) = rig();
+
+        await handler.playFromMediaId(MediaId.libraryTrack(huge[100000].uri));
+        await _settle();
+
+        expect(controller.playedTracks, <Track>[huge[100000]]);
+      });
+    });
+
     group('offline & favorites browsing', () {
       late FakePlaybackController offController;
       late LinthraAudioHandler offHandler;
