@@ -229,6 +229,57 @@ abstract final class MediaId {
   }
 }
 
+/// Android's `MediaBrowserCompat` browse options — the page window a media
+/// browser client asks for when it subscribes — and how to apply one.
+///
+/// Applying these is the **app's** job on this stack, and only the app's.
+/// `MediaBrowserServiceCompat.performLoadChildren` filters a result through its
+/// own `applyOptions` *only* when `RESULT_FLAG_OPTION_NOT_HANDLED` is set, and
+/// that flag is set only by the base-class `onLoadChildren(parentId, result,
+/// options)` — the compatibility shim for services that don't handle options.
+/// `audio_service`'s `AudioService` overrides that three-argument method, so the
+/// flag is never set on Linthra's path and the framework passes the returned
+/// list through untouched. Applying the window here is therefore correct and
+/// carries no double-paging risk: without it a client that asks for page 1 would
+/// silently receive page 0's list all over again.
+abstract final class MediaBrowseOptions {
+  /// `MediaBrowserCompat.EXTRA_PAGE` — the zero-based page index requested.
+  static const String extraPage = 'android.media.browse.extra.PAGE';
+
+  /// `MediaBrowserCompat.EXTRA_PAGE_SIZE` — how many children per page.
+  static const String extraPageSize = 'android.media.browse.extra.PAGE_SIZE';
+
+  /// [children] narrowed to the page [options] asks for, or all of them when no
+  /// (or no usable) page is requested.
+  ///
+  /// Deliberately a byte-for-byte port of `MediaBrowserServiceCompat`'s own
+  /// `applyOptions`, including its edge cases — a page beyond the end and a
+  /// nonsensical window both yield an empty list (which is how a client learns
+  /// it has reached the end), and a partly-specified window is treated exactly
+  /// as the framework would. Matching it means enabling or disabling app-side
+  /// paging can never change what a client sees.
+  static List<T> applyPage<T>(List<T> children, Map<String, dynamic>? options) {
+    if (options == null) return children;
+    final int page = _intOf(options[extraPage]);
+    final int pageSize = _intOf(options[extraPageSize]);
+    if (page == -1 && pageSize == -1) return children;
+    final int fromIndex = pageSize * page;
+    if (page < 0 || pageSize < 1 || fromIndex >= children.length) {
+      return <T>[];
+    }
+    final int toIndex = fromIndex + pageSize > children.length
+        ? children.length
+        : fromIndex + pageSize;
+    return children.sublist(fromIndex, toIndex);
+  }
+
+  /// A bundle value as an int, or -1 ("absent") when it isn't one. The platform
+  /// hands these over as Java `Integer`s, but a head unit is free to put
+  /// anything in the bundle, so a non-integer is treated as absent rather than
+  /// throwing out of a browse.
+  static int _intOf(Object? value) => value is int ? value : -1;
+}
+
 /// The section and half-open window `[start, end)` a `page/...` container names.
 @immutable
 class BrowsePage {
@@ -330,6 +381,12 @@ class MediaBrowserTree {
   /// the client simply never receives `onChildrenLoaded` and spins forever. At
   /// this size a page of rich track rows is on the order of 150 kB, comfortably
   /// inside the buffer even alongside other in-flight transactions.
+  ///
+  /// A client's own `EXTRA_PAGE` window (honoured in `LinthraAudioHandler`, see
+  /// [MediaBrowseOptions]) does not replace this bound: a client may subscribe
+  /// with no options at all, and on this stack nothing between here and the car
+  /// shortens an over-long list on its own. So the tree is bounded first, and a
+  /// requested page narrows it further.
   static const int browsePageSize = 250;
 
   /// How long one catalog read is reused across browse requests.

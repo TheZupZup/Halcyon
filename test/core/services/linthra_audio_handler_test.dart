@@ -675,6 +675,444 @@ void main() {
       });
     });
 
+    // Follow-up coverage for #539 review point 1: the browse options Android
+    // Auto sends are honoured here, because nothing below this handler applies
+    // them. MediaBrowserServiceCompat runs its own applyOptions only under
+    // RESULT_FLAG_OPTION_NOT_HANDLED, which the base class sets only when the
+    // service leaves onLoadChildren(parentId, result, options) unoverridden —
+    // and audio_service's AudioService overrides it, calling
+    // result.sendResult(...) directly. So an unhandled page request would hand
+    // the client page 0 over and over.
+    group('browse page options are honoured (#539)', () {
+      const String extraPage = MediaBrowseOptions.extraPage;
+      const String extraPageSize = MediaBrowseOptions.extraPageSize;
+
+      List<Track> catalog(int n) => <Track>[
+            for (int i = 0; i < n; i++)
+              Track(
+                id: 'jellyfin:$i',
+                title: 'Song ${i.toString().padLeft(5, '0')}',
+                uri: 'jellyfin:https://host.example/Items/$i?api_key=SECRET',
+              ),
+          ];
+
+      LinthraAudioHandler handlerFor(List<Track> tracks) {
+        final controller = FakePlaybackController();
+        final handler = LinthraAudioHandler(
+          controller,
+          MediaBrowserTree(FakeMusicLibraryRepository(tracks: tracks)),
+        );
+        addTearDown(() async {
+          await handler.dispose();
+          await controller.dispose();
+        });
+        return handler;
+      }
+
+      test('page 0 and a non-zero page return different, adjacent windows',
+          () async {
+        // 200 songs: one flat, unpaged node, browsed 50 at a time.
+        final handler = handlerFor(catalog(200));
+
+        final unpaged = await handler.getChildren(MediaId.library);
+        final page0 = await handler.getChildren(MediaId.library,
+            <String, dynamic>{extraPage: 0, extraPageSize: 50});
+        final page1 = await handler.getChildren(MediaId.library,
+            <String, dynamic>{extraPage: 1, extraPageSize: 50});
+        final page3 = await handler.getChildren(MediaId.library,
+            <String, dynamic>{extraPage: 3, extraPageSize: 50});
+
+        expect(unpaged, hasLength(200));
+        expect(page0, hasLength(50));
+        expect(page1, hasLength(50));
+        expect(page3, hasLength(50));
+        // The regression this guards: page 1 must not repeat page 0.
+        expect(page1.map((i) => i.id), isNot(page0.map((i) => i.id)));
+        expect(page0.map((i) => i.id), unpaged.take(50).map((i) => i.id));
+        expect(
+            page1.map((i) => i.id), unpaged.skip(50).take(50).map((i) => i.id));
+        expect(page3.map((i) => i.id),
+            unpaged.skip(150).take(50).map((i) => i.id));
+      });
+
+      test('paging tiles a node exactly, with no gap, overlap or loss',
+          () async {
+        final handler = handlerFor(catalog(200));
+
+        final seen = <String>[];
+        for (int page = 0;; page++) {
+          final items = await handler.getChildren(MediaId.library,
+              <String, dynamic>{extraPage: page, extraPageSize: 30});
+          if (items.isEmpty) break;
+          seen.addAll(items.map((i) => i.id));
+          expect(page, lessThan(20), reason: 'paging did not terminate');
+        }
+
+        final all = await handler.getChildren(MediaId.library);
+        expect(seen, all.map((i) => i.id).toList());
+        expect(seen.toSet(), hasLength(200));
+      });
+
+      test('a partial last page, then an empty one, ends the walk', () async {
+        // 200 songs at 60 per page: 3 full pages, a 20-row remainder, then end.
+        final handler = handlerFor(catalog(200));
+
+        Future<int> sizeOf(int page) async => (await handler.getChildren(
+              MediaId.library,
+              <String, dynamic>{extraPage: page, extraPageSize: 60},
+            ))
+                .length;
+
+        expect(await sizeOf(2), 60);
+        expect(await sizeOf(3), 20);
+        expect(await sizeOf(4), 0);
+      });
+
+      test('paging composes with the tree bound on a large catalog', () async {
+        // 4 pages' worth of page containers, browsed 2 rows at a time.
+        final handler =
+            handlerFor(catalog(4 * MediaBrowserTree.browsePageSize));
+
+        final containers = await handler.getChildren(MediaId.library);
+        expect(containers, hasLength(4));
+        expect(containers.every((i) => MediaId.isBrowsePage(i.id)), isTrue);
+
+        final second = await handler.getChildren(
+            MediaId.library, <String, dynamic>{extraPage: 1, extraPageSize: 2});
+        expect(second.map((i) => i.id),
+            containers.skip(2).take(2).map((i) => i.id));
+
+        // And a page *inside* a container still pages correctly.
+        final inside = await handler.getChildren(containers.first.id,
+            <String, dynamic>{extraPage: 1, extraPageSize: 50});
+        final whole = await handler.getChildren(containers.first.id);
+        expect(
+            inside.map((i) => i.id), whole.skip(50).take(50).map((i) => i.id));
+      });
+
+      test('absent, empty or nonsensical options return the whole node',
+          () async {
+        final handler = handlerFor(catalog(10));
+
+        // No options at all: Android's two-argument onLoadChildren path.
+        expect(await handler.getChildren(MediaId.library), hasLength(10));
+        expect(await handler.getChildren(MediaId.library, <String, dynamic>{}),
+            hasLength(10));
+        // Only one half of the window specified, or a junk type: treated
+        // exactly as MediaBrowserServiceCompat.applyOptions would.
+        expect(
+          await handler.getChildren(
+              MediaId.library, <String, dynamic>{extraPage: 'nope'}),
+          hasLength(10),
+        );
+        expect(
+          await handler.getChildren(MediaId.library,
+              <String, dynamic>{extraPage: -1, extraPageSize: -1}),
+          hasLength(10),
+        );
+        // A negative page, a zero page size, and a page past the end are all
+        // empty — how a client learns it has run out.
+        expect(
+          await handler.getChildren(MediaId.library,
+              <String, dynamic>{extraPage: -2, extraPageSize: 5}),
+          isEmpty,
+        );
+        expect(
+          await handler.getChildren(MediaId.library,
+              <String, dynamic>{extraPage: 0, extraPageSize: 0}),
+          isEmpty,
+        );
+        expect(
+          await handler.getChildren(MediaId.library,
+              <String, dynamic>{extraPage: 99, extraPageSize: 5}),
+          isEmpty,
+        );
+      });
+
+      test('paged rows stay token-, path- and scheme-free', () async {
+        final handler = handlerFor(catalog(200));
+
+        final items = await handler.getChildren(MediaId.library,
+            <String, dynamic>{extraPage: 2, extraPageSize: 50});
+
+        expect(items, isNotEmpty);
+        for (final item in items) {
+          for (final String text in <String>[
+            item.id,
+            item.title,
+            item.displaySubtitle ?? '',
+          ]) {
+            expect(text, isNot(contains('api_key')));
+            expect(text.toLowerCase(), isNot(contains('secret')));
+            expect(text, isNot(contains('://')));
+          }
+        }
+      });
+    });
+
+    // Follow-up coverage for #539 review point 2: fixing the browse response
+    // must not move the oversized-payload problem onto the playback path.
+    // Selecting a song still hands the controller the whole catalog, and
+    // `queue.add(...)` becomes a native MediaSessionCompat queue delivered in
+    // one Binder transaction — so the *published* queue is a bounded window,
+    // while the controller keeps the full queue.
+    group('the published media-session queue stays bounded (#539)', () {
+      const int maxQueue = LinthraAudioHandler.maxPublishedQueueItems;
+      const int history = LinthraAudioHandler.publishedQueueHistory;
+
+      // 10k+, well past the ~1.5k Binder threshold, but cheap to build.
+      const int bigCatalog = 12000;
+
+      List<Track> catalog(int n) => <Track>[
+            for (int i = 0; i < n; i++)
+              Track(
+                id: 'jellyfin:$i',
+                title: 'Song ${i.toString().padLeft(5, '0')}',
+                uri: 'jellyfin:https://host.example/Items/$i?api_key=SECRET',
+                artistName: 'Artist ${i % 40}',
+                albumName: 'Album ${i % 90}',
+              ),
+          ];
+
+      /// A handler plus its controller, torn down with the test.
+      (LinthraAudioHandler, FakePlaybackController) rig(List<Track> tracks) {
+        final controller = FakePlaybackController();
+        final handler = LinthraAudioHandler(
+          controller,
+          MediaBrowserTree(FakeMusicLibraryRepository(tracks: tracks)),
+        );
+        addTearDown(() async {
+          await handler.dispose();
+          await controller.dispose();
+        });
+        return (handler, controller);
+      }
+
+      /// The Songs leaf id for [track] — position-independent, so it is the
+      /// same id whichever page of the browse tree listed it.
+      String leafIdFor(Track track) => MediaId.libraryTrack(track.uri);
+
+      test('selecting a song from a 12k library publishes a bounded queue',
+          () async {
+        final tracks = catalog(bigCatalog);
+        final (handler, controller) = rig(tracks);
+
+        await handler.playFromMediaId(leafIdFor(tracks[0]));
+        await _settle();
+
+        // The controller really does own the whole catalog...
+        expect(controller.state.upNext.length + 1, tracks.length);
+        // ...but the session only ever sees a window of it.
+        expect(handler.queue.value, hasLength(maxQueue));
+        expect(handler.queue.value.length, lessThan(tracks.length));
+      });
+
+      test('the window follows playback and always holds the current track',
+          () async {
+        final tracks = catalog(bigCatalog);
+        final (handler, controller) = rig(tracks);
+
+        Future<void> selectAndCheck(int index) async {
+          await handler.playFromMediaId(leafIdFor(tracks[index]));
+          await _settle();
+
+          final published = handler.queue.value;
+          expect(published, hasLength(maxQueue), reason: 'at $index');
+          final int active = handler.playbackState.value.queueIndex!;
+          expect(active, inInclusiveRange(0, published.length - 1),
+              reason: 'at $index');
+          // The highlighted row is the track that is actually playing.
+          expect(published[active].title, tracks[index].title,
+              reason: 'at $index');
+          expect(controller.state.currentTrack!.uri, tracks[index].uri,
+              reason: 'at $index');
+        }
+
+        await selectAndCheck(0); // first
+        await selectAndCheck(bigCatalog ~/ 2); // middle
+        await selectAndCheck(bigCatalog - 1); // last
+      });
+
+      test('first, middle and last selections keep the window in range',
+          () async {
+        final tracks = catalog(bigCatalog);
+        final (handler, _) = rig(tracks);
+
+        // First track: nothing behind it, so the window starts at 0.
+        await handler.playFromMediaId(leafIdFor(tracks.first));
+        await _settle();
+        expect(handler.playbackState.value.queueIndex, 0);
+        expect(handler.queue.value.first.title, tracks.first.title);
+
+        // Middle: the configured amount of history sits behind the current row.
+        await handler.playFromMediaId(leafIdFor(tracks[5000]));
+        await _settle();
+        expect(handler.playbackState.value.queueIndex, history);
+
+        // Last track: the window slides back so it is still full, and the
+        // current row is its final entry.
+        await handler.playFromMediaId(leafIdFor(tracks.last));
+        await _settle();
+        expect(handler.queue.value, hasLength(maxQueue));
+        expect(handler.playbackState.value.queueIndex, maxQueue - 1);
+        expect(handler.queue.value.last.title, tracks.last.title);
+      });
+
+      test('a small library publishes its whole queue, unchanged', () async {
+        final (handler, _) = rig(_library);
+
+        await handler.playFromMediaId(MediaId.libraryTrack('/a.mp3'));
+        await _settle();
+
+        expect(handler.queue.value.map((i) => i.title),
+            _library.map((t) => t.title));
+        expect(handler.playbackState.value.queueIndex, 0);
+      });
+
+      test('next and previous cross the window boundary correctly', () async {
+        final tracks = catalog(bigCatalog);
+        final (handler, controller) = rig(tracks);
+
+        // Start where the window is full and sliding: current at `history`.
+        await handler.playFromMediaId(leafIdFor(tracks[1000]));
+        await _settle();
+        expect(handler.playbackState.value.queueIndex, history);
+
+        // Walk forward past where the window must slide, and check the session
+        // keeps naming the right track at the right row every step.
+        for (int step = 1; step <= 3; step++) {
+          await handler.skipToNext();
+          await _settle();
+          final published = handler.queue.value;
+          final int active = handler.playbackState.value.queueIndex!;
+          expect(controller.state.currentTrack!.uri, tracks[1000 + step].uri);
+          expect(published[active].title, tracks[1000 + step].title);
+          expect(published, hasLength(maxQueue));
+        }
+
+        // And back again.
+        for (int step = 2; step >= 0; step--) {
+          await handler.skipToPrevious();
+          await _settle();
+          final published = handler.queue.value;
+          final int active = handler.playbackState.value.queueIndex!;
+          expect(controller.state.currentTrack!.uri, tracks[1000 + step].uri);
+          expect(published[active].title, tracks[1000 + step].title);
+        }
+      });
+
+      test('skipToQueueItem maps a windowed row to the right track', () async {
+        final tracks = catalog(bigCatalog);
+        final (handler, controller) = rig(tracks);
+
+        await handler.playFromMediaId(leafIdFor(tracks[5000]));
+        await _settle();
+
+        // Row 0 of the published window is `history` tracks behind the current
+        // one — the offset that a naive index-as-absolute mapping would get
+        // wrong.
+        await handler.skipToQueueItem(0);
+        await _settle();
+        expect(controller.state.currentTrack!.uri, tracks[5000 - history].uri);
+
+        // A forward row within the same window.
+        await handler.playFromMediaId(leafIdFor(tracks[5000]));
+        await _settle();
+        await handler.skipToQueueItem(history + 10);
+        await _settle();
+        expect(controller.state.currentTrack!.uri, tracks[5010].uri);
+
+        // The published row for the current track is a no-op, not a restart.
+        await handler.playFromMediaId(leafIdFor(tracks[5000]));
+        await _settle();
+        final int playsBefore = controller.playedTracks.length;
+        await handler.skipToQueueItem(handler.playbackState.value.queueIndex!);
+        await _settle();
+        expect(controller.playedTracks, hasLength(playsBefore));
+        expect(controller.state.currentTrack!.uri, tracks[5000].uri);
+      });
+
+      test('every published row maps back to the track it displays', () async {
+        final tracks = catalog(bigCatalog);
+        final (handler, controller) = rig(tracks);
+
+        await handler.playFromMediaId(leafIdFor(tracks[5000]));
+        await _settle();
+        final published = handler.queue.value;
+
+        // Spot-check across the whole window, including both ends.
+        for (final int row in <int>[
+          0,
+          1,
+          history - 1,
+          history + 1,
+          published.length ~/ 2,
+          published.length - 1
+        ]) {
+          await handler.playFromMediaId(leafIdFor(tracks[5000]));
+          await _settle();
+          final String expectedTitle = handler.queue.value[row].title;
+          await handler.skipToQueueItem(row);
+          await _settle();
+          expect(controller.state.currentTrack!.title, expectedTitle,
+              reason: 'row $row');
+        }
+      });
+
+      test('an out-of-window row is a safe no-op, never a wrong track',
+          () async {
+        final tracks = catalog(bigCatalog);
+        final (handler, controller) = rig(tracks);
+
+        await handler.playFromMediaId(leafIdFor(tracks.last));
+        await _settle();
+        final int playsBefore = controller.playedTracks.length;
+
+        // Rows that do not exist in the published window.
+        await handler.skipToQueueItem(-1);
+        await handler.skipToQueueItem(maxQueue + 5);
+        await handler.skipToQueueItem(bigCatalog + 100);
+        await _settle();
+
+        expect(controller.playedTracks, hasLength(playsBefore));
+        expect(controller.state.currentTrack!.uri, tracks.last.uri);
+      });
+
+      test('selecting a song starts it exactly once — no duplicate playback',
+          () async {
+        final tracks = catalog(bigCatalog);
+        final (handler, controller) = rig(tracks);
+
+        await handler.playFromMediaId(leafIdFor(tracks[7000]));
+        await _settle();
+
+        expect(controller.playedTracks, <Track>[tracks[7000]]);
+        expect(controller.state.currentTrack!.uri, tracks[7000].uri);
+      });
+
+      test('published queue rows carry no token, path or scheme', () async {
+        final tracks = catalog(bigCatalog);
+        final (handler, _) = rig(tracks);
+
+        await handler.playFromMediaId(leafIdFor(tracks[5000]));
+        await _settle();
+
+        for (final item in handler.queue.value) {
+          for (final String text in <String>[
+            item.id,
+            item.title,
+            item.artist ?? '',
+            item.album ?? '',
+          ]) {
+            expect(text, isNot(contains('api_key')));
+            expect(text.toLowerCase(), isNot(contains('secret')));
+            expect(text, isNot(contains('://')));
+          }
+          expect(item.extras, anyOf(isNull, isEmpty));
+        }
+      });
+    });
+
     group('offline & favorites browsing', () {
       late FakePlaybackController offController;
       late LinthraAudioHandler offHandler;
