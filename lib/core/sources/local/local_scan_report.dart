@@ -6,6 +6,13 @@ enum LocalScanError {
   /// Access Framework (revoked grant, unresolvable provider, unreadable path).
   safTraversal,
 
+  /// The selected folder itself could not be opened on a filesystem scan: it
+  /// is missing, unreadable, or (in the Flatpak) the portal document that
+  /// exposed it was revoked. Recoverable by reselecting the folder, and
+  /// deliberately distinct from [safTraversal] so a desktop report does not
+  /// read as an Android permission problem.
+  folderUnavailable,
+
   /// Any other unexpected scan failure (a `dart:io` fault, a plugin error).
   unexpected,
 }

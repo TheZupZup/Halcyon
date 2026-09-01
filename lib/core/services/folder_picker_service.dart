@@ -14,3 +14,22 @@ abstract interface class FolderPickerService {
   /// Framework tree URI (Android).
   Future<String?> pickFolder();
 }
+
+/// Thrown by a [FolderPickerService] that could not offer a chooser at all on
+/// this build or platform — as opposed to returning `null`, which means the
+/// user was shown a chooser and cancelled.
+///
+/// The distinction matters where one platform has two chooser paths: on Linux
+/// the native GTK/portal chooser is the correct one, but it only exists in a
+/// build whose runner registered it, so [LinuxFolderPickerService] has to tell
+/// "no chooser here, try the plugin" apart from "the user said no" — falling
+/// back on a cancel would pop a second dialog in the user's face.
+class FolderPickerUnavailableException implements Exception {
+  const FolderPickerUnavailableException(this.reason);
+
+  /// Why no chooser was available, for logs. Never shown to the user.
+  final String reason;
+
+  @override
+  String toString() => 'FolderPickerUnavailableException: $reason';
+}

@@ -1,11 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:linthra/core/platform/host_platform.dart';
+import 'package:linthra/core/sources/local/directory_readability.dart';
 import 'package:linthra/core/sources/local/local_scan_diagnostics.dart';
 import 'package:linthra/core/sources/local/local_scan_report.dart';
+import 'package:linthra/data/repositories/host_platform_provider.dart';
 import 'package:linthra/data/repositories/in_memory_selected_music_folder_repository.dart';
 import 'package:linthra/data/repositories/selected_music_folder_repository_provider.dart';
+import 'package:linthra/features/library/library_providers.dart';
 import 'package:linthra/features/settings/source/local_music_settings_section.dart';
+
+/// Reports one fixed answer for "can this folder still be listed?", standing in
+/// for the real `dart:io` probe so the desktop lost-access state can be driven
+/// without a disk.
+class _FixedReadability implements DirectoryReadability {
+  const _FixedReadability(this.readable);
+
+  final bool readable;
+
+  @override
+  Future<bool> canList(String path) async => readable;
+}
 
 const String _safFolder =
     'content://com.android.externalstorage.documents/tree/primary%3AMusic';
@@ -14,6 +30,8 @@ Future<void> _pump(
   WidgetTester tester, {
   String? initialFolder,
   LocalScanReport? report,
+  HostPlatform? host,
+  DirectoryReadability? readability,
 }) async {
   // The card reads the last scan reactively from localScanReportProvider, which
   // seeds itself from LocalScanDiagnostics.last — so recording here is how a
@@ -27,6 +45,9 @@ Future<void> _pump(
         selectedMusicFolderRepositoryProvider.overrideWithValue(
           InMemorySelectedMusicFolderRepository(initialFolder: initialFolder),
         ),
+        if (host != null) hostPlatformProvider.overrideWithValue(host),
+        if (readability != null)
+          directoryReadabilityProvider.overrideWithValue(readability),
       ],
       child: const MaterialApp(
         home: Scaffold(body: LocalMusicSettingsSection()),
@@ -43,6 +64,63 @@ void main() {
   tearDown(LocalScanDiagnostics.reset);
 
   group('LocalMusicSettingsSection', () {
+    testWidgets('on Linux, a folder Linthra cannot reach says so', (
+      tester,
+    ) async {
+      // The Flatpak/desktop half of the lost-access state (#438): the portal
+      // document was revoked, the drive was unplugged, or the folder is gone.
+      // The card has to say that plainly, and promise the library is still
+      // there, instead of quietly showing an empty local source.
+      await _pump(
+        tester,
+        initialFolder: '/home/me/Music',
+        host: HostPlatform.linux,
+        readability: const _FixedReadability(false),
+      );
+
+      expect(
+        find.textContaining('Linthra can no longer reach this folder'),
+        findsOneWidget,
+      );
+      // Recoverable, not destructive: reselecting is the fix, and the actions
+      // to do it are still on the card.
+      expect(find.text('Change'), findsOneWidget);
+      expect(find.text('Forget folder'), findsOneWidget);
+    });
+
+    testWidgets('on Linux, a reachable folder says nothing about access', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        initialFolder: '/home/me/Music',
+        host: HostPlatform.linux,
+        readability: const _FixedReadability(true),
+      );
+
+      expect(find.text('/home/me/Music'), findsOneWidget);
+      expect(
+        find.textContaining('Linthra can no longer reach this folder'),
+        findsNothing,
+      );
+    });
+
+    testWidgets('on Linux, the blurb describes the desktop file chooser', (
+      tester,
+    ) async {
+      // The Android copy ("Android's folder access") is wrong on a desktop,
+      // where the same promise — only the folder you chose, no broad
+      // permission — is kept by the system file chooser (the portal, in a
+      // Flatpak).
+      await _pump(tester, host: HostPlatform.linux);
+
+      expect(
+        find.textContaining('the system file chooser'),
+        findsOneWidget,
+      );
+      expect(find.textContaining("Android's folder access"), findsNothing);
+    });
+
     testWidgets('with no folder, invites the user to select one',
         (tester) async {
       await _pump(tester);

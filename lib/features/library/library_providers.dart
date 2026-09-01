@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/services/folder_picker_service.dart';
 import '../../core/services/platform_folder_picker_service.dart';
 import '../../core/sources/local/audio_file_scanner.dart';
+import '../../core/sources/local/directory_readability.dart';
 import '../../core/sources/local/local_metadata_reader.dart';
 import '../../core/sources/local/method_channel_saf_document_lister.dart';
 import '../../core/sources/local/method_channel_saf_permission_probe.dart';
@@ -51,6 +52,19 @@ final safPermissionProbeProvider = Provider<SafPermissionProbe>((ref) {
   return ref.watch(hostPlatformProvider).isAndroid
       ? const MethodChannelSafPermissionProbe()
       : const UnsupportedSafPermissionProbe();
+});
+
+/// The seam that answers whether a *filesystem* music folder can still be
+/// listed right now — the desktop half of the "did we lose access?" signal the
+/// SAF probe above answers on Android.
+///
+/// It is what tells a Flatpak whose portal document was revoked (the exported
+/// path simply disappears) apart from a folder that is genuinely empty, and it
+/// is equally the answer for an unplugged drive or a folder the user deleted on
+/// a native Linux build. Tests override it with a fake so neither case needs a
+/// real disk.
+final directoryReadabilityProvider = Provider<DirectoryReadability>((ref) {
+  return const IoDirectoryReadability();
 });
 
 /// The tag-reading seam used to enrich *filesystem* (desktop/Linux and

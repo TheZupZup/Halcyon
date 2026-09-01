@@ -79,12 +79,49 @@ endif()
 MY_APPLICATION = """\
 #include "my_application.h"
 
+#include "folder_picker_channel.h"
+
 static constexpr const char* kApplicationName = "{display_name}";
 static constexpr int kDefaultWindowWidth = 1180;
 static constexpr int kDefaultWindowHeight = 780;
 static constexpr int kMinimumWindowWidth = 420;
 static constexpr int kMinimumWindowHeight = 600;
+
+static void activate() {{
+  self->folder_picker = folder_picker_channel_new(view, window);
+}}
 """
+
+# The runner's own build file, which has to compile the folder-picker source
+# (#438) for the channel to exist at all.
+RUNNER_CMAKELISTS = """\
+add_executable(${{BINARY_NAME}}
+  "main.cc"
+  "my_application.cc"
+  "folder_picker_channel.cc"
+)
+"""
+
+# The two halves of the folder-picker channel, reduced to the strings the
+# checker compares. A rename on either side is invisible at build time and
+# turns every pick into a silent fallback, which inside the Flatpak means no
+# chooser at all.
+FOLDER_PICKER_CHANNEL = """\
+static constexpr const char* kChannelName =
+    "{channel}";
+static constexpr const char* kPickFolderMethod = "{method}";
+"""
+
+FOLDER_PICKER_DART = """\
+class MethodChannelLinuxFolderPicker implements FolderPickerService {{
+  static const String channelName =
+      '{channel}';
+  static const String pickFolderMethod = '{method}';
+}}
+"""
+
+FOLDER_PICKER_CHANNEL_NAME = f"{APP_ID}/linux_folder_picker"
+FOLDER_PICKER_METHOD_NAME = "pickFolder"
 
 BUILD_GRADLE = """\
 android {{
@@ -197,6 +234,9 @@ def build_checkout(
     flatpak_manifest: str | None = None,
     icon_svg: str | None = None,
     write_icon: bool = True,
+    runner_cmakelists: str | None = None,
+    folder_picker_channel: str | None = None,
+    folder_picker_dart: str | None = None,
 ) -> Path:
     """Write a minimal, internally consistent checkout the checker can read."""
     (directory / "linux" / "runner").mkdir(parents=True, exist_ok=True)
@@ -205,6 +245,7 @@ def build_checkout(
     (directory / "tool" / "branding").mkdir(parents=True, exist_ok=True)
     (directory / "android" / "app").mkdir(parents=True, exist_ok=True)
     (directory / "lib" / "core").mkdir(parents=True, exist_ok=True)
+    (directory / "lib" / "core" / "services").mkdir(parents=True, exist_ok=True)
 
     (directory / "linux" / "CMakeLists.txt").write_text(
         cmakelists
@@ -216,6 +257,30 @@ def build_checkout(
         my_application
         if my_application is not None
         else MY_APPLICATION.format(display_name=DISPLAY_NAME),
+        encoding="utf-8",
+    )
+    runner = directory / "linux" / "runner"
+    (runner / "CMakeLists.txt").write_text(
+        runner_cmakelists if runner_cmakelists is not None else RUNNER_CMAKELISTS,
+        encoding="utf-8",
+    )
+    (runner / "folder_picker_channel.cc").write_text(
+        folder_picker_channel
+        if folder_picker_channel is not None
+        else FOLDER_PICKER_CHANNEL.format(
+            channel=FOLDER_PICKER_CHANNEL_NAME, method=FOLDER_PICKER_METHOD_NAME
+        ),
+        encoding="utf-8",
+    )
+    (
+        directory / "lib" / "core" / "services"
+        / "method_channel_linux_folder_picker.dart"
+    ).write_text(
+        folder_picker_dart
+        if folder_picker_dart is not None
+        else FOLDER_PICKER_DART.format(
+            channel=FOLDER_PICKER_CHANNEL_NAME, method=FOLDER_PICKER_METHOD_NAME
+        ),
         encoding="utf-8",
     )
     (directory / "android" / "app" / "build.gradle").write_text(
@@ -645,6 +710,69 @@ class WindowMetricsTest(CheckoutCase):
             .replace("kMinimumWindowHeight = 600", "kMinimumWindowHeight = 780"),
         )
         self.assertEqual(checker.check(self.root), [])
+
+
+class FolderPickerChannelTest(CheckoutCase):
+    """The runner<->Dart folder-picker contract (#438).
+
+    Every failure here is silent at build time: the app still compiles, the
+    chooser just never answers and Dart falls back to `file_picker`, which
+    inside the Flatpak has no zenity/kdialog to run. So the only thing that
+    catches it before a user does is this comparison.
+    """
+
+    def test_a_renamed_channel_on_the_dart_side_is_caught(self) -> None:
+        build_checkout(
+            self.root,
+            folder_picker_dart=FOLDER_PICKER_DART.format(
+                channel="io.example.app/renamed",
+                method=FOLDER_PICKER_METHOD_NAME,
+            ),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("channel name", problems[0])
+        self.assertIn("io.example.app/renamed", problems[0])
+
+    def test_a_renamed_method_on_the_native_side_is_caught(self) -> None:
+        build_checkout(
+            self.root,
+            folder_picker_channel=FOLDER_PICKER_CHANNEL.format(
+                channel=FOLDER_PICKER_CHANNEL_NAME, method="chooseFolder"
+            ),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("method name", problems[0])
+        self.assertIn("chooseFolder", problems[0])
+
+    def test_dropping_the_source_from_the_runner_build_is_caught(self) -> None:
+        # What a `flutter create` regeneration of linux/ would do: restore the
+        # template's source list and leave the channel uncompiled.
+        build_checkout(
+            self.root,
+            runner_cmakelists=RUNNER_CMAKELISTS.replace(
+                '  "folder_picker_channel.cc"\n', ""
+            ),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("folder_picker_channel.cc", problems[0])
+
+    def test_never_registering_the_channel_is_caught(self) -> None:
+        # Compiled but never wired to the engine is the same silence.
+        build_checkout(
+            self.root,
+            my_application=MY_APPLICATION.format(
+                display_name=DISPLAY_NAME
+            ).replace(
+                "self->folder_picker = folder_picker_channel_new(view, window);",
+                "// no folder picker here",
+            ),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("folder_picker_channel_new", problems[0])
 
 
 class OfflineBuildSeamTest(CheckoutCase):

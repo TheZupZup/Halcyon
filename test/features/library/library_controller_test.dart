@@ -5,12 +5,15 @@ import 'package:linthra/core/repositories/music_library_repository.dart';
 import 'package:linthra/core/sources/local/audio_file_scanner.dart';
 import 'package:linthra/core/sources/local/directory_readability.dart';
 import 'package:linthra/core/sources/local/folder_scan_exception.dart';
+import 'package:linthra/core/sources/local/local_scan_diagnostics.dart';
+import 'package:linthra/core/sources/local/local_scan_report.dart';
 import 'package:linthra/core/sources/local/saf_document_lister.dart';
 import 'package:linthra/data/repositories/in_memory_music_library_repository.dart';
 import 'package:linthra/data/repositories/music_library_repository_provider.dart';
 import 'package:linthra/features/library/library_controller.dart';
 import 'package:linthra/features/library/library_providers.dart';
 import 'package:linthra/features/library/library_state.dart';
+import 'package:linthra/features/library/local_scan_report_provider.dart';
 
 import '../../core/sources/local/fake_saf_document_lister.dart';
 import 'fake_audio_file_scanner.dart';
@@ -294,6 +297,45 @@ void main() {
       final state = container.read(libraryControllerProvider);
       expect(state.status, LibraryStatus.error);
       expect(state.errorMessage, contains('not letting it read'));
+    });
+
+    test('a folder Linthra can no longer reach keeps the catalog intact',
+        () async {
+      // The recoverable-source case (#438/#414): a selected folder that has
+      // gone away — an unplugged drive, a deleted folder, a revoked Flatpak
+      // portal document — must leave the already-indexed tracks alone. Wiping
+      // them would turn a "reselect the folder" problem into a lost library.
+      // The scan report recorder is a process-wide static; keep this test's
+      // report from leaking into the next one.
+      addTearDown(LocalScanDiagnostics.reset);
+      final repository = InMemoryMusicLibraryRepository();
+      await repository.upsertCatalog(
+        sourceId: 'local',
+        tracks: <Track>[_track('a'), _track('b')],
+        albums: const [],
+        artists: const [],
+      );
+      final container = _scanContainer(
+        repository: repository,
+        scanner: FakeAudioFileScanner(
+          error: const FolderScanException(
+            "Linthra couldn't find the selected folder.",
+          ),
+        ),
+      );
+
+      await container
+          .read(libraryControllerProvider.notifier)
+          .scanFolder('/home/me/Music');
+
+      final state = container.read(libraryControllerProvider);
+      expect(state.status, LibraryStatus.error);
+      expect(await repository.getAllTracks(), hasLength(2));
+      // Recorded as a folder-availability failure, not as an Android SAF one,
+      // so a desktop diagnostics report says what actually happened.
+      final report = container.read(localScanReportProvider);
+      expect(report?.error, LocalScanError.folderUnavailable);
+      expect(report?.isContentUri, isFalse);
     });
   });
 }

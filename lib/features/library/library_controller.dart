@@ -56,11 +56,16 @@ class LibraryController extends Notifier<LibraryState> {
       await _load();
     } on FolderScanException catch (error) {
       // The scanning layer already phrased a clear, secret-free message
-      // (unreachable SAF tree, unreadable scoped-storage path, …); show it.
+      // (unreachable SAF tree, unreadable scoped-storage path, a folder that
+      // is gone, …); show it. The catalog is deliberately left untouched: a
+      // folder Linthra cannot reach right now is a recoverable source state,
+      // not a reason to drop the tracks the user already has indexed.
       ref.read(localScanReportProvider.notifier).record(LocalScanReport.failure(
             folderSelected: folderPath.isNotEmpty,
             isContentUri: location.isContentUri,
-            error: LocalScanError.safTraversal,
+            error: location.isContentUri
+                ? LocalScanError.safTraversal
+                : LocalScanError.folderUnavailable,
           ));
       state = LibraryState.error(error.message);
     } catch (_) {

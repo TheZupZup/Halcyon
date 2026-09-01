@@ -21,8 +21,9 @@ Three docs, three jobs:
 > The committed manifest builds, installs and launches the real app with
 > working audio, and installs a desktop entry, Linthra's own icon, and AppStream
 > metainfo so the app appears in the application menu and in software centres.
-> It is not the Flathub submission: there is no network, filesystem or
-> Secret Service access.
+> It is not the Flathub submission: there is no network or Secret Service
+> access, and no filesystem grant beyond the folders the user picks through
+> the desktop portal.
 > See [What the sandbox allows today](#what-the-sandbox-allows-today).
 
 All commands are relative to the repository. Run them from the repository root
@@ -299,9 +300,12 @@ So these are **expected**, not bugs, and not worth debugging:
 
 * Jellyfin, Navidrome/Subsonic and Plex cannot reach a server — there is no
   `--share=network` yet ([#440](https://github.com/TheZupZup/Linthra/issues/440)).
-* No local music folder is visible — no filesystem or portal access yet
-  ([#438](https://github.com/TheZupZup/Linthra/issues/438) /
-  [#439](https://github.com/TheZupZup/Linthra/issues/439)).
+* Unrelated host files are invisible — there is no `--filesystem=` grant
+  ([#439](https://github.com/TheZupZup/Linthra/issues/439) is the remaining
+  permission audit). Picking a **music folder** does work, and needs no grant:
+  the chooser goes through xdg-desktop-portal and the folder comes back through
+  the document portal ([#438](https://github.com/TheZupZup/Linthra/issues/438),
+  see [`flatpak/README.md`](../flatpak/README.md#local-music-folders)).
 * Saved sessions come back as "not signed in" — no Secret Service access yet
   ([#441](https://github.com/TheZupZup/Linthra/issues/441)). Linthra treats
   that as signed-out and keeps running; it never falls back to plaintext.
@@ -371,6 +375,22 @@ Until #445/#446 land, the manual pass for a packaging change is:
    or `--share=network` for a stream, per
    [`flatpak/README.md`](../flatpak/README.md#testing-audio-locally). It lasts
    for that launch only.
-4. `flatpak info --show-permissions io.github.thezupzup.linthra` → still only
+4. Local music without any grant: launch plainly
+   (`flatpak run io.github.thezupzup.linthra`), then Settings ▸ Local music ▸
+   *Select a folder*. The system's own folder chooser opens (the portal, run on
+   the host), and the folder you pick scans. Check that it really went through
+   the portal rather than a filesystem grant:
+
+   ```bash
+   flatpak documents io.github.thezupzup.linthra
+   flatpak run --command=ls io.github.thezupzup.linthra "$XDG_RUNTIME_DIR/doc"
+   ```
+
+   The first lists what the portal exported for the app and the second shows it
+   inside the sandbox; the scanned path is under there. Quit and relaunch and
+   the same folder still scans. `flatpak document-unexport /path/to/test-music`
+   on the host revokes it, after which Linthra says the folder can no longer be
+   reached and keeps the library it already indexed instead of emptying it.
+5. `flatpak info --show-permissions io.github.thezupzup.linthra` → still only
    the five finish-args listed above, i.e. you did not widen the sandbox by
    accident.

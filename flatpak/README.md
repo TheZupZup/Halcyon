@@ -5,7 +5,9 @@ Linux bundle inside `flatpak-builder`, install it, launch the real
 `io.github.thezupzup.linthra` app from the application menu, and get real,
 audible local and remote playback through a fully self-contained audio
 runtime, with Linthra's own icon on the launcher entry and AppStream metainfo
-for a software-centre listing. It is deliberately not the Flathub submission —
+for a software-centre listing, and let the user point Linthra at a music
+folder through the desktop portal without granting any host filesystem
+access. It is deliberately not the Flathub submission —
 the sandbox permissions are still open; see "What's deferred" below and the
 comments in `io.github.thezupzup.linthra.yml` itself.
 
@@ -218,6 +220,42 @@ commit SHA in `scripts/regenerate_flatpak_sources.sh` (`TOOL_COMMIT`, the
 `io.github.thezupzup.linthra.yml` and `generated/` from `flatpak-flutter.yml`
 and the current `pubspec.lock`. Diff the result before committing.
 
+## Local music folders
+
+Choosing a music folder (#438) needs **no** `finish-args` entry, and adding
+`--filesystem=host` or `--filesystem=home` would be the wrong fix for it.
+
+Linthra's Linux runner opens the folder chooser with GTK's
+`GtkFileChooserNative` (`../linux/runner/folder_picker_channel.cc`). GTK checks
+for `/.flatpak-info` itself and, inside a sandbox, routes that chooser to the
+**xdg-desktop-portal** `FileChooser` interface instead of drawing it in
+process. Every Flatpak may talk to the portal, so nothing has to be granted:
+
+* the chooser runs on the *host*, so it can browse the user's real home
+  directory while the sandbox still cannot;
+* only the folder the user actually picked comes back, exported through the
+  **document portal** (mounted for every Flatpak at `$XDG_RUNTIME_DIR/doc`) as
+  a path under Linthra's own document store;
+* that path is a real directory the `dart:io` scan walks unchanged, so the
+  scanner needs no Flatpak-specific branch and no hardcoded sandbox path;
+* the export persists, so the folder is still readable after a restart, and
+  revoking it (or unplugging the drive) makes the path stop resolving rather
+  than silently returning nothing — Linthra reports that as "select the folder
+  again" and leaves the indexed library alone.
+
+What the Flatpak deliberately does **not** get is everything else: unrelated
+host files stay invisible, which is the whole point of picking this route over
+a filesystem grant.
+
+`file_picker`, which the app uses on other desktops, cannot do this — its Linux
+implementation shells out to `zenity`/`qarma`/`kdialog`, and the sandbox
+contains none of them. It stays as the fallback for a build with no runner
+channel; native (non-Flatpak) Linux gets the ordinary in-process GTK dialog
+from the same code path.
+
+`scripts/check_linux_runner.py` holds the runner's channel name to the Dart
+side's, so the two cannot drift into a silent fallback.
+
 ## What's deferred
 
 Not in this manifest — each has its own issue:
@@ -228,12 +266,12 @@ Not in this manifest — each has its own issue:
   [Testing audio locally](#testing-audio-locally)); permanently granting
   Linthra network access for real provider use
   (Jellyfin/Navidrome-Subsonic/Plex) is #440's job, not this manifest's.
-* **Filesystem/portal permissions** (#438/#439), **Secret Service** (#441) —
-  no `--filesystem=host|home` or `--talk-name=org.freedesktop.secrets`.
-  Jellyfin/Subsonic/Plex session restore and secure-storage reads already
-  degrade to "not signed in" without them (`docs/linux-desktop.md` §"Secure
-  storage"). #433's local-audio validation likewise used a temporary,
-  non-committed filesystem grant rather than a committed one.
+* **The remaining filesystem-permission audit** (#439) and **Secret Service**
+  (#441) — no `--filesystem=host|home` or
+  `--talk-name=org.freedesktop.secrets`. Jellyfin/Subsonic/Plex session restore
+  and secure-storage reads already degrade to "not signed in" without them
+  (`docs/linux-desktop.md` §"Secure storage"). Picking a music folder no longer
+  needs a filesystem grant at all — see [Local music folders](#local-music-folders).
 * **Video codecs, hardware acceleration/hwaccel, subtitle-adjacent tuning
   beyond what libmpv/libass require to build** — Linthra is audio-only; the
   ffmpeg/mpv build stays scoped to the container/codec/protocol support

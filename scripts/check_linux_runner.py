@@ -41,6 +41,14 @@ precisely the name `Icon=` asks for, and that source is itself checked for the
 two things that would make it unusable inside a sandbox: an absolute host path,
 or a reference to a file it does not carry.
 
+It also checks the one runner<->Dart contract that is a pair of strings and
+nothing else: the folder-picker method channel (#438). The runner answers on
+`linux/runner/folder_picker_channel.cc`'s channel name and Dart calls
+`MethodChannelLinuxFolderPicker.channelName`; if those drift, or the source
+file stops being compiled into the runner, nothing fails to build — every pick
+just reports "no chooser here" and silently falls back to `file_picker`, which
+inside the Flatpak has no `zenity`/`kdialog` to run.
+
 It also checks two things that are about *how* the runner builds rather than
 what it is called:
 
@@ -73,6 +81,11 @@ from xml.etree import ElementTree
 # Paths this script reads, all relative to the repository root.
 CMAKELISTS = Path("linux") / "CMakeLists.txt"
 MY_APPLICATION = Path("linux") / "runner" / "my_application.cc"
+RUNNER_CMAKELISTS = Path("linux") / "runner" / "CMakeLists.txt"
+FOLDER_PICKER_CHANNEL_SOURCE = Path("linux") / "runner" / "folder_picker_channel.cc"
+FOLDER_PICKER_DART = (
+    Path("lib") / "core" / "services" / "method_channel_linux_folder_picker.dart"
+)
 PUBSPEC = Path("pubspec.yaml")
 APP_INFO = Path("lib") / "core" / "app_info.dart"
 BUILD_GRADLE = Path("android") / "app" / "build.gradle"
@@ -126,6 +139,13 @@ DESKTOP_ENTRY_GROUP = "Desktop Entry"
 # The CMake variable linux/CMakeLists.txt uses to accept an already-unpacked
 # SQLite amalgamation instead of downloading one. See docs/linux-desktop.md.
 SQLITE_SOURCE_VARIABLE = "LINTHRA_SQLITE3_SOURCE_DIR"
+
+# The folder-picker channel (#438): one name on each side of the same wire,
+# plus the method the two agree on.
+FOLDER_PICKER_NATIVE_CHANNEL = r'kChannelName\s*=\s*\n?\s*"([^"]+)"'
+FOLDER_PICKER_NATIVE_METHOD = r'kPickFolderMethod\s*=\s*"([^"]+)"'
+FOLDER_PICKER_DART_CHANNEL = r"String channelName\s*=\s*\n?\s*'([^']+)'"
+FOLDER_PICKER_DART_METHOD = r"String pickFolderMethod\s*=\s*'([^']+)'"
 
 SECURE_STORAGE_TARGET = "flutter_secure_storage_linux_plugin"
 SECURE_STORAGE_WARNING_EXCEPTION = "-Wno-error=deprecated-literal-operator"
@@ -434,6 +454,57 @@ def icon_source_problems(root: Path) -> list[str]:
     return problems
 
 
+def folder_picker_problems(root: Path) -> list[str]:
+    """Disagreements between the runner's folder-picker channel and Dart's.
+
+    The channel is how a Flatpak build reaches the xdg-desktop-portal folder
+    chooser instead of `file_picker`'s zenity/kdialog, which the sandbox does
+    not contain. A mismatched name still compiles and still runs; it just never
+    answers, and Dart's fallback then finds no chooser at all inside the
+    sandbox.
+    """
+    problems: list[str] = []
+
+    runner_cmakelists = _read(root, RUNNER_CMAKELISTS)
+    if FOLDER_PICKER_CHANNEL_SOURCE.name not in runner_cmakelists:
+        problems.append(
+            f"{RUNNER_CMAKELISTS} does not compile "
+            f"{FOLDER_PICKER_CHANNEL_SOURCE.name}, so the runner registers no "
+            "folder-picker channel"
+        )
+
+    native = _read(root, FOLDER_PICKER_CHANNEL_SOURCE)
+    dart = _read(root, FOLDER_PICKER_DART)
+    for what, native_pattern, dart_pattern in (
+        ("channel name", FOLDER_PICKER_NATIVE_CHANNEL, FOLDER_PICKER_DART_CHANNEL),
+        ("method name", FOLDER_PICKER_NATIVE_METHOD, FOLDER_PICKER_DART_METHOD),
+    ):
+        native_value = _extract(
+            native,
+            native_pattern,
+            f"the folder picker {what}",
+            FOLDER_PICKER_CHANNEL_SOURCE,
+        )
+        dart_value = _extract(
+            dart, dart_pattern, f"the folder picker {what}", FOLDER_PICKER_DART
+        )
+        if native_value != dart_value:
+            problems.append(
+                f"folder picker {what} is {native_value!r} in "
+                f"{FOLDER_PICKER_CHANNEL_SOURCE} but {dart_value!r} in "
+                f"{FOLDER_PICKER_DART}"
+            )
+
+    # my_application.cc has to actually register it; a compiled-but-unreferenced
+    # channel is the same silence.
+    if "folder_picker_channel_new" not in _read(root, MY_APPLICATION):
+        problems.append(
+            f"{MY_APPLICATION} never calls folder_picker_channel_new(), so the "
+            "folder-picker channel is never registered on the engine"
+        )
+    return problems
+
+
 def absolute_paths_under_linux(root: Path) -> list[str]:
     """Absolute host paths hardcoded in the committed Linux build files.
 
@@ -494,6 +565,10 @@ def check(root: Path) -> list[str]:
     # what connects it to a file the built Flatpak actually contains.
     problems.extend(icon_install_problems(root))
     problems.extend(icon_source_problems(root))
+
+    # The folder-picker channel (#438): two strings that have to agree, and a
+    # source file that has to be compiled and registered.
+    problems.extend(folder_picker_problems(root))
 
     # Window metrics: a minimum larger than the default would open the window
     # already clamped, which reads as the app ignoring its own default.

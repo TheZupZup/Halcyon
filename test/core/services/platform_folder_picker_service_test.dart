@@ -22,14 +22,15 @@ class _RecordingPicker implements FolderPickerService {
 
 void main() {
   group('PlatformFolderPickerService', () {
-    test('off Android, delegates to the fallback (file_picker) chooser',
-        () async {
-      // The unit-test host is never Android, so the SAF picker must not run and
-      // the filesystem fallback handles the pick.
+    test('off Android, never runs the SAF picker', () async {
+      // The unit-test host is never Android, so the SAF picker must not run;
+      // one of the desktop choosers handles the pick.
       final android = _RecordingPicker('content://should-not-be-used');
+      final linux = _RecordingPicker('/home/me/Music');
       final fallback = _RecordingPicker('/home/me/Music');
       final service = PlatformFolderPickerService(
         androidPicker: android,
+        linuxPicker: linux,
         fallbackPicker: fallback,
       );
 
@@ -37,8 +38,8 @@ void main() {
 
       expect(Platform.isAndroid, isFalse, reason: 'precondition for this host');
       expect(result, '/home/me/Music');
-      expect(fallback.calls, 1);
       expect(android.calls, 0);
+      expect(linux.calls + fallback.calls, 1);
     });
 
     test('on Android, delegates to the SAF picker', () async {
@@ -46,10 +47,12 @@ void main() {
       // half of the split is covered from any machine — including the Linux CI
       // runner, where it would otherwise be untestable.
       final android = _RecordingPicker('content://tree/primary%3AMusic');
-      final fallback = _RecordingPicker('/home/me/Music');
+      final linux = _RecordingPicker('/should/not/be/used');
+      final fallback = _RecordingPicker('/should/not/be/used');
       final service = PlatformFolderPickerService(
         host: HostPlatform.android,
         androidPicker: android,
+        linuxPicker: linux,
         fallbackPicker: fallback,
       );
 
@@ -57,21 +60,47 @@ void main() {
 
       expect(result, 'content://tree/primary%3AMusic');
       expect(android.calls, 1);
+      expect(linux.calls, 0);
       expect(fallback.calls, 0);
     });
 
-    test('on Linux, delegates to the filesystem chooser', () async {
+    test('on Linux, delegates to the GTK/portal chooser', () async {
+      // Not the `file_picker` fallback: that one shells out to
+      // zenity/qarma/kdialog, none of which exist inside the Flatpak sandbox
+      // (#438).
       final android = _RecordingPicker('content://should-not-be-used');
-      final fallback = _RecordingPicker('/home/me/Music');
+      final linux = _RecordingPicker('/home/me/Music');
+      final fallback = _RecordingPicker('/should/not/be/used');
       final service = PlatformFolderPickerService(
         host: HostPlatform.linux,
         androidPicker: android,
+        linuxPicker: linux,
         fallbackPicker: fallback,
       );
 
       expect(await service.pickFolder(), '/home/me/Music');
+      expect(linux.calls, 1);
       expect(android.calls, 0);
+      expect(fallback.calls, 0);
+    });
+
+    test('on another desktop, delegates to the file_picker chooser', () async {
+      // macOS/Windows are not targets yet, but they must not fall into the
+      // Linux-only channel if someone builds them.
+      final android = _RecordingPicker('content://should-not-be-used');
+      final linux = _RecordingPicker('/should/not/be/used');
+      final fallback = _RecordingPicker(r'C:\Users\me\Music');
+      final service = PlatformFolderPickerService(
+        host: HostPlatform.windows,
+        androidPicker: android,
+        linuxPicker: linux,
+        fallbackPicker: fallback,
+      );
+
+      expect(await service.pickFolder(), r'C:\Users\me\Music');
       expect(fallback.calls, 1);
+      expect(linux.calls, 0);
+      expect(android.calls, 0);
     });
 
     test('an explicit host never disagrees with the real host on this machine',
@@ -79,16 +108,19 @@ void main() {
       // Guards the injection itself: passing the actual platform must behave
       // identically to passing nothing.
       final android = _RecordingPicker('content://should-not-be-used');
+      final linux = _RecordingPicker('/home/me/Music');
       final fallback = _RecordingPicker('/home/me/Music');
 
       expect(
         await PlatformFolderPickerService(
           host: HostPlatform.current,
           androidPicker: android,
+          linuxPicker: linux,
           fallbackPicker: fallback,
         ).pickFolder(),
         await PlatformFolderPickerService(
           androidPicker: android,
+          linuxPicker: linux,
           fallbackPicker: fallback,
         ).pickFolder(),
       );

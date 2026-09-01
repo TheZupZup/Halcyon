@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/dimens.dart';
+import '../../../core/platform/host_platform.dart';
 import '../../../core/sources/local/folder_location.dart';
 import '../../../core/sources/local/local_scan_report.dart';
+import '../../../data/repositories/host_platform_provider.dart';
 import '../../library/local_scan_report_provider.dart';
 import '../../library/selected_folder_controller.dart';
 import 'local_music_controller.dart';
@@ -38,6 +40,7 @@ class LocalMusicSettingsSection extends ConsumerWidget {
         ref.watch(localMusicControllerProvider);
     final bool? persisted = ref.watch(localFolderAccessProvider).valueOrNull;
     final bool hasFolder = folder != null && folder.isNotEmpty;
+    final HostPlatform host = ref.watch(hostPlatformProvider);
 
     final LocalMusicController controller =
         ref.read(localMusicControllerProvider.notifier);
@@ -58,9 +61,7 @@ class LocalMusicSettingsSection extends ConsumerWidget {
             ),
             const SizedBox(height: AppSpacing.xs),
             Text(
-              'Play music from a folder on this device or an SD card. Linthra '
-              "reads it through Android's folder access — it needs no broad "
-              'storage permission, and your files are never moved or copied.',
+              _blurbFor(host),
               style: theme.textTheme.bodySmall?.copyWith(color: muted),
             ),
             const SizedBox(height: AppSpacing.md),
@@ -109,6 +110,23 @@ class LocalMusicSettingsSection extends ConsumerWidget {
   }
 }
 
+/// How the folder gets read, in the user's terms. The two platforms grant
+/// access in genuinely different ways — Android's folder access (SAF) and the
+/// desktop chooser, which inside a Flatpak is the system's file portal — and
+/// both are worth stating, because in both cases the point is the same: only
+/// the folder the user picked, and no broad storage permission.
+String _blurbFor(HostPlatform host) {
+  if (host.isAndroid) {
+    return 'Play music from a folder on this device or an SD card. Linthra '
+        "reads it through Android's folder access — it needs no broad storage "
+        'permission, and your files are never moved or copied.';
+  }
+  return 'Play music from a folder on this computer or an external drive. '
+      'Linthra reads only the folder you choose in the system file chooser — '
+      'it needs no broad filesystem permission, and your files are never '
+      'moved or copied.';
+}
+
 /// The selected-folder summary: which folder, whether access is still held, and
 /// what the last scan saw.
 class _SelectedFolderView extends StatelessWidget {
@@ -147,7 +165,8 @@ class _SelectedFolderView extends StatelessWidget {
         if (persisted == false) ...[
           const SizedBox(height: AppSpacing.xs),
           Text(
-            'Access to this folder was lost. Select it again to restore it.',
+            'Linthra can no longer reach this folder. Select it again to '
+            'restore access — your library stays as it is until you do.',
             style: theme.textTheme.bodySmall
                 ?.copyWith(color: theme.colorScheme.error),
           ),
