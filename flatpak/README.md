@@ -4,10 +4,10 @@ This is the packaging **foundation**: enough to build Linthra's native Flutter
 Linux bundle inside `flatpak-builder`, install it, launch the real
 `io.github.thezupzup.linthra` app from the application menu, and get real,
 audible local and remote playback through a fully self-contained audio
-runtime, with Linthra's own icon on the launcher entry. It is deliberately not
-the Flathub submission — the AppStream metadata that goes with the desktop
-entry is still open, and so are the sandbox permissions; see "What's deferred"
-below and the comments in `io.github.thezupzup.linthra.yml` itself.
+runtime, with Linthra's own icon on the launcher entry and AppStream metainfo
+for a software-centre listing. It is deliberately not the Flathub submission —
+the sandbox permissions are still open; see "What's deferred" below and the
+comments in `io.github.thezupzup.linthra.yml` itself.
 
 ## Audio runtime
 
@@ -105,12 +105,33 @@ scale is resampled by every launcher), and that it has no absolute host path
 and no reference to anything it does not carry (an external image, stylesheet
 or font would render differently, or not at all, inside the sandbox).
 
+## AppStream metainfo
+
+`../linux/packaging/io.github.thezupzup.linthra.metainfo.xml` is the software-
+centre listing (#435). The `linthra` module installs it:
+
+```
+install -Dm644 linux/packaging/io.github.thezupzup.linthra.metainfo.xml \
+  /app/share/metainfo/io.github.thezupzup.linthra.metainfo.xml
+```
+
+`/app/share/metainfo` is exported the same way as the desktop entry — the
+filename is the app id, so there is no `rename-appdata-file`. `<launchable
+type="desktop-id">` and `<icon type="stock">` point at the desktop entry and
+icon already installed under that id. Screenshots are omitted until there are
+Linux captures; Android shots would misrepresent the desktop window.
+
+The description only covers local playback. Server streaming (Jellyfin /
+Navidrome / Subsonic / Plex) stays out until the Flatpak has network
+permission (#440).
+
 ## Files here
 
 | File | What it is |
 | --- | --- |
 | `flatpak-flutter.yml` | Hand-authored input. Never built directly. |
 | `../linux/packaging/io.github.thezupzup.linthra.desktop` | Hand-authored, and not Flatpak-only: the installed desktop entry (#434), which this manifest copies into `/app/share/applications/` for flatpak-builder to export. It lives beside the rest of the Linux packaging inputs rather than here so a future native package installs the same file. |
+| `../linux/packaging/io.github.thezupzup.linthra.metainfo.xml` | Hand-authored AppStream listing (#435). Installed to `/app/share/metainfo/` so software centres can describe Linthra. Lives next to the desktop entry for the same reason. |
 | `io.github.thezupzup.linthra.yml` | **Generated.** The real manifest `flatpak-builder` consumes. Do not hand-edit — regenerate instead (below). |
 | `generated/sources/pubspec.json` | **Generated.** One pinned, hashed source per package in the committed `pubspec.lock` (plus Flutter's own internal `flutter_tools` package), so `flutter pub get --offline` inside the sandbox never touches pub.dev. Also carries two known per-plugin fixes from flatpak-flutter's own `foreign-deps` database: `sqlite3_flutter_libs` and `media_kit_libs_linux`'s own CMake `FetchContent` downloads (sqlite amalgamation, mimalloc) are pre-placed at the exact cache paths CMake checks before downloading, so they're satisfied without a network hit even though `linux/CMakeLists.txt` already disables/redirects both independently. |
 | `generated/modules/flutter-sdk-3.44.7.json` | **Generated.** Pins the Dart SDK and Linux engine artifacts for the exact `.flutter-version` tag by their real `storage.googleapis.com` URLs and sha256, plus a small patch so Flutter's own internal tool bootstrap runs `pub upgrade --offline`. |
@@ -201,13 +222,6 @@ and the current `pubspec.lock`. Diff the result before committing.
 
 Not in this manifest — each has its own issue:
 
-* **AppStream metainfo** (#435) — no `<app-id>.metainfo.xml`, so Linthra has no
-  software-centre listing (name, summary, description, screenshots, releases).
-  The desktop entry and the icon it needs are already in place, so #435 is
-  additive: its `<launchable type="desktop-id">` and `<icon type="stock">` both
-  point at names that already resolve. `rename-desktop-file`/`rename-icon` are
-  not used and are not needed — everything is installed under the app id
-  already.
 * **Provider network access** (#440) — no permanent `--share=network`.
   #433 proved the bundled ffmpeg/libmpv can decode HTTP(S) audio using only a
   temporary, non-committed grant for that validation (see

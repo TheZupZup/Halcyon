@@ -152,6 +152,7 @@ modules:
       - install -d /app/bin
       - install -Dm644 linux/packaging/{app_id}.desktop /app/share/applications/{app_id}.desktop
       - install -Dm644 tool/branding/linthra_icon.svg /app/share/icons/hicolor/scalable/apps/{app_id}.svg
+      - install -Dm644 linux/packaging/{app_id}.metainfo.xml /app/share/metainfo/{app_id}.metainfo.xml
 """
 
 # The install step the icon tests remove or rewrite, kept in one place so the
@@ -159,6 +160,27 @@ modules:
 ICON_INSTALL_LINE = (
     "      - install -Dm644 tool/branding/linthra_icon.svg "
     "/app/share/icons/hicolor/scalable/apps/{app_id}.svg\n"
+)
+
+METAINFO_XML = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>{app_id}</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <name>{display_name}</name>
+  <summary>An example.</summary>
+  <description>
+    <p>An example music player for local files and a self-hosted server.</p>
+  </description>
+  <launchable type="desktop-id">{app_id}.desktop</launchable>
+  <icon type="stock">{app_id}</icon>
+</component>
+"""
+
+METAINFO_INSTALL_LINE = (
+    "      - install -Dm644 linux/packaging/{app_id}.metainfo.xml "
+    "/app/share/metainfo/{app_id}.metainfo.xml\n"
 )
 
 
@@ -234,6 +256,10 @@ def build_checkout(
         (directory / "tool" / "branding" / "linthra_icon.svg").write_text(
             icon_svg if icon_svg is not None else ICON_SVG, encoding="utf-8"
         )
+    (packaging / f"{APP_ID}.metainfo.xml").write_text(
+        METAINFO_XML.format(app_id=APP_ID, display_name=DISPLAY_NAME),
+        encoding="utf-8",
+    )
     return directory
 
 
@@ -729,6 +755,7 @@ class MissingFileTest(CheckoutCase):
 
 
 class RealRepositoryTest(unittest.TestCase):
+
     def test_the_committed_linux_runner_is_consistent(self) -> None:
         self.assertEqual(checker.check(ROOT), [])
 
@@ -757,6 +784,23 @@ class RealRepositoryTest(unittest.TestCase):
         for manifest in (
             checker.FLATPAK_TEMPLATE,
             checker.FLATPAK_DIR / f"{checker.android_application_id(ROOT)}.yml",
+        ):
+            self.assertIn(installed, (ROOT / manifest).read_text(encoding="utf-8"))
+
+    def test_the_metainfo_is_named_for_the_app_id_and_installed(self) -> None:
+        app_id = checker.android_application_id(ROOT)
+        path = ROOT / "linux" / "packaging" / f"{app_id}.metainfo.xml"
+        self.assertTrue(path.is_file())
+        listing = path.read_text(encoding="utf-8")
+        self.assertIn(f"<id>{app_id}</id>", listing)
+        self.assertIn(
+            f'<launchable type="desktop-id">{app_id}.desktop</launchable>', listing
+        )
+        self.assertIn(f'<icon type="stock">{app_id}</icon>', listing)
+        installed = f"/app/share/metainfo/{app_id}.metainfo.xml"
+        for manifest in (
+            checker.FLATPAK_TEMPLATE,
+            checker.FLATPAK_DIR / f"{app_id}.yml",
         ):
             self.assertIn(installed, (ROOT / manifest).read_text(encoding="utf-8"))
 
