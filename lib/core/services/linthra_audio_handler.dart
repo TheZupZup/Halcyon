@@ -30,6 +30,7 @@ void _log(String message) => developer.log(message, name: _logName);
 /// fixed label set — never the id itself — so a track id, playlist id, URI, or
 /// token can never reach the log.
 String _categoryOf(String id) {
+  if (MediaId.isBrowsePage(id)) return 'browse-page';
   if (id == MediaId.root) return 'root';
   if (id == MediaId.library) return 'library';
   if (id == MediaId.albums) return 'albums';
@@ -110,12 +111,34 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
   audio.MediaItem? _lastItem;
   audio.PlaybackState? _lastPlaybackState;
 
-  // The queue (as a flat track list) last published to the platform session.
+  // The queue window last published to the platform session, and the absolute
+  // index in the controller's queue that its first row corresponds to.
   // Re-publishing the queue on every position tick would thrash the car's
-  // "Up Next" list, so [_broadcast] pushes it only when the queue's contents or
-  // order actually change. Null until the first broadcast.
+  // "Up Next" list, so [_broadcast] pushes it only when the window's contents,
+  // order, or offset actually change. Null until the first broadcast.
   List<Track>? _lastQueueTracks;
+  int _lastQueueStart = 0;
   bool _seeded = false;
+
+  /// The most rows the platform session's queue ever carries.
+  ///
+  /// The published queue is delivered to every media controller — Android Auto
+  /// included — in a single Binder transaction (`MediaSessionCompat.setQueue`),
+  /// exactly like a browse response and against the same ~1 MB per-process
+  /// buffer. Selecting one song from the Songs list hands the controller the
+  /// whole catalog, so an unbounded mirror would publish a six-figure queue and
+  /// recreate the browse bug on the playback path — and, because
+  /// `AudioServicePlugin.raw2queue` runs every row through
+  /// `createMediaMetadata`, would also add one permanently-cached
+  /// `MediaMetadataCompat` per row to `AudioService`'s static
+  /// `mediaMetadataCache`. So the session sees a *window*, while the controller
+  /// keeps the real, complete queue.
+  static const int maxPublishedQueueItems = 250;
+
+  /// How many already-played rows stay visible behind the current track in the
+  /// published window, so the car's list still scrolls back a little rather than
+  /// starting abruptly at what is playing now.
+  static const int publishedQueueHistory = 50;
 
   /// How far the reported position may drift before a fresh playback-state push
   /// re-syncs the session — so steady playback produces only this ~1 Hz
@@ -156,25 +179,47 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
   @override
   Future<void> skipToPrevious() => _controller.skipToPrevious();
 
-  /// Jumps to the [index]-th item of the published [queue] — the row a head
-  /// unit / Android Auto's "Up Next" list reports when tapped. The queue is
-  /// published as history, then the current track, then up-next (see
-  /// [_queueTracksFor]), so this maps the flat index back onto the controller's
-  /// history/up-next jumps. Out-of-range (a stale row after the queue shrank)
-  /// and the current row are safe no-ops; it never bypasses the controller, so
-  /// Cast routing and "no duplicate local playback" hold exactly as for a skip.
+  /// Jumps to the [index]-th row of the published [queue] — what a head unit /
+  /// Android Auto's "Up Next" list reports when tapped.
+  ///
+  /// The published queue is a *window* onto the controller's full queue (see
+  /// [maxPublishedQueueItems]), and `audio_service` numbers its rows from zero
+  /// within whatever list was published (`raw2queue` assigns
+  /// `QueueItem(description, i)`). So a tapped row is offset by
+  /// [_lastQueueStart] to get the absolute position in history + current +
+  /// up-next, which then maps onto the controller's history/up-next jumps.
+  ///
+  /// The row is validated against the **published window** before it is
+  /// translated, not merely against the controller's queue afterwards. Those
+  /// are different checks once the window has slid: with a 200k queue and a
+  /// window at 99 950, row 255 does not exist (the window is 250 rows) yet its
+  /// absolute position 100 205 sits comfortably inside the controller's queue.
+  /// Validating only the translated index would accept that row and jump to a
+  /// track the car never showed. So a row outside what was actually published
+  /// is rejected up front.
+  ///
+  /// Out-of-range — a stale row from a window published before the queue moved
+  /// or shrank — and the current row are safe no-ops. It never bypasses the
+  /// controller, so Cast routing and "no duplicate local playback" hold exactly
+  /// as for a skip.
   @override
   Future<void> skipToQueueItem(int index) async {
+    // Only rows that exist in the queue this handler last published are real.
+    final int publishedLength = _lastQueueTracks?.length ?? 0;
+    if (index < 0 || index >= publishedLength) return;
+
     final PlaybackState state = _controller.state;
     final int historyLength = state.previous.length;
-    final int total = _queueTracksFor(state).length;
-    if (index < 0 || index >= total) return;
-    if (index < historyLength) {
-      await _controller.playFromHistory(index);
-    } else if (index > historyLength) {
-      await _controller.playFromQueue(index - historyLength - 1);
+    final int total = _queueLengthOf(state);
+    final int absolute = _lastQueueStart + index;
+    // The queue can still have shrunk since that window was published.
+    if (absolute < 0 || absolute >= total) return;
+    if (absolute < historyLength) {
+      await _controller.playFromHistory(absolute);
+    } else if (absolute > historyLength) {
+      await _controller.playFromQueue(absolute - historyLength - 1);
     }
-    // index == historyLength is the current track: leave it playing untouched.
+    // absolute == historyLength is the current track: leave it playing.
   }
 
   @override
@@ -193,17 +238,38 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
 
   // --- Android Auto / media browser ---------------------------------------
 
+  /// The children a media browser (Android Auto) asked for.
+  ///
+  /// [options] carries Android's `MediaBrowserCompat` browse options. When the
+  /// client asked for a page (`EXTRA_PAGE` / `EXTRA_PAGE_SIZE`), this honours it
+  /// — and it must, because nothing else on this stack does:
+  /// `MediaBrowserServiceCompat` applies its own `applyOptions` only under
+  /// `RESULT_FLAG_OPTION_NOT_HANDLED`, which the base class sets only for
+  /// services that leave `onLoadChildren(parentId, result, options)`
+  /// unoverridden. `audio_service`'s `AudioService` overrides it and calls
+  /// `result.sendResult(...)` directly, so whatever this returns reaches the
+  /// client verbatim. Without the window below, a head unit asking for page 1
+  /// would be handed page 0's children again.
+  ///
+  /// Paging is applied *on top of* the tree's own bound rather than instead of
+  /// it: a client may subscribe with no options at all (Android's two-argument
+  /// `onLoadChildren` path, which reaches Dart as a null [options]), and that
+  /// request must still be answerable in one Binder transaction. So
+  /// [MediaBrowserTree] caps every node's child list and the window here narrows
+  /// it further when asked.
   @override
   Future<List<audio.MediaItem>> getChildren(
     String parentMediaId, [
     Map<String, dynamic>? options,
   ]) async {
     final nodes = await _tree.childrenOf(parentMediaId, _controller.state);
+    final page = MediaBrowseOptions.applyPage(nodes, options);
     // Secret-free browse trace: confirms Android Auto bound and is requesting
     // children, and shows whether a node returned content (vs. an empty
     // "library not synced yet" case) — without logging any id, title, or URI.
-    _log('browse: ${_categoryOf(parentMediaId)} -> ${nodes.length} children');
-    return nodes.map(_mediaItemForNode).toList();
+    _log('browse: ${_categoryOf(parentMediaId)} -> ${page.length}'
+        '${page.length == nodes.length ? '' : ' of ${nodes.length}'} children');
+    return page.map(_mediaItemForNode).toList();
   }
 
   @override
@@ -248,16 +314,31 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
     }
     // Publish the play queue so the car / head-unit "Up Next" list mirrors the
     // controller's queue and a tapped row (skipToQueueItem) lands on the right
-    // track. Like the media item, it is pushed only when the queue's contents
-    // or order change — never on a position tick (which would thrash the list).
-    final List<Track> queueTracks = _queueTracksFor(state);
-    if (!_seeded || !_sameQueue(queueTracks, _lastQueueTracks)) {
-      _lastQueueTracks = queueTracks;
+    // track. Only a bounded window around the current track is published (see
+    // [maxPublishedQueueItems]); the controller keeps the full queue, so nothing
+    // is lost — the car just sees a slice of it, and the window follows playback.
+    // Like the media item, it is pushed only when the window's contents, order,
+    // or offset change — never on a position tick (which would thrash the list).
+    final int total = _queueLengthOf(state);
+    final int start = _publishedQueueStart(total, state.previous.length);
+    final List<Track> window = _publishedWindow(state, start, total);
+    if (!_seeded ||
+        start != _lastQueueStart ||
+        !_sameQueue(window, _lastQueueTracks)) {
+      _lastQueueTracks = window;
+      _lastQueueStart = start;
       queue.add(<audio.MediaItem>[
-        for (final Track t in queueTracks) _trackMediaItem(t, id: t.id),
+        for (final Track t in window) _trackMediaItem(t, id: t.id),
       ]);
     }
-    final audio.PlaybackState next = _playbackStateFor(state);
+    // The active row, numbered within the published window so the car
+    // highlights the right one — a window-relative index, matching the ids
+    // `audio_service` assigns the rows it published.
+    final audio.PlaybackState next = _playbackStateFor(
+      state,
+      queueIndex:
+          state.currentTrack == null ? null : state.previous.length - start,
+    );
     if (!_seeded || _shouldPushPlayback(next, _lastPlaybackState)) {
       _lastPlaybackState = next;
       playbackState.add(next);
@@ -341,6 +422,9 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
         next.processingState != last.processingState ||
         next.shuffleMode != last.shuffleMode ||
         next.repeatMode != last.repeatMode ||
+        // The highlighted row moves as playback advances, even when nothing
+        // else about the state does.
+        next.queueIndex != last.queueIndex ||
         !_sameControls(next.controls, last.controls)) {
       return true;
     }
@@ -359,16 +443,62 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
     return true;
   }
 
-  /// The live queue as one flat, ordered list: history, then the current track,
-  /// then up-next. This is the exact order published to the platform session's
-  /// [queue], so [skipToQueueItem] can map a flat row index straight back onto
-  /// the controller's history / up-next jumps.
-  static List<Track> _queueTracksFor(PlaybackState state) {
+  /// Where the published window starts within the flat history+current+up-next
+  /// list of [total] tracks, given the current track sits at [currentIndex].
+  ///
+  /// A queue that already fits is published whole (start 0), so small libraries
+  /// and ordinary playlists behave exactly as before. A larger one keeps
+  /// [publishedQueueHistory] rows behind the current track and fills the rest of
+  /// the budget forward, sliding back at the end of the queue so the window is
+  /// always [maxPublishedQueueItems] long. The current track is therefore always
+  /// inside the window, which is what lets the car highlight it and what makes
+  /// [skipToQueueItem]'s offset unambiguous.
+  static int _publishedQueueStart(int total, int currentIndex) {
+    if (total <= maxPublishedQueueItems) return 0;
+    int start = currentIndex - publishedQueueHistory;
+    if (start < 0) start = 0;
+    if (start + maxPublishedQueueItems > total) {
+      start = total - maxPublishedQueueItems;
+    }
+    return start;
+  }
+
+  /// How many tracks the controller's queue holds, as the flat
+  /// history + current + up-next list the published window indexes into.
+  ///
+  /// Counted rather than materialized: this runs on every state event, position
+  /// ticks included, and a logical queue may hold 200k tracks. Concatenating it
+  /// several times a second just to read a length (or to slice 250 rows off it)
+  /// would allocate the whole library over and over for no benefit.
+  static int _queueLengthOf(PlaybackState state) =>
+      state.previous.length +
+      (state.currentTrack == null ? 0 : 1) +
+      state.upNext.length;
+
+  /// The track at flat position [index] of history + current + up-next, without
+  /// building that list. Callers stay inside `0 ..< _queueLengthOf(state)`.
+  static Track _queueTrackAt(PlaybackState state, int index) {
+    final List<Track> previous = state.previous;
+    if (index < previous.length) return previous[index];
     final Track? current = state.currentTrack;
+    if (current == null) return state.upNext[index - previous.length];
+    if (index == previous.length) return current;
+    return state.upNext[index - previous.length - 1];
+  }
+
+  /// The rows to publish: at most [maxPublishedQueueItems] tracks starting at
+  /// flat position [start] of a queue holding [total] of them. Materializes only
+  /// what is published — 250 tracks at most, whatever the queue's real size.
+  static List<Track> _publishedWindow(
+    PlaybackState state,
+    int start,
+    int total,
+  ) {
+    final int end = start + maxPublishedQueueItems > total
+        ? total
+        : start + maxPublishedQueueItems;
     return <Track>[
-      ...state.previous,
-      if (current != null) current,
-      ...state.upNext,
+      for (int i = start; i < end; i++) _queueTrackAt(state, i),
     ];
   }
 
@@ -421,8 +551,12 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
     );
   }
 
-  audio.PlaybackState _playbackStateFor(PlaybackState state) {
+  audio.PlaybackState _playbackStateFor(
+    PlaybackState state, {
+    int? queueIndex,
+  }) {
     return audio.PlaybackState(
+      queueIndex: queueIndex,
       controls: _controlsFor(state),
       // The transport capabilities the platform (notification, lock screen,
       // Android Auto, Bluetooth/steering-wheel media buttons) may invoke on the

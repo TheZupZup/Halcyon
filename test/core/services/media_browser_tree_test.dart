@@ -42,6 +42,40 @@ Future<List<MediaNode>> _kids(MediaBrowserTree t, String id) =>
 Future<MediaPlaybackRequest?> _pick(MediaBrowserTree t, String id) =>
     t.resolve(id, PlaybackState.idle);
 
+/// Walks a browse branch depth-first and returns its playable leaves in browse
+/// order, descending through however many `page/` container levels the tree
+/// chose. This is what "every song is still reachable" means from the car: a
+/// user can always get to a track by opening rows, without the test having to
+/// know the shape the tree picked.
+Future<List<MediaNode>> _walkLeaves(MediaBrowserTree t, String parentId) async {
+  final leaves = <MediaNode>[];
+  for (final MediaNode node in await _kids(t, parentId)) {
+    if (MediaId.isBrowsePage(node.id)) {
+      leaves.addAll(await _walkLeaves(t, node.id));
+    } else {
+      leaves.add(node);
+    }
+  }
+  return leaves;
+}
+
+Future<List<MediaNode>> _allSongLeaves(MediaBrowserTree t) =>
+    _walkLeaves(t, MediaId.library);
+
+/// A synthetic catalog of [n] tracks with realistic, distinct metadata.
+List<Track> _bigCatalog(int n) => <Track>[
+      for (int i = 0; i < n; i++)
+        Track(
+          id: 'jellyfin:$i',
+          title: 'Song ${i.toString().padLeft(6, '0')}',
+          uri: 'jellyfin:https://music.example.org/Items/$i/stream?api_key=SEC',
+          artistName: 'Artist ${i % 500}',
+          albumName: 'Album ${i % 2000}',
+          artworkUri: Uri.parse(
+              'https://music.example.org/Items/al-${i % 2000}/Images/Primary'),
+        ),
+    ];
+
 void main() {
   group('MediaBrowserTree', () {
     final library = <Track>[
@@ -625,15 +659,384 @@ void main() {
         final repo = _CountingLibraryRepository(big);
         final tree = MediaBrowserTree(repo);
 
+        // 600 songs is past the browse bound, so Songs answers with the page
+        // containers that span them; albums/artists are below it and stay flat.
         final songs = await _kids(tree, MediaId.library);
         final albums = await _kids(tree, MediaId.albums);
         final artists = await _kids(tree, MediaId.artists);
 
-        expect(songs, hasLength(600));
+        expect(songs, hasLength(3)); // 0-250, 250-500, 500-600
+        expect(await _allSongLeaves(tree), hasLength(600));
         expect(albums, hasLength(groupAlbums(big).length));
         expect(artists, hasLength(groupArtists(big).length));
-        // Each browse is one bounded catalog read — no per-track or remote fan-out.
-        expect(repo.getAllTracksCalls, 3);
+        // One bounded catalog read serves the whole browse burst — no per-track
+        // fan-out, no remote call, and no re-scan per section or per page.
+        expect(repo.getAllTracksCalls, 1);
+      });
+    });
+
+    // Regression coverage for #539: Android Auto's Songs branch used to answer
+    // with one MediaItem per catalog track. Past ~1.5k tracks that single
+    // response outgrows the media browser's ~1 MB Binder transaction, the
+    // RemoteException is swallowed by MediaBrowserServiceCompat, and the car
+    // never receives onChildrenLoaded — the endless "scanning" spinner. Songs is
+    // now served as deterministic `page/` containers so no response can outgrow
+    // the transaction, while every song stays reachable.
+    group('large Songs catalogs are browsed in bounded pages (#539)', () {
+      const int pageSize = MediaBrowserTree.browsePageSize;
+
+      // Deliberately not a multiple of the page size, so the last page is a
+      // partial one and the page boundaries are exercised for real.
+      final huge = _bigCatalog(3 * pageSize * pageSize + 137); // 187 637 tracks
+
+      MediaBrowserTree bigTree([List<Track>? tracks]) =>
+          MediaBrowserTree(FakeMusicLibraryRepository(
+              tracks: tracks ?? _bigCatalog(4 * pageSize + 7)));
+
+      test('no browse response ever exceeds the page bound', () async {
+        final tree = MediaBrowserTree(FakeMusicLibraryRepository(tracks: huge));
+
+        // Walk the whole Songs branch and assert the bound holds at every node,
+        // not just the top one.
+        Future<void> checkNode(String id, int depth) async {
+          final nodes = await _kids(tree, id);
+          expect(nodes.length, lessThanOrEqualTo(pageSize),
+              reason: 'node $id returned ${nodes.length} children');
+          if (depth == 0) return;
+          for (final node in nodes) {
+            if (MediaId.isBrowsePage(node.id)) {
+              await checkNode(node.id, depth - 1);
+            }
+          }
+        }
+
+        await checkNode(MediaId.library, 3);
+      });
+
+      test('every song is reachable exactly once, in catalog order', () async {
+        final catalog = _bigCatalog(4 * pageSize + 7);
+        final tree =
+            MediaBrowserTree(FakeMusicLibraryRepository(tracks: catalog));
+
+        final leaves = await _allSongLeaves(tree);
+
+        expect(leaves, hasLength(catalog.length));
+        // Same order as the catalog, and every leaf is a distinct playable song.
+        expect(
+          leaves.map((n) => n.track!.uri),
+          catalog.map((t) => t.uri),
+        );
+        expect(leaves.map((n) => n.id).toSet(), hasLength(catalog.length));
+        expect(leaves.every((n) => n.playable), isTrue);
+      });
+
+      test('page containers tile the catalog with no gap or overlap', () async {
+        final catalog = _bigCatalog(4 * pageSize + 7);
+        final tree =
+            MediaBrowserTree(FakeMusicLibraryRepository(tracks: catalog));
+
+        final pages = await _kids(tree, MediaId.library);
+        expect(pages.length, 5); // 4 full pages + the 7-track remainder
+        expect(pages.every((p) => MediaId.isBrowsePage(p.id)), isTrue);
+
+        int expectedStart = 0;
+        for (final MediaNode page in pages) {
+          final BrowsePage window = MediaId.browsePageOf(page.id)!;
+          expect(window.sectionId, MediaId.library);
+          expect(window.start, expectedStart);
+          final children = await _kids(tree, page.id);
+          expect(children, hasLength(window.end - window.start));
+          expect(
+            children.map((n) => n.track!.uri),
+            catalog.sublist(window.start, window.end).map((t) => t.uri),
+          );
+          expectedStart = window.end;
+        }
+        expect(expectedStart, catalog.length);
+      });
+
+      test('the first and last tracks are both reachable and playable',
+          () async {
+        final catalog = _bigCatalog(4 * pageSize + 7);
+        final tree =
+            MediaBrowserTree(FakeMusicLibraryRepository(tracks: catalog));
+
+        final leaves = await _allSongLeaves(tree);
+
+        expect(leaves.first.id, MediaId.libraryTrack(catalog.first.uri));
+        expect(leaves.last.id, MediaId.libraryTrack(catalog.last.uri));
+
+        for (final int index in <int>[0, catalog.length - 1]) {
+          final request = await _pick(tree, leaves[index].id);
+          expect(request, isNotNull);
+          expect(request!.startIndex, index);
+          expect(request.tracks, hasLength(catalog.length));
+          expect(request.tracks[request.startIndex].uri, catalog[index].uri);
+        }
+      });
+
+      test('a track picked from a page plays the whole catalog at its index',
+          () async {
+        final catalog = _bigCatalog(4 * pageSize + 7);
+        final tree =
+            MediaBrowserTree(FakeMusicLibraryRepository(tracks: catalog));
+
+        // Straddle a page boundary: the last row of page 1 and the first of
+        // page 2 must resolve to adjacent catalog positions.
+        final pages = await _kids(tree, MediaId.library);
+        final firstPage = await _kids(tree, pages[0].id);
+        final secondPage = await _kids(tree, pages[1].id);
+
+        final lastOfFirst = await _pick(tree, firstPage.last.id);
+        final firstOfSecond = await _pick(tree, secondPage.first.id);
+
+        expect(lastOfFirst!.startIndex, pageSize - 1);
+        expect(firstOfSecond!.startIndex, pageSize);
+        expect(lastOfFirst.tracks, hasLength(catalog.length));
+        expect(firstOfSecond.tracks, hasLength(catalog.length));
+        expect(firstOfSecond.tracks[firstOfSecond.startIndex].uri,
+            catalog[pageSize].uri);
+      });
+
+      test('leaf ids are stable across repeated browses, and page ids too',
+          () async {
+        final tree = bigTree();
+
+        final firstPass = await _allSongLeaves(tree);
+        final firstPages =
+            (await _kids(tree, MediaId.library)).map((n) => n.id).toList();
+        final secondPass = await _allSongLeaves(tree);
+        final secondPages =
+            (await _kids(tree, MediaId.library)).map((n) => n.id).toList();
+
+        expect(secondPages, firstPages);
+        expect(secondPass.map((n) => n.id), firstPass.map((n) => n.id));
+        expect(secondPass.map((n) => n.title), firstPass.map((n) => n.title));
+      });
+
+      test('repeated browses reuse one catalog snapshot (no rescan loop)',
+          () async {
+        final repo = _CountingLibraryRepository(_bigCatalog(4 * pageSize + 7));
+        final tree = MediaBrowserTree(repo);
+
+        final pages = await _kids(tree, MediaId.library);
+        for (final page in pages) {
+          await _kids(tree, page.id);
+        }
+        await _kids(tree, MediaId.library);
+        await _kids(tree, MediaId.albums);
+
+        // Android Auto (and audio_service's own seeded re-request) browses the
+        // same branch repeatedly; that must not re-scan the catalog each time.
+        expect(repo.getAllTracksCalls, 1);
+      });
+
+      test('concurrent browse requests share a single catalog read', () async {
+        final repo = _CountingLibraryRepository(_bigCatalog(4 * pageSize + 7));
+        final tree = MediaBrowserTree(repo);
+
+        await Future.wait(<Future<List<MediaNode>>>[
+          _kids(tree, MediaId.library),
+          _kids(tree, MediaId.albums),
+          _kids(tree, MediaId.artists),
+        ]);
+
+        expect(repo.getAllTracksCalls, 1);
+      });
+
+      test('a page container is browsable, never playable', () async {
+        final tree = bigTree();
+        final pages = await _kids(tree, MediaId.library);
+
+        expect(pages.every((p) => p.playable), isFalse);
+        expect(pages.every((p) => p.track == null), isTrue);
+        for (final page in pages) {
+          expect(await _pick(tree, page.id), isNull);
+        }
+      });
+
+      test('duplicate provider-side bare ids stay distinct across pages',
+          () async {
+        // Two providers whose songs share bare ids 0..n, interleaved so the
+        // colliding pair lands on different pages.
+        const int n = pageSize + 4;
+        final catalog = <Track>[
+          for (int i = 0; i < n; i++)
+            Track(id: '$i', title: 'Song $i', uri: 'jellyfin:$i'),
+          for (int i = 0; i < n; i++)
+            Track(id: '$i', title: 'Song $i', uri: 'subsonic:$i'),
+        ];
+        final tree =
+            MediaBrowserTree(FakeMusicLibraryRepository(tracks: catalog));
+
+        final leaves = await _allSongLeaves(tree);
+
+        expect(leaves.map((n) => n.id).toSet(), hasLength(catalog.length));
+        final jellyfin = await _pick(tree, MediaId.libraryTrack('jellyfin:7'));
+        final subsonic = await _pick(tree, MediaId.libraryTrack('subsonic:7'));
+        expect(jellyfin!.tracks[jellyfin.startIndex].uri, 'jellyfin:7');
+        expect(subsonic!.tracks[subsonic.startIndex].uri, 'subsonic:7');
+      });
+
+      test('page ids and paged leaf ids stay secret-free', () async {
+        final tree = bigTree();
+
+        Future<void> expectSafe(String parentId, int depth) async {
+          for (final MediaNode node in await _kids(tree, parentId)) {
+            for (final String text in <String>[
+              node.id,
+              node.title,
+              node.subtitle ?? '',
+            ]) {
+              expect(text, isNot(contains('api_key')));
+              expect(text.toLowerCase(), isNot(contains('token')));
+              expect(text, isNot(contains('jellyfin:')));
+              expect(text, isNot(contains('://')));
+            }
+            if (depth > 0 && MediaId.isBrowsePage(node.id)) {
+              await expectSafe(node.id, depth - 1);
+            }
+          }
+        }
+
+        await expectSafe(MediaId.library, 2);
+      });
+
+      test('a catalog at exactly the bound is still one flat list', () async {
+        final tree = bigTree(_bigCatalog(pageSize));
+
+        final nodes = await _kids(tree, MediaId.library);
+
+        expect(nodes, hasLength(pageSize));
+        expect(nodes.every((n) => n.playable), isTrue);
+        expect(nodes.any((n) => MediaId.isBrowsePage(n.id)), isFalse);
+      });
+
+      test('one track past the bound switches to pages', () async {
+        final tree = bigTree(_bigCatalog(pageSize + 1));
+
+        final nodes = await _kids(tree, MediaId.library);
+
+        expect(nodes, hasLength(2));
+        expect(nodes.every((n) => MediaId.isBrowsePage(n.id)), isTrue);
+        expect(await _allSongLeaves(tree), hasLength(pageSize + 1));
+      });
+
+      test('a six-figure catalog nests pages instead of widening them',
+          () async {
+        final tree = MediaBrowserTree(FakeMusicLibraryRepository(tracks: huge));
+
+        final top = await _kids(tree, MediaId.library);
+        expect(top, hasLength(4)); // 3 full pageSize^2 blocks + a remainder
+        expect(top.every((n) => MediaId.isBrowsePage(n.id)), isTrue);
+
+        // The first block splits again rather than returning 62 500 rows.
+        final second = await _kids(tree, top.first.id);
+        expect(second, hasLength(pageSize));
+        expect(second.every((n) => MediaId.isBrowsePage(n.id)), isTrue);
+
+        // And the third level is real songs.
+        final third = await _kids(tree, second.first.id);
+        expect(third, hasLength(pageSize));
+        expect(third.every((n) => n.playable), isTrue);
+        expect(third.first.id, MediaId.libraryTrack(huge.first.uri));
+
+        // The tail block covers the odd 137-track remainder. It is already
+        // under the bound, so it holds songs directly rather than splitting
+        // again — and it ends on the catalog's very last track.
+        final tail = await _kids(tree, top.last.id);
+        expect(tail, hasLength(137));
+        expect(tail.every((n) => n.playable), isTrue);
+        expect(tail.last.id, MediaId.libraryTrack(huge.last.uri));
+      });
+
+      test('an empty catalog still shows the friendly placeholder', () async {
+        final tree = MediaBrowserTree(
+            FakeMusicLibraryRepository(tracks: const <Track>[]));
+
+        final nodes = await _kids(tree, MediaId.library);
+
+        expect(nodes.single.id, MediaId.empty);
+        expect(nodes.single.title, 'Sync your library first');
+        expect(nodes.single.playable, isFalse);
+      });
+
+      test('a stale or malformed page id is a safe dead-stop', () async {
+        final tree = bigTree();
+
+        for (final String id in <String>[
+          MediaId.browsePage(MediaId.library, 900000, 900250), // past the end
+          MediaId.browsePage('nope', 0, 250), // unknown section
+          'page/', // no section, no window
+          'page/library/notanumber', // no window
+          'page/library/250-100', // inverted window
+          'page/library/-5-10', // negative start
+          'page/page/library/0-250', // nested page
+        ]) {
+          expect(await _kids(tree, id), isEmpty, reason: id);
+          expect(await _pick(tree, id), isNull, reason: id);
+        }
+      });
+
+      test('the catalog snapshot is a TTL, not a freeze', () async {
+        // With no TTL every browse re-reads, so a library that changed between
+        // two browses is still picked up — the snapshot only collapses a burst.
+        final repo = _CountingLibraryRepository(_bigCatalog(4 * pageSize + 7));
+        final tree = MediaBrowserTree(repo, catalogSnapshotTtl: Duration.zero);
+
+        await _kids(tree, MediaId.library);
+        await _kids(tree, MediaId.library);
+
+        expect(repo.getAllTracksCalls, 2);
+      });
+
+      // The bound is generic, so the same defect latent in the other flat
+      // sections is fixed by the same code — no section-specific paging.
+      test('large Albums and Artists sections are bounded and complete',
+          () async {
+        // Enough distinct albums/artists to blow past the bound on both.
+        final catalog = <Track>[
+          for (int i = 0; i < 2 * pageSize + 11; i++)
+            _track('t$i', artist: 'Artist $i', album: 'Album $i'),
+        ];
+        final tree =
+            MediaBrowserTree(FakeMusicLibraryRepository(tracks: catalog));
+
+        for (final String section in <String>[
+          MediaId.albums,
+          MediaId.artists,
+        ]) {
+          final pages = await _kids(tree, section);
+          expect(pages, hasLength(3), reason: section);
+          expect(pages.every((n) => MediaId.isBrowsePage(n.id)), isTrue,
+              reason: section);
+
+          final containers = await _walkLeaves(tree, section);
+          expect(containers, hasLength(catalog.length), reason: section);
+          expect(containers.map((n) => n.id).toSet(), hasLength(catalog.length),
+              reason: section);
+          // Album/artist rows stay browsable containers, as before.
+          expect(containers.every((n) => n.playable), isFalse, reason: section);
+        }
+
+        // And opening one of those containers still lists its tracks.
+        final firstAlbum = (await _walkLeaves(tree, MediaId.albums)).first;
+        final tracks = await _kids(tree, firstAlbum.id);
+        expect(tracks, hasLength(1));
+        expect(tracks.single.playable, isTrue);
+      });
+
+      test('a page whose section shrank clamps to what still exists', () async {
+        // A page id minted for a 4-page catalog, replayed against a catalog that
+        // has since shrunk to a partial final page.
+        final wide =
+            MediaId.browsePage(MediaId.library, pageSize, 2 * pageSize);
+        final tree = bigTree(_bigCatalog(pageSize + 10));
+
+        final nodes = await _kids(tree, wide);
+
+        expect(nodes, hasLength(10));
+        expect(nodes.every((n) => n.playable), isTrue);
       });
     });
 
