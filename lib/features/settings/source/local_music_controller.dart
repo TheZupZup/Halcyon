@@ -155,6 +155,14 @@ final localMusicControllerProvider =
 final localFolderAccessProvider = FutureProvider<bool?>((ref) async {
   final String? folder =
       ref.watch(selectedFolderControllerProvider).valueOrNull;
+  // Re-probed on every recorded scan, not only when the *selection* changes.
+  // Access is lost while the app is running — a drive unplugged, a portal
+  // document revoked, a folder deleted — and the selection does not change when
+  // it happens, so a cached "yes" would outlive the truth and leave both cards
+  // showing a healthy folder right after a rescan failed on it. Every scan path
+  // (this card and the Library empty state) records through this provider, so
+  // watching it is what makes a rescan the natural way to re-check.
+  ref.watch(localScanReportProvider);
   if (folder == null || folder.isEmpty) {
     return null;
   }
