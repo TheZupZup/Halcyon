@@ -286,6 +286,16 @@ modules:
       # starts with the app id at `finish` time, the same rule as the desktop
       # entry — so this needs no `rename-icon` either.
       - install -Dm644 tool/branding/linthra_icon.svg /app/share/icons/hicolor/scalable/apps/io.github.thezupzup.linthra.svg
+      # AppStream metainfo (#435). Software centres and later Flathub read
+      # `/app/share/metainfo/<app-id>.metainfo.xml`; flatpak-builder exports
+      # that directory at `finish` time under the same app-id-prefix rule as
+      # the desktop entry and the icon, so there is no `rename-appdata-file`.
+      # The file lives in linux/packaging/ next to the desktop entry so a
+      # native package installs the same listing. Claims inside it are limited
+      # to what Linux actually ships; scripts/check_linux_runner.py holds the
+      # component id, launchable and stock icon to the same sources of truth
+      # as the desktop entry.
+      - install -Dm644 linux/packaging/io.github.thezupzup.linthra.metainfo.xml /app/share/metainfo/io.github.thezupzup.linthra.metainfo.xml
     sources:
       # The app's own source. flatpak-flutter's pre-processing step cannot
       # read a `dir` source (it only fetches `git` sources to inspect

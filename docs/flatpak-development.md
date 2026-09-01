@@ -19,9 +19,9 @@ Three docs, three jobs:
 
 > Flatpak packaging is in progress ([issue #376](https://github.com/TheZupZup/Linthra/issues/376)).
 > The committed manifest builds, installs and launches the real app with
-> working audio, and installs a desktop entry and Linthra's own icon so the app
-> appears properly in the application menu, but it is not the Flathub
-> submission: there is no AppStream metadata yet, and no network, filesystem or
+> working audio, and installs a desktop entry, Linthra's own icon, and AppStream
+> metainfo so the app appears in the application menu and in software centres.
+> It is not the Flathub submission: there is no network, filesystem or
 > Secret Service access.
 > See [What the sandbox allows today](#what-the-sandbox-allows-today).
 
@@ -307,9 +307,8 @@ So these are **expected**, not bugs, and not worth debugging:
   that as signed-out and keeps running; it never falls back to plaintext.
 * Linthra is in the application menu now
   ([#434](https://github.com/TheZupZup/Linthra/issues/434)) with its own icon
-  ([#436](https://github.com/TheZupZup/Linthra/issues/436)) — but with no
-  software-centre listing
-  ([#435](https://github.com/TheZupZup/Linthra/issues/435)). `flatpak run`
+  ([#436](https://github.com/TheZupZup/Linthra/issues/436)) and an AppStream
+  listing ([#435](https://github.com/TheZupZup/Linthra/issues/435)). `flatpak run`
   still works and is what these debugging commands assume.
 
   To check the icon in an installed build, list what the app exported and what

@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Linthra's AppStream metainfo (#435).
+
+  The filename is the application id — io.github.thezupzup.linthra.metainfo.xml —
+  because that is the component id software centres and Flathub key off, and
+  because flatpak-builder only exports metainfo whose name starts with the app
+  id. The same id is already APPLICATION_ID in linux/CMakeLists.txt, Android's
+  applicationId, the desktop entry (#434), the icon (#436), and the Flatpak
+  app-id; scripts/check_linux_runner.py holds all of those together.
+
+  <launchable type="desktop-id"> points at the installed desktop entry
+  (linux/packaging/io.github.thezupzup.linthra.desktop). <icon type="stock">
+  is the icon-theme name that entry's Icon= already uses, which resolves to
+  the SVG installed from tool/branding/linthra_icon.svg.
+
+  Claims are limited to what the current Flatpak can do: local files. Server
+  streaming (Jellyfin, Navidrome/Subsonic, Plex) is left out until the Flatpak
+  has network permission (#440). Android-only features (Chromecast, Android
+  Auto, SAF, share sheet, launcher-icon switching) are not advertised here.
+  Screenshots are omitted until there are Linux captures; inventing them from
+  the Android set would misrepresent the desktop window.
+
+  Validate after editing:
+    appstreamcli validate linux/packaging/io.github.thezupzup.linthra.metainfo.xml
+-->
+<component type="desktop-application">
+  <id>io.github.thezupzup.linthra</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <name>Linthra</name>
+  <summary>Play your own music from this device</summary>
+  <description>
+    <p>
+      Linthra is an open-source music player for people who keep their music
+      on their own devices. It plays local files.
+      No ads, no tracking, no Linthra account required.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.thezupzup.linthra.desktop</launchable>
+  <url type="homepage">https://github.com/TheZupZup/Linthra</url>
+  <url type="bugtracker">https://github.com/TheZupZup/Linthra/issues</url>
+  <url type="vcs-browser">https://github.com/TheZupZup/Linthra</url>
+  <developer id="io.github.thezupzup">
+    <name>TheZupZup</name>
+  </developer>
+  <icon type="stock">io.github.thezupzup.linthra</icon>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Player</category>
+    <category>Music</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.2.4" date="2026-08-27"/>
+  </releases>
+</component>
