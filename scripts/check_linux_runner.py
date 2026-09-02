@@ -407,9 +407,7 @@ def flatpak_permission_problems(root: Path) -> list[str]:
                 )
                 continue
             try:
-                values = shlex.split(
-                    stripped[1:].strip(), comments=True, posix=True
-                )
+                values = shlex.split(stripped[1:].strip(), comments=True, posix=True)
             except ValueError as error:
                 problems.append(
                     f"{manifest} finish-args contains an invalid scalar "
