@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/sources/local/folder_location.dart';
 import '../../../core/sources/local/local_music_source.dart';
+import '../../../data/repositories/host_platform_provider.dart';
 import '../../../data/repositories/music_library_repository_provider.dart';
 import '../../library/library_controller.dart';
 import '../../library/library_providers.dart';
@@ -135,20 +136,44 @@ final localMusicControllerProvider =
   LocalMusicController.new,
 );
 
-/// Whether Linthra still holds a persisted read grant for the selected
-/// `content://` folder — the removable-SD-card / lost-access signal shown on the
-/// Local music card. Re-evaluated whenever the selection changes.
+/// Whether Linthra can still reach the selected folder — the lost-access
+/// signal shown on the Local music card. Re-evaluated whenever the selection
+/// changes.
 ///
-/// Returns `null` when it doesn't apply (no folder, or a plain filesystem path)
-/// or can't be determined (off Android), so the card simply omits the line.
+/// Two storage kinds, one question:
+///  - an Android `content://` tree: does the app still hold the persisted SAF
+///    read grant (the removable-SD-card / revoked-permission case)?
+///  - a desktop filesystem path: can the folder still be listed? On a Flatpak
+///    that is the portal document exported for the folder the user chose;
+///    revoking it (or unplugging the drive, or deleting the folder) makes the
+///    path stop resolving, which is the same recoverable "select it again"
+///    state rather than an empty library (#438).
+///
+/// Returns `null` when it doesn't apply (no folder) or can't be determined (a
+/// filesystem path on a platform without a desktop chooser), so the card simply
+/// omits the line.
 final localFolderAccessProvider = FutureProvider<bool?>((ref) async {
   final String? folder =
       ref.watch(selectedFolderControllerProvider).valueOrNull;
+  // Re-probed on every recorded scan, not only when the *selection* changes.
+  // Access is lost while the app is running — a drive unplugged, a portal
+  // document revoked, a folder deleted — and the selection does not change when
+  // it happens, so a cached "yes" would outlive the truth and leave both cards
+  // showing a healthy folder right after a rescan failed on it. Every scan path
+  // (this card and the Library empty state) records through this provider, so
+  // watching it is what makes a rescan the natural way to re-check.
+  ref.watch(localScanReportProvider);
   if (folder == null || folder.isEmpty) {
     return null;
   }
-  if (!FolderLocation.parse(folder).isContentUri) {
+  if (FolderLocation.parse(folder).isContentUri) {
+    return ref.read(safPermissionProbeProvider).hasPersistedPermission(folder);
+  }
+  // Desktop only: on Android a filesystem path is a legacy selection whose
+  // access story is scoped storage's, not this probe's, so it keeps reporting
+  // "can't tell" exactly as before.
+  if (!ref.watch(hostPlatformProvider).isDesktop) {
     return null;
   }
-  return ref.read(safPermissionProbeProvider).hasPersistedPermission(folder);
+  return ref.read(directoryReadabilityProvider).canList(folder);
 });

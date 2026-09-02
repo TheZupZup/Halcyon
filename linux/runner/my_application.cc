@@ -6,6 +6,7 @@
 #endif
 
 #include "flutter/generated_plugin_registrant.h"
+#include "folder_picker_channel.h"
 
 // The user-visible application name. Kept as one constant so the header bar,
 // the fallback title bar, and anything added later can never drift apart — and
@@ -27,6 +28,10 @@ static constexpr int kMinimumWindowHeight = 600;
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  // The GTK/portal folder chooser Dart asks for a music folder (#438). Owned
+  // here because it needs the application's own window as the dialog parent,
+  // which a plugin registrant does not have.
+  FolderPickerChannel* folder_picker;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -102,6 +107,13 @@ static void my_application_activate(GApplication* application) {
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
 
+  // Registered alongside the plugins, on the same engine: the folder chooser
+  // is Linthra's own channel rather than a plugin, so that a Flatpak build
+  // gets the xdg-desktop-portal chooser instead of `file_picker`'s
+  // zenity/kdialog, which the sandbox does not contain. See
+  // folder_picker_channel.h.
+  self->folder_picker = folder_picker_channel_new(view, window);
+
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
 
@@ -148,6 +160,7 @@ static void my_application_shutdown(GApplication* application) {
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
+  g_clear_pointer(&self->folder_picker, folder_picker_channel_free);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 

@@ -14,9 +14,11 @@ There are two equivalent entry points; both end up at the same place:
 - **Library ▸ (empty state) ▸ Select / Change folder** — the same pick-and-scan
   flow, offered where you first notice an empty library.
 
-When you pick a folder, Android shows its system folder chooser. Linthra keeps
-**only** the access you grant for that one folder — no broad "all files" or media
-permission is requested.
+When you pick a folder, the system's own folder chooser opens — Android's on a
+phone, the desktop's on Linux. Linthra keeps **only** the access you grant for
+that one folder; it never asks for a broad "all files" or media permission, and
+on Linux it needs no host filesystem permission at all (see
+[On Linux](#on-linux-including-the-flatpak)).
 
 ## What's supported
 
@@ -80,13 +82,31 @@ store — it looks fine but can't be read under scoped storage. If you selected 
 folder in a much older build and see "no music found", just **choose the folder
 again**: the new selection grants and persists proper access.
 
+### On Linux (including the Flatpak)
+
+Linux stores a real filesystem path rather than a `content://` URI, and the scan
+is an ordinary `dart:io` walk. What differs is where the path comes from:
+
+1. The folder chooser is GTK's own (`GtkFileChooserNative`, opened by Linthra's
+   Linux runner). On a native build that is the familiar in-process dialog.
+2. Inside the **Flatpak**, GTK routes exactly the same chooser to
+   **xdg-desktop-portal**, which runs it on the host. Only the folder you picked
+   is handed back to the sandbox, exported through the document portal, and it
+   stays readable after a restart. Nothing else on the host becomes visible, and
+   Linthra ships no `--filesystem=host` or `--filesystem=home` permission — see
+   [`flatpak/README.md`](../flatpak/README.md#local-music-folders).
+3. If the folder later stops resolving — an unplugged drive, a folder you moved
+   or deleted, or a portal grant you revoked — Linthra says so and asks you to
+   select it again. It does **not** treat that as "this folder is empty now", so
+   your indexed library stays as it is until you choose.
+
 ## Local music vs Offline downloads vs Cache
 
 These three are easy to confuse but are distinct:
 
 | Concept | What it is | Where |
 | --- | --- | --- |
-| **Local music** | Music files that already live on the device or SD card, played in place from a folder you chose via SAF. Linthra never moves or copies them. | Settings ▸ Local music |
+| **Local music** | Music files that already live on the device, SD card or computer, played in place from a folder you chose in the system chooser (SAF on Android, the desktop/portal chooser on Linux). Linthra never moves or copies them. | Settings ▸ Local music |
 | **Offline downloads** | Copies Linthra makes of **server** tracks (Jellyfin / Subsonic) so they play without a network. You choose what to download. | The download action / Settings ▸ Offline |
 | **Cache** | Linthra-managed **temporary** storage (e.g. streamed/pre-cached audio), bounded by a size limit and reclaimable at any time. | Settings ▸ Cache — see [offline-cache.md](./offline-cache.md) |
 
@@ -100,8 +120,9 @@ Settings ▸ Diagnostics (and the "Report a bug" flow) include **secret-free** s
 counters — counts only, never a path, file name, or URI:
 
 - **Local folder**: selected / not selected
-- **Local folder access**: persisted / not persisted (the SAF grant — the
-  removable-SD-card-after-reboot signal)
+- **Local folder access**: persisted / not persisted (on Android the SAF grant —
+  the removable-SD-card-after-reboot signal; on Linux whether the chosen folder
+  can still be listed at all)
 - **Local scan**: files visited, folders visited, audio candidates, imported,
   skipped (unsupported), read failures
 - **Local scan recursive**: yes / no
@@ -117,7 +138,9 @@ Reading them:
 - `audio 0, skipped N` means files were found but none matched a supported audio
   type.
 - `access: not persisted` after a reboot means the SD-card grant was lost —
-  re-select the folder.
+  re-select the folder. On Linux the same line means the folder no longer
+  resolves (drive not connected, folder moved, portal access revoked); the
+  library you already indexed is kept, so re-selecting restores it.
 
 Please don't paste full private paths into public bug reports; the diagnostics
 above are designed so you don't have to.

@@ -51,6 +51,16 @@ finish-args:
   # and a PipeWire one — there is no separate "--socket=pipewire" finish-arg.
   - --socket=pulseaudio
   #
+  # Local music folders (#438) need nothing here on purpose. Linthra's Linux
+  # runner opens GTK's GtkFileChooserNative, which GTK routes to the
+  # xdg-desktop-portal FileChooser inside a sandbox — every app may talk to the
+  # portal, so no finish-arg grants it. The folder the user picks comes back
+  # through the document portal (already mounted for every Flatpak) as a path
+  # under the app's own document store, which is readable *because* the user
+  # chose it and stays readable across restarts. Nothing else on the host
+  # becomes visible, which is exactly what a --filesystem grant could not
+  # promise.
+  #
   # Deliberately withheld for issue #432, still withheld here (see
   # flatpak/README.md "What's deferred" for the reasoning):
   #   --share=network            (provider streaming: #440. #433 only proves
@@ -58,7 +68,9 @@ finish-args:
   #                                audio, using a temporary, non-committed
   #                                `flatpak override` for that validation —
   #                                see flatpak/README.md.)
-  #   --filesystem=host/home     (broad filesystem access: #438/#439)
+  #   --filesystem=host/home     (broad filesystem access. Not needed for the
+  #                                local library, per the portal note above;
+  #                                the remaining permission audit is #439.)
   #   --talk-name=org.freedesktop.secrets  (Secret Service: #441)
   # Their absence is safe: flutter_secure_storage/Jellyfin-Subsonic-Plex
   # session restore on Linux treats every read/write failure as "not signed

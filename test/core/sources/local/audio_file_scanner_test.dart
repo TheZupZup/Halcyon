@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/sources/local/audio_file_scanner.dart';
+import 'package:linthra/core/sources/local/folder_scan_exception.dart';
 
 void main() {
   group('IoAudioFileScanner', () {
@@ -53,10 +54,26 @@ void main() {
       expect(files.any((path) => path.endsWith('deep.ogg')), isTrue);
     });
 
-    test('returns an empty list for a folder that does not exist', () async {
+    test('raises a recoverable scan error for a folder that is gone', () async {
+      // A selected folder that no longer resolves — unmounted drive, deleted
+      // folder, or a revoked Flatpak portal document — must not look like a
+      // successful scan of an empty folder: that result would be persisted and
+      // would wipe a catalog the user's files are still behind.
       const scanner = IoAudioFileScanner();
-      final files = await scanner.listFiles('${root.path}/missing');
-      expect(files, isEmpty);
+
+      await expectLater(
+        scanner.listFiles('${root.path}/missing'),
+        throwsA(
+          isA<FolderScanException>().having(
+            (error) => error.message,
+            'message',
+            allOf(
+              contains("couldn't find the selected folder"),
+              contains('selecting the folder again'),
+            ),
+          ),
+        ),
+      );
     });
   });
 }

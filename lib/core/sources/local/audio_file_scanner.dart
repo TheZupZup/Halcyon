@@ -19,7 +19,10 @@ import 'saf_tree_uri_resolver.dart';
 /// folder cannot be scanned.
 abstract interface class AudioFileScanner {
   /// Returns the absolute paths of every regular file under [folder], searched
-  /// recursively. Returns an empty list when the folder is missing.
+  /// recursively. Throws [FolderScanException] when the selected folder itself
+  /// cannot be opened — it is missing, or access to it was revoked — so a lost
+  /// folder surfaces as a recoverable error instead of an empty result that
+  /// would be persisted as "this folder has no music".
   Future<List<String>> listFiles(String folder);
 }
 
@@ -35,7 +38,19 @@ class IoAudioFileScanner implements AudioFileScanner {
   Future<List<String>> listFiles(String folder) async {
     final Directory root = Directory(folder);
     if (!await root.exists()) {
-      return const <String>[];
+      // Gone rather than unreadable: the drive was unmounted, the folder was
+      // moved or deleted, or — in the Flatpak — the portal document that
+      // exposed the user's chosen folder was revoked, which removes the path
+      // rather than making it unreadable. All of them are recoverable by
+      // reselecting, and none of them mean "there is no music here", so this
+      // must not return an empty list: that would be stored as a successful
+      // scan and wipe the catalog the user still has files for.
+      throw FolderScanException(
+        "Linthra couldn't find the selected folder. It may have been moved or "
+        'removed, the drive may not be connected, or access to it was '
+        'revoked. Try selecting the folder again.',
+        folder: folder,
+      );
     }
 
     // Walk one directory at a time (rather than `list(recursive: true)`) so a
@@ -68,9 +83,9 @@ class IoAudioFileScanner implements AudioFileScanner {
       } on FileSystemException {
         if (wasRoot) {
           throw FolderScanException(
-            "Linthra couldn't read the selected folder. Android may have "
-            'revoked access to it, or the storage was removed. Try selecting '
-            'the folder again.',
+            "Linthra couldn't read the selected folder. Access to it may have "
+            'been revoked, or the storage was removed. Try selecting the '
+            'folder again.',
             folder: folder,
           );
         }

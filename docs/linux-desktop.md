@@ -213,6 +213,8 @@ undeclared network access to an isolated `flatpak-builder` build.
 | Media notification + `POST_NOTIFICATIONS` | Android-only, by design | There is no equivalent gate on Linux; desktop controls arrive with MPRIS. |
 | Android audio focus | Android-only, by design | `JustAudioPlaybackController` already scopes its focus handling to Android/iOS. |
 | SAF (`content://` folders) | Android-only, by design | Linux picks a real filesystem path. The scanner's desktop path is the one that runs. |
+| Folder chooser | Supported | Linthra's own runner channel (`linux/runner/folder_picker_channel.cc`) opens `GtkFileChooserNative`: the ordinary GTK dialog natively, and the xdg-desktop-portal chooser inside the Flatpak, where `file_picker`'s `zenity`/`kdialog` do not exist ([issue #438](https://github.com/TheZupZup/Linthra/issues/438)). `scripts/check_linux_runner.py` holds the runner's channel name to the Dart side's. |
+| Lost folder access | Supported | A selected folder that stops resolving (unmounted drive, deleted folder, revoked portal document) is reported as a recoverable "select it again" state on the Local music card, and the indexed catalog is left alone rather than replaced with an empty scan. |
 | Local tag/artwork reading | Unsupported | `UnsupportedLocalMetadataReader` on every filesystem scan, Android included. Tracks fall back to filename/folder derivation. A real desktop reader is later work in #376. |
 | Chromecast | Android/iOS only | Already gated in `cast_providers.dart`; Linux keeps the honest "cast unavailable" service. |
 | Share sheet, launcher-icon switching | Android-only, by design | No desktop equivalent; the UI simply omits them. |
@@ -244,7 +246,7 @@ The seams that branch on it:
 | --- | --- | --- |
 | `PlatformMediaSessionBinding` | `audio_service` session | inert, never touches `audio_service` |
 | `localPlaybackControllerProvider` | `JustAudioPlaybackController` (ExoPlayer) | `LinuxPlaybackController` (media_kit/libmpv) |
-| `PlatformFolderPickerService` | SAF tree picker | `file_picker` filesystem chooser |
+| `PlatformFolderPickerService` | SAF tree picker | runner GTK chooser (`GtkFileChooserNative`), which GTK routes to xdg-desktop-portal inside the Flatpak; `file_picker` only as a fallback |
 | `PlatformAudioFileScanner` | SAF content-resolver walk | `dart:io` walk |
 | `safDocumentListerProvider` | native content resolver | unsupported |
 | `safPermissionProbeProvider` | native grant probe | unsupported |

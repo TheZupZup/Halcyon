@@ -1,6 +1,12 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:linthra/core/platform/host_platform.dart';
+import 'package:linthra/core/sources/local/audio_file_scanner.dart';
+import 'package:linthra/core/sources/local/directory_readability.dart';
+import 'package:linthra/core/sources/local/folder_scan_exception.dart';
 import 'package:linthra/core/sources/local/local_scan_diagnostics.dart';
+import 'package:linthra/core/sources/local/local_scan_report.dart';
+import 'package:linthra/data/repositories/host_platform_provider.dart';
 import 'package:linthra/data/repositories/in_memory_music_library_repository.dart';
 import 'package:linthra/data/repositories/in_memory_selected_music_folder_repository.dart';
 import 'package:linthra/data/repositories/music_library_repository_provider.dart';
@@ -12,6 +18,34 @@ import 'package:linthra/features/settings/source/local_music_controller.dart';
 
 import '../../library/fake_audio_file_scanner.dart';
 import '../../library/fake_folder_picker_service.dart';
+
+/// A scanner whose answer can change between scans, so one test can walk a
+/// folder that is readable and then lose it.
+class _MutableScanner implements AudioFileScanner {
+  _MutableScanner({this.files = const <String>[]});
+
+  List<String> files;
+  Object? error;
+
+  @override
+  Future<List<String>> listFiles(String folder) async {
+    final Object? failure = error;
+    if (failure != null) {
+      throw failure;
+    }
+    return files;
+  }
+}
+
+/// The desktop access probe, likewise flippable mid-test.
+class _MutableReadability implements DirectoryReadability {
+  _MutableReadability(this.readable);
+
+  bool readable;
+
+  @override
+  Future<bool> canList(String path) async => readable;
+}
 
 ProviderContainer _container({
   required FakeFolderPickerService picker,
@@ -36,6 +70,49 @@ void main() {
   tearDown(LocalScanDiagnostics.reset);
 
   group('LocalMusicController', () {
+    test('losing access to a desktop folder is noticed on the next scan',
+        () async {
+      // Access is lost while the app runs — a drive unplugged, a Flatpak portal
+      // document revoked — and the *selection* never changes when that happens.
+      // A rescan is the user's natural way to find out, so the access line has
+      // to be re-probed then rather than staying on the answer cached when the
+      // folder was first picked.
+      final scanner = _MutableScanner(files: const <String>['/music/a.mp3']);
+      final readability = _MutableReadability(true);
+      final container = ProviderContainer(
+        overrides: [
+          folderPickerServiceProvider
+              .overrideWithValue(FakeFolderPickerService(folder: '/music')),
+          selectedMusicFolderRepositoryProvider
+              .overrideWithValue(InMemorySelectedMusicFolderRepository()),
+          musicLibraryRepositoryProvider
+              .overrideWithValue(InMemoryMusicLibraryRepository()),
+          audioFileScannerProvider.overrideWithValue(scanner),
+          directoryReadabilityProvider.overrideWithValue(readability),
+          hostPlatformProvider.overrideWithValue(HostPlatform.linux),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      await container.read(localMusicControllerProvider.notifier).pickFolder();
+      expect(await container.read(localFolderAccessProvider.future), isTrue);
+
+      // The folder goes away, then the user hits Rescan.
+      readability.readable = false;
+      scanner.error = const FolderScanException(
+        "Linthra couldn't find the selected folder.",
+      );
+      await container.read(localMusicControllerProvider.notifier).rescan();
+
+      expect(
+        container.read(localScanReportProvider)?.error,
+        LocalScanError.folderUnavailable,
+      );
+      // The card's lost-access line now shows, instead of the folder still
+      // reading as healthy.
+      expect(await container.read(localFolderAccessProvider.future), isFalse);
+    });
+
     test('pickFolder scans the chosen folder and imports its audio', () async {
       final libraryRepo = InMemoryMusicLibraryRepository();
       final container = _container(

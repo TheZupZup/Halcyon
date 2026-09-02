@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/dimens.dart';
+import '../../../core/platform/host_platform.dart';
 import '../../../core/sources/local/folder_location.dart';
 import '../../../core/sources/local/local_scan_report.dart';
+import '../../../data/repositories/host_platform_provider.dart';
 import '../../library/local_scan_report_provider.dart';
 import '../../library/selected_folder_controller.dart';
 import 'local_music_controller.dart';
@@ -38,6 +40,7 @@ class LocalMusicSettingsSection extends ConsumerWidget {
         ref.watch(localMusicControllerProvider);
     final bool? persisted = ref.watch(localFolderAccessProvider).valueOrNull;
     final bool hasFolder = folder != null && folder.isNotEmpty;
+    final HostPlatform host = ref.watch(hostPlatformProvider);
 
     final LocalMusicController controller =
         ref.read(localMusicControllerProvider.notifier);
@@ -58,9 +61,7 @@ class LocalMusicSettingsSection extends ConsumerWidget {
             ),
             const SizedBox(height: AppSpacing.xs),
             Text(
-              'Play music from a folder on this device or an SD card. Linthra '
-              "reads it through Android's folder access — it needs no broad "
-              'storage permission, and your files are never moved or copied.',
+              _blurbFor(host),
               style: theme.textTheme.bodySmall?.copyWith(color: muted),
             ),
             const SizedBox(height: AppSpacing.md),
@@ -69,6 +70,7 @@ class LocalMusicSettingsSection extends ConsumerWidget {
                 folderLabel: FolderLocation.parse(folder).displayLabel,
                 persisted: persisted,
                 report: report,
+                host: host,
               )
             else
               Text(
@@ -109,6 +111,23 @@ class LocalMusicSettingsSection extends ConsumerWidget {
   }
 }
 
+/// How the folder gets read, in the user's terms. The two platforms grant
+/// access in genuinely different ways — Android's folder access (SAF) and the
+/// desktop chooser, which inside a Flatpak is the system's file portal — and
+/// both are worth stating, because in both cases the point is the same: only
+/// the folder the user picked, and no broad storage permission.
+String _blurbFor(HostPlatform host) {
+  if (host.isAndroid) {
+    return 'Play music from a folder on this device or an SD card. Linthra '
+        "reads it through Android's folder access — it needs no broad storage "
+        'permission, and your files are never moved or copied.';
+  }
+  return 'Play music from a folder on this computer or an external drive. '
+      'Linthra reads only the folder you choose in the system file chooser — '
+      'it needs no broad filesystem permission, and your files are never '
+      'moved or copied.';
+}
+
 /// The selected-folder summary: which folder, whether access is still held, and
 /// what the last scan saw.
 class _SelectedFolderView extends StatelessWidget {
@@ -116,11 +135,15 @@ class _SelectedFolderView extends StatelessWidget {
     required this.folderLabel,
     required this.persisted,
     required this.report,
+    required this.host,
   });
 
   final String folderLabel;
   final bool? persisted;
   final LocalScanReport? report;
+
+  /// Which platform's folder chooser the recovery hint should name.
+  final HostPlatform host;
 
   @override
   Widget build(BuildContext context) {
@@ -147,14 +170,15 @@ class _SelectedFolderView extends StatelessWidget {
         if (persisted == false) ...[
           const SizedBox(height: AppSpacing.xs),
           Text(
-            'Access to this folder was lost. Select it again to restore it.',
+            'Linthra can no longer reach this folder. Select it again to '
+            'restore access — your library stays as it is until you do.',
             style: theme.textTheme.bodySmall
                 ?.copyWith(color: theme.colorScheme.error),
           ),
         ],
         if (report != null) ...[
           const SizedBox(height: AppSpacing.sm),
-          _ScanSummary(report: report!),
+          _ScanSummary(report: report!, host: host),
         ],
       ],
     );
@@ -169,9 +193,12 @@ class _SelectedFolderView extends StatelessWidget {
 /// only booleans and counts (never a path, file name, or raw error), so nothing
 /// private about the user's library can reach the card.
 class _ScanSummary extends StatelessWidget {
-  const _ScanSummary({required this.report});
+  const _ScanSummary({required this.report, required this.host});
 
   final LocalScanReport report;
+
+  /// The platform whose folder chooser the hint points the user back to.
+  final HostPlatform host;
 
   @override
   Widget build(BuildContext context) {
@@ -180,7 +207,7 @@ class _ScanSummary extends StatelessWidget {
     // A scan that threw produced no trustworthy counts, so the breakdown is
     // dropped and only the status + hint are shown.
     final String? counts = report.hadError ? null : _counts(report);
-    final String? hint = _hint(report);
+    final String? hint = _hint(report, host);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -236,10 +263,11 @@ class _ScanSummary extends StatelessWidget {
   }
 
   /// A calm, non-blaming next step when the scan imported nothing. Two shapes: a
-  /// likely access problem (the SD-card / lost-grant case) versus a folder that
-  /// simply held no recognized audio. Both point at re-picking the folder with
-  /// the Android chooser; neither faults the user.
-  static String? _hint(LocalScanReport report) {
+  /// likely access problem (the SD-card / lost-grant / unreachable-folder case)
+  /// versus a folder that simply held no recognized audio. Both point at
+  /// re-picking the folder in the chooser the user actually has; neither faults
+  /// the user.
+  static String? _hint(LocalScanReport report, HostPlatform host) {
     if (report.importedTracks > 0) {
       return null;
     }
@@ -250,12 +278,23 @@ class _ScanSummary extends StatelessWidget {
       final String sdNote =
           report.isContentUri ? ' — common with SD cards' : '';
       return "Linthra couldn't read this folder$sdNote. Select it again with "
-          "Android's folder chooser to restore access.";
+          '${_chooserName(host)} to restore access.';
     }
     return "This folder doesn't seem to contain audio Linthra recognizes. Check "
         'that it has supported audio files (like MP3, M4A, FLAC, or OGG), or '
-        "select the folder again with Android's folder chooser.";
+        'select the folder again with ${_chooserName(host)}.';
   }
+
+  /// What to call the chooser the user re-picks the folder in.
+  ///
+  /// Android's is the system folder chooser (SAF), and saying so is the
+  /// clearest phrasing there. On a desktop it is the system's own chooser —
+  /// inside the Flatpak, the xdg-desktop-portal one — so naming Android's would
+  /// send the user looking for something that is not on their machine. This
+  /// keys off the platform rather than the report's `isContentUri`, which is a
+  /// storage kind: a legacy filesystem selection on Android is still Android.
+  static String _chooserName(HostPlatform host) =>
+      host.isAndroid ? "Android's folder chooser" : 'the system folder chooser';
 }
 
 /// One line of calm guidance (info icon + muted text) shown when a scan needs a
