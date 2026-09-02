@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shlex
 import sys
 from pathlib import Path
 from xml.etree import ElementTree
@@ -398,9 +399,30 @@ def flatpak_permission_problems(root: Path) -> list[str]:
             if not line[0].isspace():
                 break
 
-            item = re.fullmatch(r"\s+-\s+(--[^\s#]+)(?:\s+#.*)?\s*", line)
-            if item is not None:
-                actual.add(item.group(1))
+            stripped = line.strip()
+            if not stripped.startswith("-"):
+                problems.append(
+                    f"{manifest} finish-args contains an unrecognised line: "
+                    f"{stripped!r}"
+                )
+                continue
+            try:
+                values = shlex.split(
+                    stripped[1:].strip(), comments=True, posix=True
+                )
+            except ValueError as error:
+                problems.append(
+                    f"{manifest} finish-args contains an invalid scalar "
+                    f"{stripped!r}: {error}"
+                )
+                continue
+            if len(values) != 1:
+                problems.append(
+                    f"{manifest} finish-args entry {stripped!r} does not resolve "
+                    "to exactly one scalar"
+                )
+                continue
+            actual.add(values[0])
 
         missing = EXPECTED_FLATPAK_FINISH_ARGS - actual
         unexpected = actual - EXPECTED_FLATPAK_FINISH_ARGS
