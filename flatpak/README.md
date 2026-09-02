@@ -369,12 +369,16 @@ Save, read after restart, delete:
 
 Locked or unavailable secure storage:
 
-1. **Locked.** Lock the host keyring (`secret-tool lock --collection='login'`
-   on gnome-keyring; close the wallet in KWalletManager on KDE), then launch
-   and sign in. The portal's `RetrieveSecret` cannot complete against a locked
-   keyring, so expect a visible "Couldn't save your … sign-in on this device.
-   Unlock your keyring and try again.", the app still usable, and no crash.
-   Unlock, retry, and the sign-in completes.
+1. **Locked.** Lock the host keyring, then launch and sign in. On
+   gnome-keyring that is `secret-tool lock --collection=default` (libsecret
+   0.20.5+; `--collection` wants a full D-Bus path or the literal `default`
+   alias, not a wallet name, and a bare `secret-tool lock` locks every
+   collection), or right-click the login keyring in Seahorse and choose
+   *Lock*. On KDE, close the wallet in KWalletManager. The portal's
+   `RetrieveSecret` cannot complete against a locked keyring, so expect a
+   visible "Couldn't save your … sign-in on this device. Unlock your keyring
+   and try again.", the app still usable, and no crash. Unlock, retry, and the
+   sign-in completes.
 2. **Unavailable.** Use a session with neither a Secret portal backend nor a
    reachable Secret Service (a bare window manager with no keyring daemon is
    the easy case). Saved sessions report a restore error, signing in reports

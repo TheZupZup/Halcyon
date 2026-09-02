@@ -430,9 +430,14 @@ Four things worth knowing while debugging:
 1. **Locked.** Lock the host keyring and sign in:
 
    ```bash
-   secret-tool lock --collection='login'   # GNOME/gnome-keyring
+   # GNOME/gnome-keyring, libsecret 0.20.5+. Locks the default collection;
+   # a bare `secret-tool lock` locks every collection instead.
+   secret-tool lock --collection=default
    ```
 
+   `--collection` takes a full D-Bus path or the literal `default` alias, not
+   a wallet name like `login` (libsecret's `get_collection_path()` rejects
+   that). Seahorse does the same thing: right-click the login keyring, *Lock*.
    KDE: close the wallet in KWalletManager. The portal cannot hand over the
    master secret against a locked keyring, so expect a visible "Couldn't save
    your … sign-in on this device. Unlock your keyring and try again.", the app
