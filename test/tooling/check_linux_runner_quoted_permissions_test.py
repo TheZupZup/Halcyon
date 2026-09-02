@@ -30,7 +30,10 @@ def _manifest(*, extra: str | None = None, quoted_network: bool = False) -> str:
     return "\n".join(lines)
 
 
-def _root_with_manifests(template: str, generated: str) -> tempfile.TemporaryDirectory:
+def _root_with_manifests(
+    template: str,
+    generated: str,
+) -> tuple[tempfile.TemporaryDirectory, Path]:
     temporary = tempfile.TemporaryDirectory()
     root = Path(temporary.name)
     (root / "android" / "app").mkdir(parents=True)
@@ -40,23 +43,26 @@ def _root_with_manifests(template: str, generated: str) -> tempfile.TemporaryDir
         encoding="utf-8",
     )
     (root / "flatpak" / "flatpak-flutter.yml").write_text(
-        template, encoding="utf-8"
+        template,
+        encoding="utf-8",
     )
-    (root / "flatpak" / f"{APP_ID}.yml").write_text(generated, encoding="utf-8")
-    temporary.root = root  # type: ignore[attr-defined]
-    return temporary
+    (root / "flatpak" / f"{APP_ID}.yml").write_text(
+        generated,
+        encoding="utf-8",
+    )
+    return temporary, root
 
 
 class QuotedFlatpakPermissionTest(unittest.TestCase):
     def test_double_quoted_filesystem_permission_is_caught(self) -> None:
         normal = _manifest()
-        temporary = _root_with_manifests(
+        temporary, root = _root_with_manifests(
             normal,
             _manifest(extra='"--filesystem=host"'),
         )
         self.addCleanup(temporary.cleanup)
 
-        problems = checker.flatpak_permission_problems(temporary.root)  # type: ignore[attr-defined]
+        problems = checker.flatpak_permission_problems(root)
 
         self.assertEqual(len(problems), 1)
         self.assertIn("--filesystem=host", problems[0])
@@ -64,26 +70,23 @@ class QuotedFlatpakPermissionTest(unittest.TestCase):
 
     def test_single_quoted_dbus_permission_with_comment_is_caught(self) -> None:
         normal = _manifest()
-        temporary = _root_with_manifests(
+        temporary, root = _root_with_manifests(
             normal,
             _manifest(extra="'--talk-name=org.example.Service' # comment"),
         )
         self.addCleanup(temporary.cleanup)
 
-        problems = checker.flatpak_permission_problems(temporary.root)  # type: ignore[attr-defined]
+        problems = checker.flatpak_permission_problems(root)
 
         self.assertEqual(len(problems), 1)
         self.assertIn("--talk-name=org.example.Service", problems[0])
 
     def test_allowed_quoted_permission_with_comment_is_recognised(self) -> None:
         quoted = _manifest(quoted_network=True)
-        temporary = _root_with_manifests(quoted, quoted)
+        temporary, root = _root_with_manifests(quoted, quoted)
         self.addCleanup(temporary.cleanup)
 
-        self.assertEqual(
-            checker.flatpak_permission_problems(temporary.root),  # type: ignore[attr-defined]
-            [],
-        )
+        self.assertEqual(checker.flatpak_permission_problems(root), [])
 
 
 if __name__ == "__main__":
