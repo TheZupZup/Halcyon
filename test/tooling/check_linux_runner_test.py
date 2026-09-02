@@ -182,6 +182,13 @@ ICON_SVG = """\
 FLATPAK_MANIFEST = """\
 app-id: {app_id}
 command: {binary}
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  - --socket=pulseaudio
+  - --share=network
 modules:
   - name: {binary}
     buildsystem: simple
@@ -273,7 +280,10 @@ def build_checkout(
         encoding="utf-8",
     )
     (
-        directory / "lib" / "core" / "services"
+        directory
+        / "lib"
+        / "core"
+        / "services"
         / "method_channel_linux_folder_picker.dart"
     ).write_text(
         folder_picker_dart
@@ -522,6 +532,49 @@ class DesktopEntryInstallTest(CheckoutCase):
         self.assertIn("no desktop entry to export", problems[0])
 
 
+class FlatpakPermissionTest(CheckoutCase):
+    def test_generated_manifest_without_network_is_caught(self) -> None:
+        build_checkout(
+            self.root,
+            flatpak_manifest=FLATPAK_MANIFEST.format(
+                app_id=APP_ID, binary=BINARY
+            ).replace("  - --share=network\n", ""),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn(f"flatpak/{APP_ID}.yml", problems[0])
+        self.assertIn("--share=network", problems[0])
+
+    def test_unrelated_commented_filesystem_permission_is_caught(self) -> None:
+        manifest = FLATPAK_MANIFEST.format(app_id=APP_ID, binary=BINARY).replace(
+            "  - --share=network\n",
+            "  - --share=network\n  - --filesystem=host # comment\n",
+        )
+        build_checkout(self.root, flatpak_manifest=manifest)
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("unrelated permission", problems[0])
+        self.assertIn("--filesystem=host", problems[0])
+
+    def test_unrelated_commented_dbus_permission_is_caught(self) -> None:
+        manifest = FLATPAK_MANIFEST.format(app_id=APP_ID, binary=BINARY).replace(
+            "  - --share=network\n",
+            "  - --share=network\n  - --talk-name=org.example.Service # comment\n",
+        )
+        build_checkout(self.root, flatpak_manifest=manifest)
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("--talk-name=org.example.Service", problems[0])
+
+    def test_allowed_permission_with_inline_comment_is_recognised(self) -> None:
+        manifest = FLATPAK_MANIFEST.format(app_id=APP_ID, binary=BINARY).replace(
+            "  - --share=network\n",
+            "  - --share=network # configured providers\n",
+        )
+        build_checkout(self.root, flatpak_manifest=manifest)
+        self.assertEqual(checker.check(self.root), [])
+
+
 class IconInstallTest(CheckoutCase):
     """The desktop entry's `Icon=` and the installed icon file, held together.
 
@@ -763,9 +816,7 @@ class FolderPickerChannelTest(CheckoutCase):
         # Compiled but never wired to the engine is the same silence.
         build_checkout(
             self.root,
-            my_application=MY_APPLICATION.format(
-                display_name=DISPLAY_NAME
-            ).replace(
+            my_application=MY_APPLICATION.format(display_name=DISPLAY_NAME).replace(
                 "self->folder_picker = folder_picker_channel_new(view, window);",
                 "// no folder picker here",
             ),
@@ -883,7 +934,6 @@ class MissingFileTest(CheckoutCase):
 
 
 class RealRepositoryTest(unittest.TestCase):
-
     def test_the_committed_linux_runner_is_consistent(self) -> None:
         self.assertEqual(checker.check(ROOT), [])
 
@@ -901,9 +951,7 @@ class RealRepositoryTest(unittest.TestCase):
         # Stated explicitly because it is the whole point of #436: the file
         # the Flatpak installs answers to the name the launcher looks up.
         icon_name = checker.desktop_entry(ROOT)["Icon"]
-        installed = (
-            f"{checker.ICON_INSTALL_DIR}/{icon_name}{checker.ICON_EXTENSION}"
-        )
+        installed = f"{checker.ICON_INSTALL_DIR}/{icon_name}{checker.ICON_EXTENSION}"
         self.assertEqual(
             installed,
             "/app/share/icons/hicolor/scalable/apps/"

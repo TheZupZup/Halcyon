@@ -50,6 +50,13 @@ finish-args:
   # so --socket=pulseaudio is what reaches both a native PulseAudio session
   # and a PipeWire one — there is no separate "--socket=pipewire" finish-arg.
   - --socket=pulseaudio
+  # User-configured Jellyfin, Navidrome/Subsonic and Plex servers are ordinary
+  # HTTP(S) destinations. Flatpak disables all networking unless this single
+  # capability is granted; --share=network enables normal sockets (including
+  # LAN addresses, DNS hostnames and remote/tunnel endpoints) without exposing
+  # host files or adding a D-Bus permission. Provider discovery remains out of
+  # scope: direct configured endpoints need no discovery-specific grant.
+  - --share=network
   #
   # Local music folders (#438) need nothing here on purpose. Linthra's Linux
   # runner opens GTK's GtkFileChooserNative, which GTK routes to the
@@ -63,11 +70,6 @@ finish-args:
   #
   # Deliberately withheld for issue #432, still withheld here (see
   # flatpak/README.md "What's deferred" for the reasoning):
-  #   --share=network            (provider streaming: #440. #433 only proves
-  #                                the bundled runtime *can* play HTTP(S)
-  #                                audio, using a temporary, non-committed
-  #                                `flatpak override` for that validation —
-  #                                see flatpak/README.md.)
   #   --filesystem=host/home     (broad filesystem access. Not needed for the
   #                                local library, per the portal note above;
   #                                the remaining permission audit is #439.)

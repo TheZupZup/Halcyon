@@ -8,8 +8,8 @@ runtime, with Linthra's own icon on the launcher entry and AppStream metainfo
 for a software-centre listing, and let the user point Linthra at a music
 folder through the desktop portal without granting any host filesystem
 access. It is deliberately not the Flathub submission —
-the sandbox permissions are still open; see "What's deferred" below and the
-comments in `io.github.thezupzup.linthra.yml` itself.
+some sandbox permissions are still deferred; see "What's deferred" below and
+the comments in `io.github.thezupzup.linthra.yml` itself.
 
 ## Audio runtime
 
@@ -123,9 +123,8 @@ type="desktop-id">` and `<icon type="stock">` point at the desktop entry and
 icon already installed under that id. Screenshots are omitted until there are
 Linux captures; Android shots would misrepresent the desktop window.
 
-The description only covers local playback. Server streaming (Jellyfin /
-Navidrome / Subsonic / Plex) stays out until the Flatpak has network
-permission (#440).
+The description covers local playback. The sandbox also permits normal network
+connections for user-configured Jellyfin, Navidrome/Subsonic, and Plex servers.
 
 ## Files here
 
@@ -167,42 +166,50 @@ Nothing above needs network access during the actual sandboxed build —
 the Flutter SDK module, the ffmpeg/libplacebo/libass/mpv archives) happens
 before the sandbox is entered, exactly like any other Flatpak module.
 
-## Testing audio locally
+## Network access and endpoint validation
 
-The committed manifest grants `--socket=pulseaudio` but no filesystem or
-network access, matching #438/#439/#440's scope. To manually verify playback
-of your own local files or a real remote stream, pass the extra permission to
-`flatpak run` itself. Options given there apply to that one invocation only,
-so there is nothing to revoke afterwards and nothing is left behind:
+The committed manifest grants exactly `--share=network` for networking. Flatpak
+otherwise gives an application no network namespace access, so this is the
+minimum capability that lets Linthra's existing HTTP clients connect to a
+user-configured Jellyfin, Navidrome/Subsonic, or Plex server. It covers ordinary
+IPv4/IPv6 sockets: direct LAN addresses, DNS hostnames, HTTPS, and remote or
+tunnel endpoints all behave as normal network destinations.
 
-```bash
-# Local file: read-only access to a directory with a test track, for this
-# launch only. Play it from within the app.
-flatpak run --filesystem=/path/to/test-music:ro io.github.thezupzup.linthra
+This grant does **not** expose arbitrary host files and adds no D-Bus access.
+There is still no `--filesystem=host`, `--filesystem=home`, broad D-Bus grant,
+or Secret Service permission. It also does not add mDNS, SSDP, or broadcast
+discovery behavior: issue #440 covers endpoints the user configured directly;
+provider discovery remains separate.
 
-# Remote HTTP(S) stream: same idea with network instead.
-flatpak run --share=network io.github.thezupzup.linthra
-```
+After building and installing the Flatpak, validate a LAN endpoint by entering
+its direct address (for example `http://192.168.1.20:8096`) in the matching
+provider's connection screen, signing in, syncing, and playing a track. Repeat
+with a hostname if the server has one. Validate a remote endpoint by entering a
+real `https://` hostname (including a tunnel URL if that is how the server is
+normally exposed), then sign in, sync, and play a track. Do not disable TLS or
+certificate verification: use the same valid endpoint that native Linthra uses.
 
-Do **not** use `flatpak override` for this. Its grants are persistent, and the
-apparent undo is not one: `--nofilesystem=…`/`--unshare=network` record a
-*negative* override on top of the grant rather than deleting it, so the app
-keeps leftover permission state either way. `--reset` is worse — it wipes
-*every* persistent override you have for this app, including unrelated ones
-you set yourself. A one-shot `flatpak run` permission avoids the whole problem.
+Verify recoverable failure behavior without changing the manifest:
 
-Never add these permissions to `io.github.thezupzup.linthra.yml` either: a
-committed grant is #440's (network) and #438/#439's (filesystem) decision, not
-a testing convenience. The package itself is unchanged by the runs above, and
-stays that way:
+1. While connected, note that the provider is available and its tracks play.
+2. Stop the test server, disconnect the network, or run a one-shot denial with
+   `flatpak run --unshare=network io.github.thezupzup.linthra`.
+3. Retry the provider operation. Linthra should report its existing configured
+   but unreachable/offline provider state; the app must remain usable and any
+   cached track must remain playable.
+4. Restore the server/network, launch normally, and retry. The provider should
+   become available again through the existing reachability recovery path.
+
+Inspect the installed package rather than relying on the source file:
 
 ```bash
 flatpak info --show-permissions io.github.thezupzup.linthra
-# Still only the manifest's finish-args — a permission passed to `flatpak run`
-# never appears here.
+flatpak override --user --show io.github.thezupzup.linthra
 ```
 
-Automated audio smoke coverage is #446's job, not this file's.
+The first command should show `shared=network;ipc;` (alongside the existing
+windowing, GPU, and audio grants), and no filesystem or D-Bus permission. The
+second reveals persistent local overrides that could invalidate the test.
 
 ## Regenerating the pinned sources
 
@@ -260,12 +267,6 @@ side's, so the two cannot drift into a silent fallback.
 
 Not in this manifest — each has its own issue:
 
-* **Provider network access** (#440) — no permanent `--share=network`.
-  #433 proved the bundled ffmpeg/libmpv can decode HTTP(S) audio using only a
-  temporary, non-committed grant for that validation (see
-  [Testing audio locally](#testing-audio-locally)); permanently granting
-  Linthra network access for real provider use
-  (Jellyfin/Navidrome-Subsonic/Plex) is #440's job, not this manifest's.
 * **The remaining filesystem-permission audit** (#439) and **Secret Service**
   (#441) — no `--filesystem=host|home` or
   `--talk-name=org.freedesktop.secrets`. Jellyfin/Subsonic/Plex session restore

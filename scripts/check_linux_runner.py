@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shlex
 import sys
 from pathlib import Path
 from xml.etree import ElementTree
@@ -95,6 +96,19 @@ BUILD_GRADLE = Path("android") / "app" / "build.gradle"
 PACKAGING_DIR = Path("linux") / "packaging"
 FLATPAK_DIR = Path("flatpak")
 FLATPAK_TEMPLATE = FLATPAK_DIR / "flatpak-flutter.yml"
+
+# The complete sandbox surface approved for the current Flatpak. Keeping an
+# exact allow-list (rather than checking only for --share=network) makes this a
+# regression guard against solving provider access with a filesystem or D-Bus
+# grant. Both the authoritative template and generated manifest are checked.
+EXPECTED_FLATPAK_FINISH_ARGS = {
+    "--socket=wayland",
+    "--socket=fallback-x11",
+    "--share=ipc",
+    "--device=dri",
+    "--socket=pulseaudio",
+    "--share=network",
+}
 
 # Where a Flatpak's desktop entry has to land: flatpak-builder exports what it
 # finds in this directory at `finish` time and nothing from anywhere else.
@@ -362,6 +376,66 @@ def desktop_entry_install_problems(root: Path) -> list[str]:
     return problems
 
 
+def flatpak_permission_problems(root: Path) -> list[str]:
+    """Missing, unexpected, or unsynchronised Flatpak finish arguments."""
+    problems: list[str] = []
+    app_id = android_application_id(root)
+    manifests = (FLATPAK_TEMPLATE, FLATPAK_DIR / f"{app_id}.yml")
+
+    for manifest in manifests:
+        actual: set[str] = set()
+        in_finish_args = False
+        for line in _read(root, manifest).splitlines():
+            if not in_finish_args:
+                in_finish_args = (
+                    re.fullmatch(r"finish-args\s*:\s*(?:#.*)?", line) is not None
+                )
+                continue
+
+            # Blank lines and comments are harmless within a YAML block. The
+            # next unindented mapping key ends finish-args.
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if not line[0].isspace():
+                break
+
+            stripped = line.strip()
+            if not stripped.startswith("-"):
+                problems.append(
+                    f"{manifest} finish-args contains an unrecognised line: "
+                    f"{stripped!r}"
+                )
+                continue
+            try:
+                values = shlex.split(stripped[1:].strip(), comments=True, posix=True)
+            except ValueError as error:
+                problems.append(
+                    f"{manifest} finish-args contains an invalid scalar "
+                    f"{stripped!r}: {error}"
+                )
+                continue
+            if len(values) != 1:
+                problems.append(
+                    f"{manifest} finish-args entry {stripped!r} does not resolve "
+                    "to exactly one scalar"
+                )
+                continue
+            actual.add(values[0])
+
+        missing = EXPECTED_FLATPAK_FINISH_ARGS - actual
+        unexpected = actual - EXPECTED_FLATPAK_FINISH_ARGS
+        if missing:
+            problems.append(
+                f"{manifest} finish-args missing {', '.join(sorted(missing))}"
+            )
+        if unexpected:
+            problems.append(
+                f"{manifest} finish-args contain unrelated permission(s): "
+                f"{', '.join(sorted(unexpected))}"
+            )
+    return problems
+
+
 def icon_install_problems(root: Path) -> list[str]:
     """Disagreements between the desktop entry's `Icon=` and the installed icon.
 
@@ -560,6 +634,7 @@ def check(root: Path) -> list[str]:
     # runner that drifts is reported once rather than twice.
     problems.extend(desktop_entry_problems(root))
     problems.extend(desktop_entry_install_problems(root))
+    problems.extend(flatpak_permission_problems(root))
 
     # The application icon (#436): `Icon=` above is only a name, so this is
     # what connects it to a file the built Flatpak actually contains.

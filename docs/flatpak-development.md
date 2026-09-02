@@ -21,8 +21,9 @@ Three docs, three jobs:
 > The committed manifest builds, installs and launches the real app with
 > working audio, and installs a desktop entry, Linthra's own icon, and AppStream
 > metainfo so the app appears in the application menu and in software centres.
-> It is not the Flathub submission: there is no network or Secret Service
-> access, and no filesystem grant beyond the folders the user picks through
+> It is not the Flathub submission: normal network access is enabled for
+> configured self-hosted servers, but there is no Secret Service access and no
+> filesystem grant beyond the folders the user picks through
 > the desktop portal.
 > See [What the sandbox allows today](#what-the-sandbox-allows-today).
 
@@ -292,14 +293,19 @@ flatpak override --user --show io.github.thezupzup.linthra
 The committed manifest grants exactly:
 
 ```
---socket=wayland  --socket=fallback-x11  --share=ipc
+--socket=wayland  --socket=fallback-x11  --share=ipc  --share=network
 --device=dri      --socket=pulseaudio
 ```
 
-So these are **expected**, not bugs, and not worth debugging:
+`--share=network` is the minimum Flatpak capability for Linthra's existing
+HTTP(S) clients to reach configured Jellyfin, Navidrome/Subsonic, and Plex
+endpoints. It enables ordinary network destinations—including LAN addresses,
+hostnames, valid HTTPS endpoints, and remote/tunnel URLs—but exposes no host
+files and grants no D-Bus API. Discovery (mDNS/SSDP/broadcast) is separate and
+is not enabled by this change.
 
-* Jellyfin, Navidrome/Subsonic and Plex cannot reach a server — there is no
-  `--share=network` yet ([#440](https://github.com/TheZupZup/Linthra/issues/440)).
+The following are **expected**, not bugs, and not worth debugging:
+
 * Unrelated host files are invisible — there is no `--filesystem=` grant
   ([#439](https://github.com/TheZupZup/Linthra/issues/439) is the remaining
   permission audit). Picking a **music folder** does work, and needs no grant:
@@ -329,19 +335,15 @@ So these are **expected**, not bugs, and not worth debugging:
   icon after that is usually caching: log out and back in, or run
   `gtk4-update-icon-cache -f ~/.local/share/flatpak/exports/share/icons/hicolor`.
 
-To exercise those paths anyway, pass the permission to `flatpak run` for a
-single launch — it applies to that invocation only, so there is nothing to
-revoke and nothing left behind:
+Do not add filesystem or D-Bus permissions to test networking. For a deliberate
+one-shot failure test, remove the packaged network share only for that launch:
 
 ```bash
-flatpak run --filesystem=/path/to/test-music:ro io.github.thezupzup.linthra
-flatpak run --share=network io.github.thezupzup.linthra
+flatpak run --unshare=network io.github.thezupzup.linthra
 ```
 
-Use that rather than `flatpak override`, whose grants persist and cannot be
-cleanly undone — see
-[`flatpak/README.md`](../flatpak/README.md#testing-audio-locally). Never commit
-either permission to the manifest.
+Use this rather than `flatpak override`, whose grants persist and can obscure
+what the manifest actually provides.
 
 ## Smoke testing
 
@@ -370,12 +372,17 @@ Until #445/#446 land, the manual pass for a packaging change is:
 2. `flatpak run io.github.thezupzup.linthra` → the window opens and renders.
    A missing bundled library shows up here, as a startup failure before the
    first frame.
-3. Play audio with a one-shot permission —
-   `flatpak run --filesystem=/path/to/test-music:ro io.github.thezupzup.linthra`,
-   or `--share=network` for a stream, per
-   [`flatpak/README.md`](../flatpak/README.md#testing-audio-locally). It lasts
-   for that launch only.
-4. Local music without any grant: launch plainly
+3. Test a configured LAN server: enter its direct address (for example
+   `http://192.168.1.20:8096`) in the Jellyfin, Navidrome/Subsonic, or Plex
+   connection UI, sign in, sync, and play a track. Repeat with its hostname.
+4. Test a real remote `https://` endpoint (or tunnel URL) the same way. Use a
+   valid certificate; never weaken TLS verification for this test.
+5. Test recovery: stop the server or launch once with
+   `flatpak run --unshare=network io.github.thezupzup.linthra`. A retry should
+   use Linthra's existing configured-but-unreachable/offline provider state,
+   the app and cached playback should remain usable, and a normal relaunch
+   after restoring connectivity should recover.
+6. Local music without any grant: launch plainly
    (`flatpak run io.github.thezupzup.linthra`), then Settings ▸ Local music ▸
    *Select a folder*. The system's own folder chooser opens (the portal, run on
    the host), and the folder you pick scans. Check that it really went through
@@ -391,6 +398,6 @@ Until #445/#446 land, the manual pass for a packaging change is:
    the same folder still scans. `flatpak document-unexport /path/to/test-music`
    on the host revokes it, after which Linthra says the folder can no longer be
    reached and keeps the library it already indexed instead of emptying it.
-5. `flatpak info --show-permissions io.github.thezupzup.linthra` → still only
-   the five finish-args listed above, i.e. you did not widen the sandbox by
-   accident.
+7. `flatpak info --show-permissions io.github.thezupzup.linthra` → shows
+   `shared=network;ipc;` and still only the six finish-args listed above, i.e.
+   you did not widen the sandbox by accident.
