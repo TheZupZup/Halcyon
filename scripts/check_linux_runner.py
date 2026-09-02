@@ -101,6 +101,14 @@ FLATPAK_TEMPLATE = FLATPAK_DIR / "flatpak-flutter.yml"
 # exact allow-list (rather than checking only for --share=network) makes this a
 # regression guard against solving provider access with a filesystem or D-Bus
 # grant. Both the authoritative template and generated manifest are checked.
+#
+# There is deliberately no D-Bus entry at all. Secure credential storage (#441)
+# reaches the platform keyring through the xdg-desktop-portal Secret portal,
+# which every Flatpak may talk to without a finish-arg, so
+# --talk-name=org.freedesktop.secrets (and every broader form of it:
+# --socket=session-bus, an org.freedesktop.* wildcard, --own-name, the same
+# name on the system bus) is rejected by this list rather than quietly
+# accepted. See flatpak/flatpak-flutter.yml's finish-args comments.
 EXPECTED_FLATPAK_FINISH_ARGS = {
     "--socket=wayland",
     "--socket=fallback-x11",
@@ -108,13 +116,6 @@ EXPECTED_FLATPAK_FINISH_ARGS = {
     "--device=dri",
     "--socket=pulseaudio",
     "--share=network",
-    # Secure credential storage (#441). flutter_secure_storage's Linux plugin
-    # is a libsecret wrapper, and libsecret's Secret Service backend talks to
-    # exactly this session-bus name. Being an exact string, every broader form
-    # a well-meaning change might reach for instead (--socket=session-bus, an
-    # org.freedesktop.* wildcard, --own-name, or the same name granted on the
-    # system bus) is rejected by this list rather than silently accepted.
-    "--talk-name=org.freedesktop.secrets",
 }
 
 # Where a Flatpak's desktop entry has to land: flatpak-builder exports what it

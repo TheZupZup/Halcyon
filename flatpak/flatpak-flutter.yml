@@ -57,27 +57,39 @@ finish-args:
   # host files or adding a D-Bus permission. Provider discovery remains out of
   # scope: direct configured endpoints need no discovery-specific grant.
   - --share=network
-  # Secure credential storage (#441). flutter_secure_storage's Linux
-  # implementation (flutter_secure_storage_linux 1.2.3) is a thin wrapper over
-  # libsecret: secret_password_storev_sync/lookupv_sync, no storage of its own
-  # and no file fallback. libsecret picks its backend at runtime
-  # (secret-backend.c, backend_get_impl_type):
-  #   * If /.flatpak-info exists *and* xdg-desktop-portal answers
-  #     org.freedesktop.portal.Secret version 1, it uses its own file backend:
-  #     an encrypted file under the app's data dir whose master key comes from
-  #     the portal. Every Flatpak may talk to the portal, so that path needs
-  #     nothing here (this is the usual GNOME case, where gnome-keyring
-  #     provides the portal implementation).
-  #   * Otherwise it falls back to the Secret Service backend and calls the
-  #     session-bus name org.freedesktop.secrets (SECRET_SERVICE_BUS_NAME).
-  #     The sandbox's D-Bus proxy hides that name unless it is granted, so
-  #     without this line every read and write fails on any host whose portal
-  #     has no Secret implementation, KDE/kwallet sessions among them.
-  # --talk-name is the narrowest grant that covers the second path: talk (not
-  # own) to exactly one well-known name. Not --socket=session-bus, not a
-  # wildcard, and no filesystem grant: the secret stays in the platform
-  # keyring either way, and Linthra never writes credentials to a file itself.
-  - --talk-name=org.freedesktop.secrets
+  #
+  # Secure credential storage (#441) needs nothing here either, for the same
+  # reason local music folders don't: the sandbox path is a portal.
+  # flutter_secure_storage's Linux implementation
+  # (flutter_secure_storage_linux 1.2.3) is a thin wrapper over libsecret,
+  # which chooses its own backend at runtime (secret-backend.c,
+  # backend_get_impl_type): when /.flatpak-info exists and xdg-desktop-portal
+  # answers org.freedesktop.portal.Secret v1, it uses its file backend, an
+  # encrypted store under the app's own data dir whose master secret is handed
+  # over by the portal (and held by the host's keyring). Every Flatpak may talk
+  # to the portal, so no finish-arg grants it.
+  #
+  # That portal is exported only when the desktop ships an
+  # org.freedesktop.impl.portal.Secret backend (xdg-desktop-portal
+  # desktop-portal/secret.c, init_secret: no impl configured means the
+  # interface is never exported). Both desktops this targets do:
+  #   * GNOME, via gnome-keyring (daemon/dbus/gkd-secret-portal.c).
+  #   * KDE Plasma 6, via KWallet's ksecretd
+  #     (src/runtime/ksecretd/kwalletportalsecrets.cpp, which installs
+  #     org.freedesktop.impl.portal.desktop.kwallet.service and
+  #     kwallet.portal). KF6 only; the KF5 kwalletd had no portal backend.
+  # org.gnome.Platform//50 carries libsecret 0.21.7 built with libgcrypt
+  # (freedesktop-sdk 25.08 elements/components/libsecret.bst), so that file
+  # backend is compiled in and the sandbox detection above is live.
+  #
+  # So --talk-name=org.freedesktop.secrets is deliberately NOT granted. On a
+  # host with no Secret portal backend (a KF5-era KDE, a bare WM running only
+  # a Secret Service daemon) libsecret falls back to the Secret Service bus
+  # name, the sandbox's D-Bus proxy hides it, and Linthra reports a
+  # recoverable storage error and stays signed out rather than falling back to
+  # any storage of its own. A user who wants that fallback can grant it
+  # themselves with `flatpak override --user`; it is not worth a permission on
+  # every install (docs/flatpak-development.md "Secure credential storage").
   #
   # Local music folders (#438) need nothing here on purpose. Linthra's Linux
   # runner opens GTK's GtkFileChooserNative, which GTK routes to the
@@ -94,13 +106,14 @@ finish-args:
   #   --filesystem=host/home     (broad filesystem access. Not needed for the
   #                                local library, per the portal note above;
   #                                the remaining permission audit is #439.)
-  #   --socket=session-bus       (the whole session bus. #441 needs one name.)
-  #   --talk-name=org.freedesktop.secrets.*  and any other wildcard: one exact
-  #                                name is what libsecret connects to.
-  # Their absence is safe: a Secret Service that is missing, locked or denied
+  #   --socket=session-bus, --talk-name=org.freedesktop.secrets, and every
+  #                                wildcard or --own-name form of it (#441
+  #                                is served by the Secret portal instead,
+  #                                per the note above).
+  # Their absence is safe: secure storage that is missing, locked or denied
   # surfaces as a recoverable sign-in/storage error and Jellyfin/Subsonic/Plex
-  # stay signed out, never a plaintext fallback (docs/linux-desktop.md
-  # "Secure storage").
+  # stay signed out. Linthra never writes a credential to storage of its own,
+  # in plaintext or otherwise (docs/linux-desktop.md "Secure storage").
 
 modules:
   # === Self-contained libmpv audio runtime, built from pinned upstream source

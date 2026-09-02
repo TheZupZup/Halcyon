@@ -7,19 +7,20 @@ import 'secure_session_storage.dart';
 /// A [SubsonicSessionStore] backed by `flutter_secure_storage`.
 ///
 /// The session is serialized to JSON and written to platform secure storage
-/// under a single key: the Android Keystore-backed store on Android, and the
-/// freedesktop Secret Service (libsecret) on Linux, i.e. the desktop keyring
-/// the user's other apps already use. The credential (salt + token) is never
-/// at rest in plaintext (unlike `shared_preferences`) on either platform, and
-/// there is no file
-/// fallback when the platform store is unavailable. This is the production
-/// binding; it's intentionally never touched by tests, which use the in-memory
-/// store so they stay free of platform channels.
+/// under a single key, through [SecureSessionStorage]: the Android
+/// Keystore-backed store on Android, and libsecret on Linux (the freedesktop
+/// Secret Service natively; inside a Flatpak, libsecret's own portal-keyed
+/// encrypted store). The credential (salt + token) is never at rest in
+/// plaintext (unlike `shared_preferences`) on either platform, and Linthra
+/// writes no file of its
+/// own when the platform store is unavailable. This is the production binding;
+/// it's intentionally never touched by tests, which use the in-memory store so
+/// they stay free of platform channels.
 ///
 /// A malformed/partial record reads back as `null` (treated as "signed out")
 /// rather than throwing, so a storage glitch can't wedge the app at launch. A
-/// keyring that is missing, locked or denied is a different thing and is not
-/// flattened into "signed out": [SecureSessionStorage] surfaces it as a
+/// platform store that is missing, locked or denied is a different thing and is
+/// not flattened into "signed out": [SecureSessionStorage] surfaces it as a
 /// `SecureStorageException`, which the caller reports so the user can act on
 /// it (unlock the keyring, sign in again) instead of losing the credential
 /// silently.

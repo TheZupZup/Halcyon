@@ -3,25 +3,39 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../core/repositories/secure_storage_exception.dart';
 
-/// The single door between Linthra and the platform's secure storage.
+/// The one door between Linthra's provider credentials and platform secure
+/// storage.
 ///
-/// Every provider credential store goes through this, so the rules that keep
-/// secrets out of everything except the platform keyring are stated once:
+/// Used by the Jellyfin, Navidrome/Subsonic and Plex session stores, which are
+/// the credential path this class exists to hold to one set of rules. (The
+/// GitHub Sponsors token store calls `flutter_secure_storage` directly and is
+/// separate work; it stores no provider credential.)
 ///
-/// * There is no fallback. If the platform store can't take a value, the
-///   write fails: nothing is written to preferences, the database, a cache,
-///   or a file. A failed read is a failure, not an empty result.
+/// The rules, stated once:
+///
+/// * Linthra has no fallback of its own. If the platform store can't take a
+///   value, the write fails: Linthra writes nothing to preferences, the
+///   database, a cache, a log, or any file of its own, in plaintext or
+///   otherwise. A failed read is a failure, not an empty result.
 /// * A platform failure is translated into a [SecureStorageException] carrying
 ///   only an operation and a cause. The platform's own error text is inspected
 ///   to classify it and then dropped, so nothing derived from a stored value
 ///   can travel further (see [SecureStorageException]).
 /// * Nothing here logs. Not the value, not the key, not the platform message.
 ///
-/// On Linux this is `flutter_secure_storage_linux`, a thin wrapper over
-/// libsecret (the freedesktop Secret Service); on Android it is the
-/// Keystore-backed implementation. The failure kinds below are written for the
-/// Linux stack because that is where a keyring can realistically be missing or
-/// locked; the mapping is harmless on the others.
+/// What the platform then does with the value is the platform's business, and
+/// differs by more than just OS. On Android it is the Keystore-backed store.
+/// On Linux it is `flutter_secure_storage_linux`, a thin wrapper over
+/// libsecret, which picks its own backend: a native build talks to the
+/// freedesktop Secret Service (the desktop keyring), while inside a Flatpak
+/// with the Secret portal available libsecret keeps its own encrypted file
+/// under the app's data directory, with the master secret handed over by the
+/// portal from the host keyring. Both are libsecret-managed and encrypted at
+/// rest; neither is something Linthra writes or can read around.
+///
+/// The failure kinds below are written for the Linux stack because that is
+/// where secure storage can realistically be missing or locked; the mapping is
+/// harmless on the others.
 class SecureSessionStorage {
   const SecureSessionStorage({
     FlutterSecureStorage storage = const FlutterSecureStorage(),
@@ -92,7 +106,9 @@ SecureStorageFailure _classify(String code, String? message) {
   }
 
   // Nothing owns org.freedesktop.secrets on the session bus (no keyring daemon
-  // running), or a sandbox's D-Bus filter is hiding the name from us.
+  // running), or a sandbox's D-Bus filter is hiding the name from us: what a
+  // Flatpak sees on a host that provides neither the Secret portal nor a
+  // reachable Secret Service.
   if (text.contains('serviceunknown') ||
       text.contains('namehasnoowner') ||
       text.contains('was not provided by any .service files') ||

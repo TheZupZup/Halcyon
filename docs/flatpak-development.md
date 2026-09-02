@@ -22,9 +22,10 @@ Three docs, three jobs:
 > working audio, and installs a desktop entry, Linthra's own icon, and AppStream
 > metainfo so the app appears in the application menu and in software centres.
 > It is not the Flathub submission: normal network access is enabled for
-> configured self-hosted servers and provider credentials are kept in the
-> desktop keyring through the Secret Service, but there is no filesystem grant
-> beyond the folders the user picks through the desktop portal.
+> configured self-hosted servers, provider credentials go to platform secure
+> storage through the desktop's Secret portal (no permission needed), and there
+> is no filesystem grant beyond the folders the user picks through the desktop
+> portal.
 > See [What the sandbox allows today](#what-the-sandbox-allows-today).
 
 All commands are relative to the repository. Run them from the repository root
@@ -43,7 +44,7 @@ packages for one expecting them to help the other.
 | Build | `flutter build linux --release` | `flatpak run org.flatpak.Builder …` (below) |
 | Run | `./build/linux/x64/release/bundle/linthra` | `flatpak run io.github.thezupzup.linthra` |
 | App data | `~/.local/share/` and `~/.config/` | `~/.var/app/io.github.thezupzup.linthra/` |
-| Credentials | host Secret Service (encrypted) | same Secret Service, reached with one D-Bus name grant ([Secure credential storage](#secure-credential-storage)) |
+| Credentials | host Secret Service (encrypted) | libsecret's portal-keyed encrypted store, no permission ([Secure credential storage](#secure-credential-storage)) |
 | Automated checks | `./scripts/verify_linux.sh` | manual today — see [Smoke testing](#smoke-testing) |
 
 A libmpv-related failure in one says nothing about the other: the Flatpak
@@ -294,7 +295,7 @@ The committed manifest grants exactly:
 
 ```
 --socket=wayland  --socket=fallback-x11  --share=ipc  --share=network
---device=dri      --socket=pulseaudio    --talk-name=org.freedesktop.secrets
+--device=dri      --socket=pulseaudio
 ```
 
 `--share=network` is the minimum Flatpak capability for Linthra's existing
@@ -304,13 +305,11 @@ valid HTTPS endpoints, and remote/tunnel URLs) but exposes no host files and
 grants no D-Bus API. Discovery (mDNS/SSDP/broadcast) is separate and is not
 enabled by this change.
 
-`--talk-name=org.freedesktop.secrets` is the whole of the manifest's D-Bus
-surface: permission to talk (not own) to the one session-bus name libsecret
-connects to for the Secret Service, and nothing else. It is what makes saved
-Jellyfin/Navidrome/Plex credentials work inside the sandbox on a host whose
-portal has no Secret implementation. See
-[Secure credential storage](#secure-credential-storage) for the full
-reasoning, what is stored, and how to test it.
+There is **no D-Bus permission at all**, credential storage included: secure
+storage reaches the platform keyring through the xdg-desktop-portal Secret
+portal, which every Flatpak may use without a finish-arg. See
+[Secure credential storage](#secure-credential-storage) for why, what is
+stored, and how to test it.
 
 The following are **expected**, not bugs, and not worth debugging:
 
@@ -321,11 +320,13 @@ The following are **expected**, not bugs, and not worth debugging:
   the document portal ([#438](https://github.com/TheZupZup/Linthra/issues/438),
   see [`flatpak/README.md`](../flatpak/README.md#local-music-folders)).
 * Saved sessions come back signed in
-  ([#441](https://github.com/TheZupZup/Linthra/issues/441)), because
-  credentials go to the platform keyring like they do natively. What is *not*
-  a bug: a locked or missing keyring produces a visible storage error and
-  leaves the providers signed out. Linthra never falls back to plaintext, and
-  it never writes a credential to a file. See
+  ([#441](https://github.com/TheZupZup/Linthra/issues/441)), through the
+  Secret portal rather than a D-Bus grant. Two things that are *not* bugs:
+  `secret-tool` on the host does not list Linthra's item (on the portal path
+  it lives in libsecret's own encrypted file, not the host keyring's
+  collection), and a locked or unavailable keyring produces a visible storage
+  error with the providers signed out. Linthra itself never falls back to a
+  file or to plaintext. See
   [Secure credential storage](#secure-credential-storage).
 * Linthra is in the application menu now
   ([#434](https://github.com/TheZupZup/Linthra/issues/434)) with its own icon
@@ -359,31 +360,35 @@ what the manifest actually provides.
 
 ## Secure credential storage
 
-Provider credentials go where they go natively: the platform keyring. The
-manifest's one D-Bus grant is what reaches it from inside the sandbox.
-
-```
---talk-name=org.freedesktop.secrets
-```
+Provider credentials go to platform secure storage, and the sandbox needs **no
+finish-arg** for it.
 
 `flutter_secure_storage_linux` is a thin libsecret wrapper, and libsecret picks
-its backend at runtime: inside a sandbox it prefers its portal-backed encrypted
-file backend when xdg-desktop-portal answers `org.freedesktop.portal.Secret`
-(the usual GNOME case, no finish-arg needed), and otherwise falls back to the
-Secret Service backend, which connects to the session-bus name above. Granting
-that one name is what makes the fallback path work, and it is the narrowest
-grant that does: talk, not own, to one exact well-known name.
+its backend at runtime: inside a sandbox it uses its own encrypted file
+backend, keyed by a master secret from xdg-desktop-portal's
+`org.freedesktop.portal.Secret`, whenever the desktop provides that portal.
+GNOME does (gnome-keyring) and KDE Plasma 6 does (KWallet's `ksecretd`), so on
+both the credential path is a portal every Flatpak may use, and
+`--talk-name=org.freedesktop.secrets` is not shipped.
 [`flatpak/README.md`](../flatpak/README.md#secure-credential-storage) has the
-full derivation, the table of what each provider stores, and why no wider D-Bus
-or filesystem permission was added.
+full derivation, the source references, the table of what each provider
+stores, and the user-side override for hosts with no Secret portal backend.
 
-Three things are worth knowing while debugging:
+Four things worth knowing while debugging:
 
-* **Nothing is stored in the clear, ever.** One class,
-  `SecureSessionStorage`, is the app's only caller of `flutter_secure_storage`,
-  and it has no fallback: a failed write stores nothing anywhere else, and a
-  failed read is an error rather than a silent "not signed in".
-* **Keyring failures are visible.** Missing, locked and denied are surfaced as
+* **Where the bytes are.** On the portal path they are in libsecret's
+  gcrypt-encrypted
+  `~/.var/app/io.github.thezupzup.linthra/data/keyrings/default.keyring`, not
+  in the host keyring's own collection, so `secret-tool` on the host will not
+  list them. That file is ciphertext libsecret writes and reads; Linthra never
+  opens it.
+* **Linthra has no fallback.** `SecureSessionStorage` is the single wrapper the
+  Jellyfin, Navidrome/Subsonic and Plex session stores use, and it has no
+  alternative path: a failed write stores nothing in preferences, SQLite, the
+  cache or any file, and a failed read is an error rather than a silent "not
+  signed in". (The GitHub Sponsors token store calls `flutter_secure_storage`
+  directly; it holds no provider credential and is outside #441.)
+* **Storage failures are visible.** Missing, locked and denied surface as
   recoverable sign-in/storage errors on the provider's settings card. The
   message never carries a token, a password, or the platform's own error text.
 * **Never print a secret while debugging this.** `secret-tool search` shows
@@ -393,61 +398,61 @@ Three things are worth knowing while debugging:
 ### Manual test: save, read, restart, delete
 
 1. Launch, then sign in to Jellyfin, Navidrome/Subsonic and Plex.
-2. Confirm where it landed. On a host using the Secret Service backend (no
-   Secret portal, e.g. a KDE session) the plugin's item is labelled
-   `io.github.thezupzup.linthra/FlutterSecureStorage` with the attribute
-   `account=io.github.thezupzup.linthra.secureStorage`:
+2. Confirm where it landed. On a GNOME or Plasma 6 host (Secret portal
+   present):
+
+   ```bash
+   ls -l ~/.var/app/io.github.thezupzup.linthra/data/keyrings/
+   ```
+
+   `default.keyring` exists and is ciphertext. On a host using the Secret
+   Service backend instead, the item shows up in the host keyring:
 
    ```bash
    secret-tool search account io.github.thezupzup.linthra.secureStorage
    ```
 
-   It shows in Seahorse ("Passwords and Keys") or KWalletManager too. On a host
-   using the portal file backend (the usual GNOME case) `secret-tool search`
-   finds nothing and the item is in the app's own encrypted
-   `~/.var/app/io.github.thezupzup.linthra/data/keyrings/default.keyring`
-   instead. Both are correct; see
-   [`flatpak/README.md`](../flatpak/README.md#secure-credential-storage).
+   Either result is correct; which one you get tells you which backend
+   libsecret chose.
 3. Quit and relaunch (`flatpak run io.github.thezupzup.linthra`). All three
    providers come back signed in with no re-entry, and a track streams.
-4. Sign out of each. The cards return to signed-out and the keyring item is
-   gone from `secret-tool search` and from Seahorse/KWalletManager.
-5. Nothing in the clear:
+4. Sign out of each. The cards return to signed-out and the stored entry is
+   gone.
+5. Nothing readable anywhere in app data:
 
    ```bash
    grep -rIl "your-test-token" ~/.var/app/io.github.thezupzup.linthra/ || \
-     echo "no plaintext credential"
+     echo "no readable credential anywhere in app data"
    ```
 
-   The file backend's `data/keyrings/default.keyring`, on hosts where that is
-   the path in use, is ciphertext and does not match.
+### Manual test: locked or unavailable secure storage
 
-### Manual test: locked or unavailable service
-
-1. **Locked.** Lock the keyring on the host and sign in:
+1. **Locked.** Lock the host keyring and sign in:
 
    ```bash
    secret-tool lock --collection='login'   # GNOME/gnome-keyring
    ```
 
-   KDE: close the wallet in KWalletManager. Expect a visible "Couldn't save
+   KDE: close the wallet in KWalletManager. The portal cannot hand over the
+   master secret against a locked keyring, so expect a visible "Couldn't save
    your … sign-in on this device. Unlock your keyring and try again.", the app
    still usable, and no crash. Unlock, retry, and the sign-in completes.
-2. **Unavailable.** Withhold the grant for one launch:
+2. **Unavailable.** Use a session with neither a Secret portal backend nor a
+   reachable Secret Service (a bare window manager with no keyring daemon).
+   Saved sessions report a restore error, a new sign-in reports the storage
+   failure, nothing is written anywhere else, local music keeps working, and
+   returning to a normal session recovers with credentials intact.
+3. **The Secret Service fallback**, if you want to exercise it on such a host:
+   grant the name for your own install only, then sign in again.
 
    ```bash
-   flatpak run --no-talk-name=org.freedesktop.secrets io.github.thezupzup.linthra
+   flatpak override --user --talk-name=org.freedesktop.secrets \
+     io.github.thezupzup.linthra
+   flatpak override --user --reset io.github.thezupzup.linthra   # undo
    ```
 
-   On a host using the Secret Service backend: saved sessions report a restore
-   error, a new sign-in reports the storage failure, nothing is written
-   anywhere else, and a normal relaunch recovers with credentials intact. On a
-   host whose portal provides the Secret implementation, libsecret uses the
-   portal-backed file backend and this launch behaves normally. That difference
-   between GNOME and KDE-style hosts is expected, not a failure.
-3. **No keyring at all.** In a bare session with no Secret Service and no
-   portal Secret implementation, expect the same recoverable errors as (2),
-   with the app fully usable for local music.
+   This is a user-side choice, not something the manifest ships, so remember to
+   reset it before testing anything else about the packaged permissions.
 
 ## Smoke testing
 
@@ -508,6 +513,8 @@ Until #445/#446 land, the manual pass for a packaging change is:
    keyring item, and a locked keyring produces a visible error rather than a
    crash or a silent loss.
 8. `flatpak info --show-permissions io.github.thezupzup.linthra` → shows
-   `shared=network;ipc;`, no `filesystems=` line, and a `[Session Bus Policy]`
-   section whose only entry is `org.freedesktop.secrets=talk`, i.e. still just
-   the seven finish-args listed above and no sandbox widened by accident.
+   `shared=network;ipc;`, no `filesystems=` line and no `[Session Bus Policy]`
+   section, i.e. still just the six finish-args listed above and no sandbox
+   widened by accident. `flatpak override --user --show` should be empty too:
+   a leftover Secret Service override from the fallback test would mask what
+   the manifest actually provides.

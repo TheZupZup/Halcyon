@@ -161,21 +161,27 @@ Three runtime facts worth knowing:
   desktop session the login keyring is unlocked at login and nothing is asked
   of you. On a bare window manager with no keyring daemon, or with the keyring
   locked, reads and writes fail.
-* A failure is reported, not swallowed. All three stores go through one class,
-  `SecureSessionStorage` (`lib/data/repositories/secure_session_storage.dart`),
-  which turns a platform failure into a typed `SecureStorageException`
-  (unavailable, locked, denied, unknown) carrying nothing from the platform
-  error, so a token cannot reach a log or a diagnostics report through it. The
-  provider settings cards turn that into a recoverable message ("Couldn't save
-  your Jellyfin sign-in on this device. Unlock your keyring and try again."),
-  the app stays usable, and a session that could not be saved is not adopted:
-  it would look signed in until the next launch and then be gone.
-* Credential storage was not weakened to make Linux work, and there is no
+* A failure is reported, not swallowed. The three provider stores go through
+  one wrapper, `SecureSessionStorage`
+  (`lib/data/repositories/secure_session_storage.dart`), which turns a platform
+  failure into a typed `SecureStorageException` (unavailable, locked, denied,
+  unknown) carrying nothing from the platform error, so a token cannot reach a
+  log or a diagnostics report through it. The provider settings cards turn that
+  into a recoverable message ("Couldn't save your Jellyfin sign-in on this
+  device. Unlock your keyring and try again."), the app stays usable, and a
+  session that could not be saved is not adopted: it would look signed in until
+  the next launch and then be gone.
+* Credential storage was not weakened to make Linux work, and Linthra has no
   plaintext fallback on any platform. A failed write stores nothing in
-  preferences, the database, the cache, or a file.
+  preferences, the database, the cache, or any file Linthra writes.
 
-The Flatpak reaches the same Secret Service with a single D-Bus grant,
-`--talk-name=org.freedesktop.secrets`; see
+In the **Flatpak** the same plugin reaches secure storage differently, and
+without any D-Bus permission: libsecret detects the sandbox and, when the
+desktop provides the xdg-desktop-portal Secret portal (GNOME via gnome-keyring,
+KDE Plasma 6 via KWallet's `ksecretd`), keeps its own gcrypt-encrypted store
+under the app's data directory with the master secret handed over by that
+portal. Encrypted at rest either way, and libsecret's storage in both cases,
+just not the shared keyring collection this page's native build uses. See
 [flatpak-development.md](./flatpak-development.md#secure-credential-storage).
 
 ## Audio playback
@@ -384,9 +390,10 @@ launches with working audio, and installs the desktop entry
 native package rather than Flatpak-only) together with Linthra's scalable icon
 under `share/icons/hicolor/scalable/apps/io.github.thezupzup.linthra.svg` and
 AppStream metainfo under
-`linux/packaging/io.github.thezupzup.linthra.metainfo.xml`; networking and
-Secret Service access are granted with one narrow permission each, and the
-remaining filesystem-permission audit is still an open sub-issue.
+`linux/packaging/io.github.thezupzup.linthra.metainfo.xml`; networking is
+granted with one narrow permission, secure storage needs none (it goes through
+the desktop's Secret portal), and the remaining filesystem-permission audit is
+still an open sub-issue.
 None of it changes the native build on this page.
 
 Decisions already taken with that destination in mind:

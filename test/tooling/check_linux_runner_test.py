@@ -189,7 +189,6 @@ finish-args:
   - --device=dri
   - --socket=pulseaudio
   - --share=network
-  - --talk-name=org.freedesktop.secrets
 modules:
   - name: {binary}
     buildsystem: simple
@@ -567,34 +566,26 @@ class FlatpakPermissionTest(CheckoutCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("--talk-name=org.example.Service", problems[0])
 
-    def test_generated_manifest_without_secret_service_is_caught(self) -> None:
-        # The permission #441 actually needs: libsecret's Secret Service
-        # backend talks to this one session-bus name, and without it every
-        # credential read and write fails inside the sandbox.
+    def test_the_secret_service_permission_is_not_granted(self) -> None:
+        # #441 is served by the xdg-desktop-portal Secret portal, which needs
+        # no finish-arg, so the direct Secret Service name is not shipped. If
+        # someone adds it back, this list says so rather than absorbing it.
+        self.assertNotIn(
+            "--talk-name=org.freedesktop.secrets",
+            checker.EXPECTED_FLATPAK_FINISH_ARGS,
+        )
         build_checkout(
             self.root,
             flatpak_manifest=FLATPAK_MANIFEST.format(
                 app_id=APP_ID, binary=BINARY
-            ).replace("  - --talk-name=org.freedesktop.secrets\n", ""),
+            ).replace(
+                "  - --share=network\n",
+                "  - --share=network\n  - --talk-name=org.freedesktop.secrets\n",
+            ),
         )
         problems = checker.check(self.root)
         self.assertEqual(len(problems), 1)
-        self.assertIn(f"flatpak/{APP_ID}.yml", problems[0])
-        self.assertIn("--talk-name=org.freedesktop.secrets", problems[0])
-
-    def test_secret_service_dropped_from_the_template_is_caught(self) -> None:
-        # The other half of the same drift: the template is the authoritative
-        # input, so losing the grant there is a real regression even while the
-        # generated manifest still carries it.
-        manifest = FLATPAK_MANIFEST.format(app_id=APP_ID, binary=BINARY)
-        build_checkout(self.root, flatpak_manifest=manifest)
-        (self.root / "flatpak" / "flatpak-flutter.yml").write_text(
-            manifest.replace("  - --talk-name=org.freedesktop.secrets\n", ""),
-            encoding="utf-8",
-        )
-        problems = checker.check(self.root)
-        self.assertEqual(len(problems), 1)
-        self.assertIn("flatpak/flatpak-flutter.yml", problems[0])
+        self.assertIn("unrelated permission", problems[0])
         self.assertIn("--talk-name=org.freedesktop.secrets", problems[0])
 
     def test_broader_secret_service_permissions_are_caught(self) -> None:
@@ -619,9 +610,8 @@ class FlatpakPermissionTest(CheckoutCase):
                     flatpak_manifest=FLATPAK_MANIFEST.format(
                         app_id=APP_ID, binary=BINARY
                     ).replace(
-                        "  - --talk-name=org.freedesktop.secrets\n",
-                        "  - --talk-name=org.freedesktop.secrets\n"
-                        f"  - {permission}\n",
+                        "  - --share=network\n",
+                        f"  - --share=network\n  - {permission}\n",
                     ),
                 )
                 problems = checker.check(root)
@@ -657,21 +647,26 @@ class FlatpakPermissionTest(CheckoutCase):
                 self.assertIn("unrelated permission", problems[0])
                 self.assertIn(permission, problems[0])
 
-    def test_network_permission_is_unchanged_by_the_keyring_grant(self) -> None:
-        # #543's grant and #441's are independent: the checker holds both, so
-        # neither can be traded for the other.
+    def test_the_approved_surface_carries_no_dbus_grant(self) -> None:
+        # #543's network grant stands; #441 adds nothing beside it. The
+        # approved surface has no D-Bus entry of any shape.
         self.assertIn("--share=network", checker.EXPECTED_FLATPAK_FINISH_ARGS)
-        self.assertIn(
-            "--talk-name=org.freedesktop.secrets",
-            checker.EXPECTED_FLATPAK_FINISH_ARGS,
-        )
         self.assertEqual(
-            {
+            [
                 permission
-                for permission in checker.EXPECTED_FLATPAK_FINISH_ARGS
-                if permission.startswith(("--talk-name", "--system-talk-name"))
-            },
-            {"--talk-name=org.freedesktop.secrets"},
+                for permission in sorted(checker.EXPECTED_FLATPAK_FINISH_ARGS)
+                if permission.startswith(
+                    (
+                        "--talk-name",
+                        "--system-talk-name",
+                        "--own-name",
+                        "--system-own-name",
+                        "--socket=session-bus",
+                        "--socket=system-bus",
+                    )
+                )
+            ],
+            [],
         )
 
     def test_allowed_permission_with_inline_comment_is_recognised(self) -> None:
