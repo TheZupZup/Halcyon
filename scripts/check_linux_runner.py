@@ -382,16 +382,26 @@ def flatpak_permission_problems(root: Path) -> list[str]:
     manifests = (FLATPAK_TEMPLATE, FLATPAK_DIR / f"{app_id}.yml")
 
     for manifest in manifests:
-        text = _read(root, manifest)
-        match = re.search(r"(?m)^finish-args:\s*\n((?:[ \t]+.*\n)*)", text)
-        actual = (
-            {
-                item.group(1)
-                for item in re.finditer(r"(?m)^\s+-\s+(--\S+)\s*$", match.group(1))
-            }
-            if match is not None
-            else set()
-        )
+        actual: set[str] = set()
+        in_finish_args = False
+        for line in _read(root, manifest).splitlines():
+            if not in_finish_args:
+                in_finish_args = (
+                    re.fullmatch(r"finish-args\s*:\s*(?:#.*)?", line) is not None
+                )
+                continue
+
+            # Blank lines and comments are harmless within a YAML block. The
+            # next unindented mapping key ends finish-args.
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if not line[0].isspace():
+                break
+
+            item = re.fullmatch(r"\s+-\s+(--[^\s#]+)(?:\s+#.*)?\s*", line)
+            if item is not None:
+                actual.add(item.group(1))
+
         missing = EXPECTED_FLATPAK_FINISH_ARGS - actual
         unexpected = actual - EXPECTED_FLATPAK_FINISH_ARGS
         if missing:

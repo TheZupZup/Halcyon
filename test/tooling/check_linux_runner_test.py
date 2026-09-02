@@ -545,10 +545,10 @@ class FlatpakPermissionTest(CheckoutCase):
         self.assertIn(f"flatpak/{APP_ID}.yml", problems[0])
         self.assertIn("--share=network", problems[0])
 
-    def test_unrelated_filesystem_permission_is_caught(self) -> None:
+    def test_unrelated_commented_filesystem_permission_is_caught(self) -> None:
         manifest = FLATPAK_MANIFEST.format(app_id=APP_ID, binary=BINARY).replace(
             "  - --share=network\n",
-            "  - --share=network\n  - --filesystem=host\n",
+            "  - --share=network\n  - --filesystem=host # comment\n",
         )
         build_checkout(self.root, flatpak_manifest=manifest)
         problems = checker.check(self.root)
@@ -556,15 +556,23 @@ class FlatpakPermissionTest(CheckoutCase):
         self.assertIn("unrelated permission", problems[0])
         self.assertIn("--filesystem=host", problems[0])
 
-    def test_unrelated_dbus_permission_is_caught(self) -> None:
+    def test_unrelated_commented_dbus_permission_is_caught(self) -> None:
         manifest = FLATPAK_MANIFEST.format(app_id=APP_ID, binary=BINARY).replace(
             "  - --share=network\n",
-            "  - --share=network\n  - --talk-name=org.example.Service\n",
+            "  - --share=network\n  - --talk-name=org.example.Service # comment\n",
         )
         build_checkout(self.root, flatpak_manifest=manifest)
         problems = checker.check(self.root)
         self.assertEqual(len(problems), 1)
         self.assertIn("--talk-name=org.example.Service", problems[0])
+
+    def test_allowed_permission_with_inline_comment_is_recognised(self) -> None:
+        manifest = FLATPAK_MANIFEST.format(app_id=APP_ID, binary=BINARY).replace(
+            "  - --share=network\n",
+            "  - --share=network # configured providers\n",
+        )
+        build_checkout(self.root, flatpak_manifest=manifest)
+        self.assertEqual(checker.check(self.root), [])
 
 
 class IconInstallTest(CheckoutCase):
