@@ -96,6 +96,19 @@ PACKAGING_DIR = Path("linux") / "packaging"
 FLATPAK_DIR = Path("flatpak")
 FLATPAK_TEMPLATE = FLATPAK_DIR / "flatpak-flutter.yml"
 
+# The complete sandbox surface approved for the current Flatpak. Keeping an
+# exact allow-list (rather than checking only for --share=network) makes this a
+# regression guard against solving provider access with a filesystem or D-Bus
+# grant. Both the authoritative template and generated manifest are checked.
+EXPECTED_FLATPAK_FINISH_ARGS = {
+    "--socket=wayland",
+    "--socket=fallback-x11",
+    "--share=ipc",
+    "--device=dri",
+    "--socket=pulseaudio",
+    "--share=network",
+}
+
 # Where a Flatpak's desktop entry has to land: flatpak-builder exports what it
 # finds in this directory at `finish` time and nothing from anywhere else.
 DESKTOP_ENTRY_INSTALL_DIR = "/app/share/applications"
@@ -362,6 +375,37 @@ def desktop_entry_install_problems(root: Path) -> list[str]:
     return problems
 
 
+def flatpak_permission_problems(root: Path) -> list[str]:
+    """Missing, unexpected, or unsynchronised Flatpak finish arguments."""
+    problems: list[str] = []
+    app_id = android_application_id(root)
+    manifests = (FLATPAK_TEMPLATE, FLATPAK_DIR / f"{app_id}.yml")
+
+    for manifest in manifests:
+        text = _read(root, manifest)
+        match = re.search(r"(?m)^finish-args:\s*\n((?:[ \t]+.*\n)*)", text)
+        actual = (
+            {
+                item.group(1)
+                for item in re.finditer(r"(?m)^\s+-\s+(--\S+)\s*$", match.group(1))
+            }
+            if match is not None
+            else set()
+        )
+        missing = EXPECTED_FLATPAK_FINISH_ARGS - actual
+        unexpected = actual - EXPECTED_FLATPAK_FINISH_ARGS
+        if missing:
+            problems.append(
+                f"{manifest} finish-args missing {', '.join(sorted(missing))}"
+            )
+        if unexpected:
+            problems.append(
+                f"{manifest} finish-args contain unrelated permission(s): "
+                f"{', '.join(sorted(unexpected))}"
+            )
+    return problems
+
+
 def icon_install_problems(root: Path) -> list[str]:
     """Disagreements between the desktop entry's `Icon=` and the installed icon.
 
@@ -560,6 +604,7 @@ def check(root: Path) -> list[str]:
     # runner that drifts is reported once rather than twice.
     problems.extend(desktop_entry_problems(root))
     problems.extend(desktop_entry_install_problems(root))
+    problems.extend(flatpak_permission_problems(root))
 
     # The application icon (#436): `Icon=` above is only a name, so this is
     # what connects it to a file the built Flatpak actually contains.

@@ -19,6 +19,7 @@ finish-args:
   - --share=ipc
   - --device=dri
   - --socket=pulseaudio
+  - --share=network
 modules:
   - name: ffmpeg
     cleanup:
