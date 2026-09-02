@@ -9,6 +9,7 @@ import 'package:linthra/core/models/plex_session.dart';
 import 'package:linthra/core/models/track.dart';
 import 'package:linthra/core/repositories/music_library_repository.dart';
 import 'package:linthra/core/repositories/plex_session_store.dart';
+import 'package:linthra/core/repositories/secure_storage_exception.dart';
 import 'package:linthra/core/services/external_link_launcher.dart';
 import 'package:linthra/core/services/remote_cache/remote_cache_index.dart';
 import 'package:linthra/core/services/remote_cache/remote_cache_record.dart';
@@ -598,6 +599,31 @@ void main() {
       expect(state.phase, PlexConnectionPhase.disconnected);
       expect(state.errorMessage, contains("Couldn't save your Plex session"));
       expect(container.read(plexMusicSourceProvider), isNull);
+    });
+
+    test('a keyring failure is reported with what to do about it', () async {
+      // The Plex card already refuses to adopt a session it could not save;
+      // what a locked keyring adds is a cause the user can act on, taken from
+      // the typed failure SecureSessionStorage raises (and carrying nothing
+      // from the platform error, let alone the token).
+      final container = _container(
+        store: _FlakyPlexSessionStore(
+          writeError: const SecureStorageException(
+            operation: SecureStorageOperation.write,
+            failure: SecureStorageFailure.locked,
+          ),
+        ),
+      );
+      final notifier = container.read(plexSettingsControllerProvider.notifier);
+      await _settle();
+
+      final ok = await notifier.connect(url: 'plex.example.com', token: _token);
+
+      expect(ok, isFalse);
+      final state = container.read(plexSettingsControllerProvider);
+      expect(state.errorMessage, contains("Couldn't save your Plex session"));
+      expect(state.errorMessage, contains('Unlock your keyring'));
+      expect(state.errorMessage, isNot(contains(_token)));
     });
 
     test('a section-listing failure keeps the connection and is retryable',

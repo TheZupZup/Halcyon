@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/app_info.dart';
 import '../../../core/models/jellyfin_session.dart';
 import '../../../core/models/playlist.dart';
+import '../../../core/repositories/secure_storage_exception.dart';
 import '../../../core/services/remote_cache/remote_cache_key.dart';
 import '../../../core/sources/jellyfin/jellyfin_api.dart';
 import '../../../core/sources/jellyfin/jellyfin_diagnostics.dart';
@@ -64,9 +65,26 @@ class JellyfinSettingsController extends Notifier<JellyfinSettingsState> {
     final JellyfinSession? saved;
     try {
       saved = await ref.read(jellyfinSessionStoreProvider).read();
-    } catch (_) {
-      // A storage hiccup must not break startup or playback; stay disconnected
-      // and let the user reconnect in Settings. No secret is involved here.
+    } catch (error) {
+      // A keyring that is missing, locked or denied must not break startup or
+      // playback: stay disconnected, but say so (statically, token-free) so a
+      // user who *was* signed in isn't left wondering where their server went.
+      // A missing or corrupt record already reads back as null inside the
+      // store and stays silent. Nothing is retried and nothing is written
+      // anywhere else.
+      //
+      // Only when nothing has taken over the card in the meantime: a locked
+      // keyring can block this read behind an unlock prompt for as long as the
+      // user leaves it there, and a sign-in that already started (or finished)
+      // in that time owns the state now.
+      if (_session == null &&
+          state.phase == JellyfinConnectionPhase.disconnected &&
+          state.errorMessage == null) {
+        state = JellyfinSettingsState(
+          errorMessage: "Couldn't restore your saved Jellyfin sign-in from "
+              'this device. ${_storageRemedy(error)}',
+        );
+      }
       return;
     }
     if (saved == null) {
@@ -141,7 +159,21 @@ class JellyfinSettingsController extends Notifier<JellyfinSettingsState> {
                 password: password,
                 serverInfo: _knownServerInfo(),
               );
-      await ref.read(jellyfinSessionStoreProvider).write(newSession);
+      try {
+        await ref.read(jellyfinSessionStoreProvider).write(newSession);
+      } catch (error) {
+        // The new session couldn't reach the keyring. Adopting it anyway would
+        // look signed in until the next launch and then silently be gone, so
+        // don't: report it and let the user fix the keyring and retry. The
+        // token is dropped here rather than kept anywhere else.
+        _setFailure(
+          "Couldn't save your Jellyfin sign-in on this device. "
+          '${_storageRemedy(error)}',
+          url: url,
+          username: username,
+        );
+        return false;
+      }
       _session = newSession;
       // The just-signed-in server becomes the active/default provider for
       // picking among duplicate sources, so a song that also lives on another
@@ -185,7 +217,18 @@ class JellyfinSettingsController extends Notifier<JellyfinSettingsState> {
   /// favourites and local-only playlists are kept), and the now-stale
   /// "Synced N tracks" status is reset.
   Future<void> clear() async {
-    await ref.read(jellyfinSessionStoreProvider).clear();
+    try {
+      await ref.read(jellyfinSessionStoreProvider).clear();
+    } catch (error) {
+      // The token would stay in the keyring; report it rather than pretending
+      // the sign-out happened. Nothing else is torn down, so a retry after
+      // unlocking the keyring completes the same sign-out.
+      _setFailure(
+        "Couldn't remove your Jellyfin sign-in from this device. "
+        '${_storageRemedy(error)}',
+      );
+      return;
+    }
     _session = null;
     try {
       // Scope the drop to Jellyfin so a still-connected Subsonic/Navidrome
@@ -215,6 +258,12 @@ class JellyfinSettingsController extends Notifier<JellyfinSettingsState> {
         .read(remoteCacheIndexProvider)
         .removeSource(RemoteCacheKey.sourceIdJellyfin);
   }
+
+  /// The user-facing tail for a secure-storage failure: what went wrong with
+  /// the keyring and what to do about it. Never carries any part of the value
+  /// that was being read or written (see [SecureStorageException]).
+  String _storageRemedy(Object error) =>
+      error is SecureStorageException ? error.remedy : 'Try again.';
 
   /// Reports an error without dropping an existing connection: a failed test or
   /// re-auth keeps any session that's still valid, it just surfaces the message

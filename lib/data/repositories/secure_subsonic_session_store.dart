@@ -1,26 +1,34 @@
 import 'dart:convert';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-
 import '../../core/models/subsonic_session.dart';
 import '../../core/repositories/subsonic_session_store.dart';
+import 'secure_session_storage.dart';
 
 /// A [SubsonicSessionStore] backed by `flutter_secure_storage`.
 ///
-/// The session is serialized to JSON and written to platform-encrypted storage
-/// (Android Keystore-backed) under a single key, so the credential (salt +
-/// token) is never at rest in plaintext (unlike `shared_preferences`). This is
-/// the production binding; it's intentionally never touched by tests, which use
-/// the in-memory store so they stay free of platform channels.
+/// The session is serialized to JSON and written to platform secure storage
+/// under a single key: the Android Keystore-backed store on Android, and the
+/// freedesktop Secret Service (libsecret) on Linux, i.e. the desktop keyring
+/// the user's other apps already use. The credential (salt + token) is never
+/// at rest in plaintext (unlike `shared_preferences`) on either platform, and
+/// there is no file
+/// fallback when the platform store is unavailable. This is the production
+/// binding; it's intentionally never touched by tests, which use the in-memory
+/// store so they stay free of platform channels.
 ///
 /// A malformed/partial record reads back as `null` (treated as "signed out")
-/// rather than throwing, so a storage glitch can't wedge the app at launch.
+/// rather than throwing, so a storage glitch can't wedge the app at launch. A
+/// keyring that is missing, locked or denied is a different thing and is not
+/// flattened into "signed out": [SecureSessionStorage] surfaces it as a
+/// `SecureStorageException`, which the caller reports so the user can act on
+/// it (unlock the keyring, sign in again) instead of losing the credential
+/// silently.
 class SecureSubsonicSessionStore implements SubsonicSessionStore {
   const SecureSubsonicSessionStore({
-    FlutterSecureStorage storage = const FlutterSecureStorage(),
+    SecureSessionStorage storage = const SecureSessionStorage(),
   }) : _storage = storage;
 
-  final FlutterSecureStorage _storage;
+  final SecureSessionStorage _storage;
 
   static const String _key = 'subsonic_session_v1';
 

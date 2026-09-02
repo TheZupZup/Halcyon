@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/external_link_launcher_provider.dart';
 import '../../../core/models/plex_session.dart';
+import '../../../core/repositories/secure_storage_exception.dart';
 import '../../../core/services/remote_cache/remote_cache_key.dart';
 import '../../../core/sources/music_provider.dart';
 import '../../../core/sources/plex/plex_api.dart';
@@ -120,18 +121,20 @@ class PlexSettingsController extends Notifier<PlexSettingsState> {
     final PlexSession? saved;
     try {
       saved = await ref.read(plexSessionStoreProvider).read();
-    } catch (_) {
-      // A storage hiccup must not break startup; stay disconnected but say
-      // so (statically, token-free), so a user who *was* connected isn't left
-      // wondering where their server went. (A missing/corrupt record already
-      // reads back as null inside the store and stays silent.) But if a
-      // "Connect with Plex" flow has since taken over the card, leave it
-      // alone — replacing it with a disconnected restore error would strip
-      // the user's Cancel/reopen controls while the poll keeps running.
+    } catch (error) {
+      // A keyring that is missing, locked or denied must not break startup;
+      // stay disconnected but say so (statically, token-free), so a user who
+      // *was* connected isn't left wondering where their server went. (A
+      // missing/corrupt record already reads back as null inside the store and
+      // stays silent.) But if a "Connect with Plex" flow has since taken over
+      // the card, leave it alone: replacing it with a disconnected restore
+      // error would strip the user's Cancel/reopen controls while the poll
+      // keeps running.
       if (!_restoreSuperseded && _session == null && !_linkFlowOwnsCard) {
-        state = const PlexSettingsState(
+        state = PlexSettingsState(
           errorMessage: "Couldn't restore your saved Plex connection from "
-              'this device. If you use Plex, connect again below.',
+              'this device. ${_storageRemedy(error)} If you use Plex, connect '
+              'again below.',
         );
       }
       return;
@@ -556,7 +559,7 @@ class PlexSettingsController extends Notifier<PlexSettingsState> {
     );
     try {
       await ref.read(plexSessionStoreProvider).write(stamped);
-    } catch (_) {
+    } catch (error) {
       // The new connection couldn't be persisted; without that it would
       // silently vanish on restart, so don't adopt it. The sign-in flow's
       // in-memory tokens are released here. A previous session, if any, is
@@ -566,8 +569,9 @@ class PlexSettingsController extends Notifier<PlexSettingsState> {
       // keeps serving it ([_setFailure] rebuilds from the live [_session], or
       // shows a plain signed-out error when there is none).
       _resetLinkFlow();
-      _setFailure(const PlexException(
-        "Couldn't save your Plex session on this device. Try again.",
+      _setFailure(PlexException(
+        "Couldn't save your Plex session on this device. "
+        '${_storageRemedy(error)}',
       ));
       return false;
     }
@@ -796,11 +800,12 @@ class PlexSettingsController extends Notifier<PlexSettingsState> {
     final PlexSession updated = current.copyWith(selectedSectionKeys: keys);
     try {
       await ref.read(plexSessionStoreProvider).write(updated);
-    } catch (_) {
+    } catch (error) {
       // Keep state and store consistent: don't apply a selection that won't
       // survive a restart.
       state = state.copyWith(
-        errorMessage: "Couldn't save your library selection. Try again.",
+        errorMessage:
+            "Couldn't save your library selection. ${_storageRemedy(error)}",
         errorKind: null,
       );
       return;
@@ -828,11 +833,11 @@ class PlexSettingsController extends Notifier<PlexSettingsState> {
     _resetLinkFlow();
     try {
       await ref.read(plexSessionStoreProvider).clear();
-    } catch (_) {
-      // The token would stay at rest; report it rather than pretending.
+    } catch (error) {
+      // The token would stay in the keyring; report it rather than pretending.
       state = state.copyWith(
-        errorMessage:
-            "Couldn't remove your Plex session from this device. Try again.",
+        errorMessage: "Couldn't remove your Plex session from this device. "
+            '${_storageRemedy(error)}',
         errorKind: null,
       );
       return;
@@ -890,6 +895,12 @@ class PlexSettingsController extends Notifier<PlexSettingsState> {
       // Best-effort: stale rows are replaced by the next successful sync.
     }
   }
+
+  /// The user-facing tail for a secure-storage failure: what went wrong with
+  /// the keyring and what to do about it. Never carries any part of the value
+  /// that was being read or written (see [SecureStorageException]).
+  String _storageRemedy(Object error) =>
+      error is SecureStorageException ? error.remedy : 'Try again.';
 
   /// Reports a failure without dropping an existing connection: a failed test
   /// or re-connect attempt keeps any session that's still valid — the

@@ -7,7 +7,8 @@ audible local and remote playback through a fully self-contained audio
 runtime, with Linthra's own icon on the launcher entry and AppStream metainfo
 for a software-centre listing, and let the user point Linthra at a music
 folder through the desktop portal without granting any host filesystem
-access. It is deliberately not the Flathub submission —
+access, and keep provider credentials in the desktop keyring through the
+Secret Service. It is deliberately not the Flathub submission:
 some sandbox permissions are still deferred; see "What's deferred" below and
 the comments in `io.github.thezupzup.linthra.yml` itself.
 
@@ -175,11 +176,13 @@ user-configured Jellyfin, Navidrome/Subsonic, or Plex server. It covers ordinary
 IPv4/IPv6 sockets: direct LAN addresses, DNS hostnames, HTTPS, and remote or
 tunnel endpoints all behave as normal network destinations.
 
-This grant does **not** expose arbitrary host files and adds no D-Bus access.
-There is still no `--filesystem=host`, `--filesystem=home`, broad D-Bus grant,
-or Secret Service permission. It also does not add mDNS, SSDP, or broadcast
-discovery behavior: issue #440 covers endpoints the user configured directly;
-provider discovery remains separate.
+This grant does **not** expose arbitrary host files and adds no D-Bus access
+of its own. There is still no `--filesystem=host`, `--filesystem=home`, or
+broad D-Bus grant; the manifest's only D-Bus entry is the single Secret Service
+name covered in [Secure credential storage](#secure-credential-storage), which
+networking neither needs nor affects. It also does not add mDNS, SSDP, or
+broadcast discovery behavior: issue #440 covers endpoints the user configured
+directly; provider discovery remains separate.
 
 After building and installing the Flatpak, validate a LAN endpoint by entering
 its direct address (for example `http://192.168.1.20:8096`) in the matching
@@ -207,9 +210,157 @@ flatpak info --show-permissions io.github.thezupzup.linthra
 flatpak override --user --show io.github.thezupzup.linthra
 ```
 
-The first command should show `shared=network;ipc;` (alongside the existing
-windowing, GPU, and audio grants), and no filesystem or D-Bus permission. The
-second reveals persistent local overrides that could invalidate the test.
+The first command prints the installed metadata: `shared=network;ipc;`
+(alongside the existing windowing, GPU, and audio grants), no `filesystems=`
+line at all, and a `[Session Bus Policy]` section whose only entry is
+`org.freedesktop.secrets=talk`. The second reveals persistent local overrides
+that could invalidate the test.
+
+## Secure credential storage
+
+The committed manifest grants exactly one D-Bus permission for credentials
+(#441):
+
+```
+--talk-name=org.freedesktop.secrets
+```
+
+**Why that name, and why only that one.** `flutter_secure_storage`'s Linux
+implementation (`flutter_secure_storage_linux` 1.2.3) has no store of its own:
+it calls libsecret's `secret_password_storev_sync` / `secret_password_lookupv_sync`
+and nothing else. libsecret decides at runtime how to satisfy those calls
+(`secret-backend.c`, `backend_get_impl_type`):
+
+* Inside a sandbox (`/.flatpak-info` present) it first asks
+  xdg-desktop-portal for `org.freedesktop.portal.Secret` version 1. If that
+  answers, libsecret uses its **file backend**: a gcrypt-encrypted file under
+  the app's own data directory whose master key comes from the portal, which in
+  turn gets it from the host's keyring. Every Flatpak may talk to the portal,
+  so that path needs no finish-arg. This is the usual case on GNOME, where
+  gnome-keyring provides the portal implementation.
+* If the portal has no Secret implementation (or reports a different version),
+  libsecret falls back to its **Secret Service backend** and connects to the
+  session-bus name `org.freedesktop.secrets` (`SECRET_SERVICE_BUS_NAME` in
+  libsecret's own headers). A Flatpak's D-Bus proxy hides names the manifest
+  does not grant, so without this line every credential read and write inside
+  the sandbox fails on such a host. KDE/kwallet sessions are the common case.
+
+`--talk-name` is the narrowest grant that covers the second path: permission to
+*talk* (not own) to exactly one well-known name on the session bus. Everything
+wider was rejected deliberately, and `scripts/check_linux_runner.py` fails the
+build if any of it reappears: `--socket=session-bus`, any
+`--talk-name=org.freedesktop.*` or `…secrets.*` wildcard,
+`--own-name=org.freedesktop.secrets`, and the same name on the system bus. No
+filesystem grant was added either; nothing in the credential path opens a file.
+
+**What is stored there.** One entry per provider, each the JSON of a session
+object, written by the three secure stores in
+`../lib/data/repositories/`:
+
+| Key | Provider | Contents |
+| --- | --- | --- |
+| `jellyfin_session_v1` | Jellyfin | server URL, user id/name, access token, device id |
+| `subsonic_session_v1` | Navidrome/Subsonic | server URL, username, salt, derived token |
+| `plex_session_v1` | Plex | server URL, machine identifier, token, selected library keys |
+
+Passwords are never stored: Jellyfin exchanges one for an access token,
+Subsonic derives a salt+token pair and discards it, Plex is token-based from
+the start. Everything else (library rows, preferences, playback state) stays in
+SQLite and preferences and holds no secret.
+
+**No plaintext fallback.** All three stores go through one class,
+`SecureSessionStorage`, which is the only thing in the app that touches
+`flutter_secure_storage`. It has no alternative path: if the platform store
+cannot take a value, the write fails and nothing is written to preferences, the
+database, the cache, or a file, and a read that fails is an error rather than a
+silent "no session". Failures are translated into a typed
+`SecureStorageException` carrying only an operation and a cause (unavailable,
+locked, denied, unknown), never the platform error text, the key, or the
+value, so a keyring problem cannot leak a token into a log, a diagnostics
+report, or a crash report. Jellyfin, Navidrome/Subsonic and Plex each turn that
+into a visible, recoverable message: "Couldn't save your … sign-in on this
+device. Unlock your keyring and try again." A session that could not be saved
+is not adopted, because it would look signed in until the next launch and then
+be gone.
+
+`test/data/repositories/secure_session_storage_test.dart` drives the real
+plugin channel (`plugins.it_nomads.com/flutter_secure_storage`) with the exact
+`PlatformException`s the Linux plugin raises, and covers save, read after a
+restart, delete, the missing/locked/denied service, and the absence of any
+fallback write.
+
+### Testing it in the sandbox
+
+Save, read after restart, delete:
+
+1. Build, install and launch (above). Sign in to Jellyfin, Navidrome/Subsonic
+   and Plex.
+2. Confirm on the host where the credential landed. Which of libsecret's two
+   backends is in use decides what you will see, and both are correct:
+
+   * **Secret Service backend** (no Secret portal on the host, e.g. a KDE
+     session): the plugin's item is labelled
+     `io.github.thezupzup.linthra/FlutterSecureStorage` with the attribute
+     `account=io.github.thezupzup.linthra.secureStorage`, and shows up in the
+     host keyring:
+
+     ```bash
+     secret-tool search account io.github.thezupzup.linthra.secureStorage
+     ```
+
+     GNOME users see the same item in Seahorse ("Passwords and Keys"), KDE
+     users in KWalletManager.
+   * **Portal file backend** (the usual GNOME case): `secret-tool search` finds
+     nothing, because the item is in the app's own encrypted
+     `~/.var/app/io.github.thezupzup.linthra/data/keyrings/default.keyring`,
+     whose key comes from the portal. That file is ciphertext; step 5 checks it
+     holds no readable credential.
+
+   Either way, do not print the secret: `secret-tool search` shows attributes,
+   which is what you are checking, while `secret-tool lookup` would print the
+   value itself.
+3. Quit and relaunch: `flatpak run io.github.thezupzup.linthra`. All three
+   providers should come back signed in, without re-entering anything, and a
+   track should stream.
+4. Sign out of each provider. The card returns to the signed-out state and the
+   keyring entry is gone (`secret-tool search …` no longer lists it, and the
+   entry disappears from Seahorse/KWalletManager).
+5. Check that nothing was written in the clear. There must be no credential in
+   the app's own data:
+
+   ```bash
+   grep -rIl "your-test-token" ~/.var/app/io.github.thezupzup.linthra/ || \
+     echo "no plaintext credential"
+   ```
+
+   (The encrypted file backend's `data/keyrings/default.keyring`, when that
+   path is the one in use, is ciphertext and will not match.)
+
+Locked or unavailable service:
+
+1. **Locked.** Lock the keyring on the host (`gnome-keyring` users:
+   `secret-tool lock --collection='login'`; KDE users: close the wallet in
+   KWalletManager), then launch Linthra and sign in. Expect a visible
+   "Couldn't save your … sign-in on this device. Unlock your keyring and try
+   again.", the app still usable, and no crash. Unlock and retry: the sign-in
+   completes.
+2. **Unavailable.** Launch once with the grant withheld:
+
+   ```bash
+   flatpak run --no-talk-name=org.freedesktop.secrets io.github.thezupzup.linthra
+   ```
+
+   On a host that was using the Secret Service backend, saved sessions come
+   back as a restore error ("Couldn't restore your saved … sign-in from this
+   device."), signing in reports the storage failure, and nothing is written
+   anywhere else. A normal `flatpak run` afterwards recovers with the
+   credentials intact. On a host whose portal provides the Secret
+   implementation, libsecret uses the portal-backed file backend and this
+   launch behaves normally, which is the expected difference between the two
+   paths, not a failed test.
+
+Use one-shot `flatpak run` flags rather than `flatpak override`: overrides
+persist and then hide what the manifest actually grants.
 
 ## Regenerating the pinned sources
 
@@ -267,12 +418,11 @@ side's, so the two cannot drift into a silent fallback.
 
 Not in this manifest — each has its own issue:
 
-* **The remaining filesystem-permission audit** (#439) and **Secret Service**
-  (#441) — no `--filesystem=host|home` or
-  `--talk-name=org.freedesktop.secrets`. Jellyfin/Subsonic/Plex session restore
-  and secure-storage reads already degrade to "not signed in" without them
-  (`docs/linux-desktop.md` §"Secure storage"). Picking a music folder no longer
-  needs a filesystem grant at all — see [Local music folders](#local-music-folders).
+* **The remaining filesystem-permission audit** (#439): still no
+  `--filesystem=host|home`. Picking a music folder does not need a filesystem
+  grant at all (see [Local music folders](#local-music-folders)), and neither
+  does credential storage (see
+  [Secure credential storage](#secure-credential-storage)).
 * **Video codecs, hardware acceleration/hwaccel, subtitle-adjacent tuning
   beyond what libmpv/libass require to build** — Linthra is audio-only; the
   ffmpeg/mpv build stays scoped to the container/codec/protocol support

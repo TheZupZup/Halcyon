@@ -108,6 +108,13 @@ EXPECTED_FLATPAK_FINISH_ARGS = {
     "--device=dri",
     "--socket=pulseaudio",
     "--share=network",
+    # Secure credential storage (#441). flutter_secure_storage's Linux plugin
+    # is a libsecret wrapper, and libsecret's Secret Service backend talks to
+    # exactly this session-bus name. Being an exact string, every broader form
+    # a well-meaning change might reach for instead (--socket=session-bus, an
+    # org.freedesktop.* wildcard, --own-name, or the same name granted on the
+    # system bus) is rejected by this list rather than silently accepted.
+    "--talk-name=org.freedesktop.secrets",
 }
 
 # Where a Flatpak's desktop entry has to land: flatpak-builder exports what it

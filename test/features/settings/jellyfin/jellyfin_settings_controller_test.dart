@@ -1,11 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/jellyfin_session.dart';
 import 'package:linthra/core/models/playlist.dart';
 import 'package:linthra/core/models/track.dart';
 import 'package:linthra/core/repositories/favorites_repository.dart';
+import 'package:linthra/core/repositories/jellyfin_session_store.dart';
 import 'package:linthra/core/repositories/playlist_repository.dart';
 import 'package:linthra/core/repositories/remote_sync_result.dart';
+import 'package:linthra/core/repositories/secure_storage_exception.dart';
 import 'package:linthra/core/services/remote_cache/remote_cache_index.dart';
 import 'package:linthra/core/services/remote_cache/remote_cache_record.dart';
 import 'package:linthra/core/sources/jellyfin/jellyfin_api.dart';
@@ -130,9 +134,67 @@ class _SpyPlaylistRepository implements PlaylistRepository {
       throw UnimplementedError();
 }
 
+/// A session store standing in for a platform keyring that cannot be used:
+/// missing, locked, or refused by a sandbox. It fails exactly the way
+/// [SecureJellyfinSessionStore] does through [SecureSessionStorage] (a typed
+/// [SecureStorageException]), so these tests exercise the controller's real
+/// failure path rather than a generic thrown object.
+class _UnusableKeyringStore implements JellyfinSessionStore {
+  _UnusableKeyringStore({
+    JellyfinSession? initialSession,
+    this.readFailure,
+    this.writeFailure,
+    this.clearFailure,
+    this.readGate,
+  }) : _session = initialSession;
+
+  JellyfinSession? _session;
+  final SecureStorageException? readFailure;
+  final SecureStorageException? writeFailure;
+  final SecureStorageException? clearFailure;
+
+  /// Holds the restore read open, the way a keyring that is waiting on an
+  /// unlock prompt does.
+  final Completer<void>? readGate;
+
+  @override
+  Future<JellyfinSession?> read() async {
+    if (readGate != null) await readGate!.future;
+    if (readFailure != null) throw readFailure!;
+    return _session;
+  }
+
+  @override
+  Future<void> write(JellyfinSession session) async {
+    if (writeFailure != null) throw writeFailure!;
+    _session = session;
+  }
+
+  @override
+  Future<void> clear() async {
+    if (clearFailure != null) throw clearFailure!;
+    _session = null;
+  }
+}
+
+const SecureStorageException _lockedRead = SecureStorageException(
+  operation: SecureStorageOperation.read,
+  failure: SecureStorageFailure.locked,
+);
+
+const SecureStorageException _unavailableWrite = SecureStorageException(
+  operation: SecureStorageOperation.write,
+  failure: SecureStorageFailure.unavailable,
+);
+
+const SecureStorageException _lockedDelete = SecureStorageException(
+  operation: SecureStorageOperation.delete,
+  failure: SecureStorageFailure.locked,
+);
+
 ProviderContainer _container({
   FakeJellyfinAuthenticator? authenticator,
-  InMemoryJellyfinSessionStore? store,
+  JellyfinSessionStore? store,
 }) {
   final container = ProviderContainer(
     overrides: <Override>[
@@ -571,6 +633,140 @@ void main() {
       expect(source, isNotNull);
       expect(source!.session, _session);
       expect(source.id, 'jellyfin');
+    });
+  });
+
+  group('JellyfinSettingsController secure storage failures', () {
+    test(
+        'a keyring it cannot read reports a restore error, not a silent '
+        'sign-out', () async {
+      final container = _container(
+        store: _UnusableKeyringStore(
+          initialSession: _session,
+          readFailure: _lockedRead,
+        ),
+      );
+      container.read(jellyfinSettingsControllerProvider);
+      await _settle();
+
+      final state = container.read(jellyfinSettingsControllerProvider);
+      expect(state.phase, JellyfinConnectionPhase.disconnected);
+      expect(
+        state.errorMessage,
+        contains("Couldn't restore your saved Jellyfin sign-in"),
+      );
+      // The cause is actionable, not a shrug.
+      expect(state.errorMessage, contains('Unlock your keyring'));
+    });
+
+    test(
+        'a sign-in that cannot be saved fails with a storage error and keeps '
+        'no session', () async {
+      final store = _UnusableKeyringStore(writeFailure: _unavailableWrite);
+      final container = _container(
+        authenticator: FakeJellyfinAuthenticator(session: _session),
+        store: store,
+      );
+      final notifier =
+          container.read(jellyfinSettingsControllerProvider.notifier);
+      await _settle();
+
+      final ok = await notifier.signIn(
+        url: 'music.example.com',
+        username: 'alice',
+        password: 'hunter2',
+      );
+
+      expect(ok, isFalse);
+      final state = container.read(jellyfinSettingsControllerProvider);
+      expect(state.phase, JellyfinConnectionPhase.disconnected);
+      expect(
+        state.errorMessage,
+        contains("Couldn't save your Jellyfin sign-in on this device"),
+      );
+      expect(state.errorMessage, contains('no keyring available'));
+      // A session that could not be persisted is not adopted: it would look
+      // signed in now and be gone after a restart.
+      expect(notifier.session, isNull);
+      expect(container.read(jellyfinMusicSourceProvider), isNull);
+      expect(await store.read(), isNull);
+    });
+
+    test('the storage error carries no token and no password', () async {
+      final container = _container(
+        authenticator: FakeJellyfinAuthenticator(session: _session),
+        store: _UnusableKeyringStore(writeFailure: _unavailableWrite),
+      );
+      final notifier =
+          container.read(jellyfinSettingsControllerProvider.notifier);
+      await _settle();
+
+      await notifier.signIn(
+        url: 'music.example.com',
+        username: 'alice',
+        password: 'hunter2',
+      );
+
+      final state = container.read(jellyfinSettingsControllerProvider);
+      expect(state.errorMessage, isNot(contains('hunter2')));
+      expect(state.errorMessage, isNot(contains(_session.accessToken)));
+      expect(notifier.diagnosticsReport(), isNot(contains('hunter2')));
+      expect(
+        notifier.diagnosticsReport(),
+        isNot(contains(_session.accessToken)),
+      );
+    });
+
+    test('a restore failure never overwrites a sign-in that got there first',
+        () async {
+      // A locked keyring can hold the startup read open for as long as the
+      // unlock prompt sits there. If the user signs in meanwhile, the late
+      // failure must not replace their connected card with a restore error.
+      final gate = Completer<void>();
+      final container = _container(
+        authenticator: FakeJellyfinAuthenticator(session: _session),
+        store: _UnusableKeyringStore(readFailure: _lockedRead, readGate: gate),
+      );
+      final notifier =
+          container.read(jellyfinSettingsControllerProvider.notifier);
+
+      final ok = await notifier.signIn(
+        url: 'music.example.com',
+        username: 'alice',
+        password: 'hunter2',
+      );
+      expect(ok, isTrue);
+
+      gate.complete();
+      await _settle();
+
+      final state = container.read(jellyfinSettingsControllerProvider);
+      expect(state.phase, JellyfinConnectionPhase.connected);
+      expect(state.errorMessage, isNull);
+    });
+
+    test('a sign-out the keyring refuses says so instead of pretending',
+        () async {
+      final store = _UnusableKeyringStore(
+        initialSession: _session,
+        clearFailure: _lockedDelete,
+      );
+      final container = _container(store: store);
+      final notifier =
+          container.read(jellyfinSettingsControllerProvider.notifier);
+      await notifier.ensureLoaded();
+
+      await notifier.clear();
+
+      final state = container.read(jellyfinSettingsControllerProvider);
+      expect(
+        state.errorMessage,
+        contains("Couldn't remove your Jellyfin sign-in from this device"),
+      );
+      // Still signed in, because the credential really is still in the
+      // keyring. Retrying after unlocking completes the same sign-out.
+      expect(state.phase, JellyfinConnectionPhase.connected);
+      expect(await store.read(), _session);
     });
   });
 }
