@@ -302,7 +302,11 @@ class _SelectedFolderView extends StatelessWidget {
         ],
         if (report != null) ...[
           const SizedBox(height: AppSpacing.sm),
-          _ScanSummary(report: report!, host: host),
+          _ScanSummary(
+            report: report!,
+            host: host,
+            isDeviceLibrary: isDeviceLibrary,
+          ),
         ],
       ],
     );
@@ -310,21 +314,34 @@ class _SelectedFolderView extends StatelessWidget {
 }
 
 class _ScanSummary extends StatelessWidget {
-  const _ScanSummary({required this.report, required this.host});
+  const _ScanSummary({
+    required this.report,
+    required this.host,
+    required this.isDeviceLibrary,
+  });
 
   final LocalScanReport report;
   final HostPlatform host;
+
+  /// Whether the *currently selected* source is Android's device-wide
+  /// MediaStore library rather than a folder. The report alone cannot say so
+  /// (a MediaStore scan carries no content URI and no folder counts), and
+  /// without it an empty or failed device scan reads as an unreadable folder.
+  final bool isDeviceLibrary;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final Color muted = theme.colorScheme.onSurface.withValues(alpha: 0.6);
     final String? counts = report.hadError ? null : _counts(report);
-    final String? hint = _hint(report, host);
+    final String? hint = _hint(report, host, isDeviceLibrary);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(_headline(report), style: theme.textTheme.bodyMedium),
+        Text(
+          _headline(report, isDeviceLibrary),
+          style: theme.textTheme.bodyMedium,
+        ),
         if (counts != null) ...[
           const SizedBox(height: AppSpacing.xs),
           Text(
@@ -340,13 +357,15 @@ class _ScanSummary extends StatelessWidget {
     );
   }
 
-  static String _headline(LocalScanReport report) {
+  static String _headline(LocalScanReport report, bool isDeviceLibrary) {
     if (report.hadError) return "Last scan couldn't finish";
     if (report.importedTracks > 0) {
       final String word = report.importedTracks == 1 ? 'track' : 'tracks';
       return 'Last scan: ${report.importedTracks} $word added';
     }
-    return 'Last scan: no tracks found';
+    return isDeviceLibrary
+        ? 'Last scan: no music on this device'
+        : 'Last scan: no tracks found';
   }
 
   static String _counts(LocalScanReport report) {
@@ -366,11 +385,27 @@ class _ScanSummary extends StatelessWidget {
     return parts.join(' · ');
   }
 
-  static String? _hint(LocalScanReport report, HostPlatform host) {
+  static String? _hint(
+    LocalScanReport report,
+    HostPlatform host,
+    bool isDeviceLibrary,
+  ) {
     if (report.importedTracks > 0) return null;
+    // A revoked Music and audio permission is recovered in Android's app
+    // settings, whichever source is selected.
     if (report.error == LocalScanError.mediaPermission) {
       return 'Device music access is off. Re-enable it in Android settings or '
           'select a folder instead.';
+    }
+    // Device-wide mode has no folder to reselect: an empty or failed MediaStore
+    // scan must never point at the folder chooser.
+    if (isDeviceLibrary) {
+      if (report.hadError) {
+        return "Linthra couldn't read Android's shared music library. Try "
+            'scanning this device again. Your indexed music stays as it is.';
+      }
+      return "Android's music library reported no audio on this device. Music "
+          'added since the last scan shows up after another scan.';
     }
     final bool blocked = report.hadError ||
         report.readFailures > 0 ||

@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/track.dart';
+import 'package:linthra/core/sources/local/folder_location.dart';
 import 'package:linthra/data/repositories/in_memory_music_library_repository.dart';
+import 'package:linthra/data/repositories/in_memory_selected_music_folder_repository.dart';
 import 'package:linthra/data/repositories/music_library_repository_provider.dart';
+import 'package:linthra/data/repositories/selected_music_folder_repository_provider.dart';
 import 'package:linthra/features/library/library_providers.dart';
 import 'package:linthra/features/library/library_screen.dart';
 
@@ -140,6 +143,42 @@ void main() {
 
       expect(picker.pickCount, 1);
       expect(find.text('No music folder selected'), findsOneWidget);
+    });
+
+    testWidgets('an empty device-wide library never points at a folder', (
+      tester,
+    ) async {
+      // Android's MediaStore sentinel is not a filesystem path and not a folder
+      // the user can reselect (#550). An empty result there has to read as "the
+      // device reported no music", not as a folder that needs re-picking.
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            musicLibraryRepositoryProvider.overrideWithValue(
+              InMemoryMusicLibraryRepository(),
+            ),
+            selectedMusicFolderRepositoryProvider.overrideWithValue(
+              InMemorySelectedMusicFolderRepository(
+                initialFolder: FolderLocation.androidMediaStoreAudio,
+              ),
+            ),
+          ],
+          child: const MaterialApp(home: LibraryScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('reported no audio on this device'),
+        findsOneWidget,
+      );
+      expect(find.text('Rescan this device'), findsOneWidget);
+      expect(find.text('Use a folder instead'), findsOneWidget);
+      expect(find.text('Rescan folder'), findsNothing);
+      expect(find.text('Change folder'), findsNothing);
+      expect(find.text('Choose the folder again so Linthra can read it.'),
+          findsNothing);
+      expect(find.textContaining('mediastore://'), findsNothing);
     });
   });
 }
