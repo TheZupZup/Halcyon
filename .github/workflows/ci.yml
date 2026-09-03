@@ -45,17 +45,7 @@ jobs:
         run: flutter pub get --enforce-lockfile
 
       - name: Verify formatting
-        run: |
-          set +e
-          dart format --set-exit-if-changed .
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            git diff -- lib/core/sources/local/local_music_source.dart \
-              lib/features/settings/source/provider_summary_cards.dart \
-              test/core/sources/local/android_media_library_test.dart \
-              test/tooling/android_media_store_contract_test.dart
-            exit "$status"
-          fi
+        run: dart format --set-exit-if-changed .
 
       - name: Analyze
         run: flutter analyze
