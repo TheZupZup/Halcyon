@@ -54,14 +54,21 @@ cd "$FLATPAK_DIR"
 info "Phase 1/2: fetch only manifest-declared sources"
 "${BUILDER[@]}" --user --download-only --force-clean "$BUILD_DIR" "$MANIFEST"
 
-# Remove the module build tree while deliberately keeping .flatpak-builder's
-# source cache. The next invocation therefore starts the compilation from a
-# clean build directory but may consume only what phase 1 declared and fetched.
+# Keep .flatpak-builder's source downloads from phase 1, but do not allow its
+# per-module build cache to satisfy phase 2. --disable-cache forces every module
+# to execute its build commands again; --disable-download means those commands
+# can use only the sources already fetched from the manifest.
 rm -rf -- "$BUILD_DIR"
 
-info "Phase 2/2: clean build with all source downloads disabled"
-"${BUILDER[@]}" --user --disable-download --force-clean "$BUILD_DIR" "$MANIFEST"
+info "Phase 2/2: uncached build with all source downloads disabled"
+"${BUILDER[@]}" \
+  --user \
+  --disable-cache \
+  --disable-download \
+  --force-clean \
+  "$BUILD_DIR" \
+  "$MANIFEST"
 
-printf '\nPASS: %s built from declared sources with downloads disabled.\n' "$APP_ID"
-printf 'The build did not require a developer pub cache or undeclared source fetch.\n'
+printf '\nPASS: %s rebuilt every module from declared sources with downloads disabled.\n' "$APP_ID"
+printf 'No module build result, developer pub cache, or undeclared source fetch was reused.\n'
 printf 'Build tree kept at flatpak/%s for inspection; remove it when finished.\n' "$BUILD_DIR"
