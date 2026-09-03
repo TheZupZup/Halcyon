@@ -363,26 +363,105 @@ void _expectPreFetchedNativeInput({
   );
 }
 
+/// Flatpak parses its options with GLib, which accepts a value either joined
+/// (`--share=network`) or as the following argument (`--share`, `network`).
+/// Searching for the joined form alone can be stepped around by splitting the
+/// grant across two sequence entries, so both forms have to be rejected.
+bool _isNetworkGrant(String argument, String? next) {
+  return argument.contains('--share=network') ||
+      (argument == '--share' && next == 'network');
+}
+
 void _expectNoBuildNetworkGrant(String manifest) {
-  bool inFinishArgs = false;
   final List<String> lines = const LineSplitter().convert(manifest);
+  bool inFinishArgs = false;
+
+  // Only entries adjacent in the same block sequence can form a split option,
+  // so any other line clears the pending argument.
+  String? pending;
+  int pendingLine = 0;
 
   for (int index = 0; index < lines.length; index++) {
     final String line = lines[index];
+
     if (line == 'finish-args:') {
       inFinishArgs = true;
+      pending = null;
       continue;
     }
     if (inFinishArgs && line.isNotEmpty && !line.startsWith(' ')) {
       inFinishArgs = false;
     }
+    // The top-level runtime finish-args are where the grant belongs.
+    if (inFinishArgs) {
+      pending = null;
+      continue;
+    }
 
-    if (line.contains('--share=network') && !inFinishArgs) {
+    final String trimmed = line.trim();
+    if (!trimmed.startsWith('- ')) {
+      if (trimmed.contains('--share=network')) {
+        fail(
+          'Build-time network grant near generated manifest line '
+          '${index + 1}: $line',
+        );
+      }
+      pending = null;
+      continue;
+    }
+
+    final String argument = _unquote(trimmed.substring(2).trim());
+    if (_isNetworkGrant(argument, null)) {
       fail(
         'Build-time network grant near generated manifest line '
         '${index + 1}: $line',
       );
     }
+    if (pending != null && _isNetworkGrant(pending, argument)) {
+      fail(
+        'Build-time network grant split across generated manifest lines '
+        '$pendingLine and ${index + 1}: $pending $argument',
+      );
+    }
+
+    pending = argument;
+    pendingLine = index + 1;
+  }
+}
+
+/// The same rule for a generated module, which has no finish-args of its own,
+/// so any network grant it carries is a build-time one.
+void _expectNoJsonNetworkGrant(Object? value, String context) {
+  if (value is List<dynamic>) {
+    final List<String> arguments = value.whereType<String>().toList();
+    for (int index = 0; index < arguments.length; index++) {
+      final String? next =
+          index + 1 < arguments.length ? arguments[index + 1] : null;
+      expect(
+        _isNetworkGrant(arguments[index], next),
+        isFalse,
+        reason: '$context grants build-time network access',
+      );
+    }
+    for (final Object? child in value) {
+      _expectNoJsonNetworkGrant(child, context);
+    }
+    return;
+  }
+
+  if (value is Map<String, dynamic>) {
+    for (final Object? child in value.values) {
+      _expectNoJsonNetworkGrant(child, context);
+    }
+    return;
+  }
+
+  if (value is String) {
+    expect(
+      value.contains('--share=network'),
+      isFalse,
+      reason: '$context grants build-time network access',
+    );
   }
 }
 
@@ -490,6 +569,7 @@ void main() {
         reason: '${module.path} grants build-time network access',
       );
       final Object? decoded = jsonDecode(contents);
+      _expectNoJsonNetworkGrant(decoded, module.path);
       _expectJsonSourcesHashed(decoded, module.path);
     }
 
@@ -888,9 +968,48 @@ modules:
         - --share=network
 ''';
 
+    expect(() => _expectNoBuildNetworkGrant(manifest), throwsA(anything));
+
+    // GLib option parsing also takes a value as the following argument, so the
+    // same grant can be written without either entry carrying the joined form.
+    const String split = '''
+finish-args:
+  - --share=network
+modules:
+  - name: native
+    build-options:
+      build-args:
+        - --share
+        - network
+''';
+
+    expect(() => _expectNoBuildNetworkGrant(split), throwsA(anything));
     expect(
-      () => _expectNoBuildNetworkGrant(manifest),
+      () => _expectNoJsonNetworkGrant(<String, dynamic>{
+        'build-options': <String, dynamic>{
+          'build-args': <String>['--share', 'network'],
+        },
+      }, 'fixture'),
       throwsA(anything),
     );
+
+    // Control: a split option that is not the network grant stays allowed, and
+    // so does the grant in the top-level runtime finish-args.
+    _expectNoBuildNetworkGrant('''
+finish-args:
+  - --share
+  - network
+modules:
+  - name: native
+    build-options:
+      build-args:
+        - --share
+        - ipc
+''');
+    _expectNoJsonNetworkGrant(<String, dynamic>{
+      'build-options': <String, dynamic>{
+        'build-args': <String>['--share', 'ipc'],
+      },
+    }, 'fixture');
   });
 }

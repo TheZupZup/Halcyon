@@ -128,8 +128,10 @@ suite. It checks that:
 
 - the template keeps lockfile enforcement and a `--no-pub` build;
 - the generated build uses the offline setup script;
-- `--share=network` appears only in the top-level runtime `finish-args`, never
-  in build options for the app or a generated module;
+- a network grant appears only in the top-level runtime `finish-args`, never in
+  build options for the app or a generated module, in either the joined
+  (`--share=network`) or the split (`--share`, then `network`) form that
+  Flatpak's GLib option parser accepts;
 - the generated files it audits are the ones the `linthra` module actually
   includes, so an orphaned generated file cannot pass for a staged one;
 - every hosted package/version in `pubspec.lock` has a generated pub-cache
@@ -174,9 +176,11 @@ for the full uncached rebuild.
 
 The second phase therefore cannot ask flatpak-builder to retrieve a missing
 source and cannot hide behind a warm module cache. The structural guard also
-rejects build-time `--share=network`, so a hidden `pub get`, CMake
+rejects a build-time network grant, so a hidden `pub get`, CMake
 `FetchContent`, curl/wget, or similar undeclared fetch cannot borrow Linthra's
-runtime network permission.
+runtime network permission. Flatpak parses its options with GLib, which takes a
+value either joined or as the following argument, so the guard rejects
+`--share=network` and an adjacent `--share` / `network` pair alike.
 
 A failure in phase 2 is useful: it means something required by the build was not
 properly declared/prefetched, which is exactly what #442 is meant to catch.
