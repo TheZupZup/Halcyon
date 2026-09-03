@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/sources/local/android_media_library.dart';
 import '../../../core/sources/local/folder_location.dart';
 import '../../../core/sources/local/local_music_source.dart';
+import '../../../core/sources/local/local_scan_report.dart';
 import '../../../data/repositories/host_platform_provider.dart';
 import '../../../data/repositories/music_library_repository_provider.dart';
 import '../../library/library_controller.dart';
@@ -55,6 +56,7 @@ class LocalMusicController extends Notifier<LocalMusicActionState> {
     final AndroidMusicPermissionStatus status =
         await ref.read(androidMediaLibraryProvider).requestPermission();
     ref.invalidate(androidMusicPermissionStatusProvider);
+    ref.invalidate(localFolderAccessProvider);
     if (status != AndroidMusicPermissionStatus.allowed) {
       state = const LocalMusicActionState(
         message: 'Music and audio access was not granted. You can keep using a '
@@ -72,6 +74,7 @@ class LocalMusicController extends Notifier<LocalMusicActionState> {
 
   Future<void> refreshAndroidPermissionStatus() async {
     ref.invalidate(androidMusicPermissionStatusProvider);
+    ref.invalidate(localFolderAccessProvider);
   }
 
   Future<void> openAndroidPermissions() async {
@@ -113,13 +116,17 @@ class LocalMusicController extends Notifier<LocalMusicActionState> {
       return;
     }
     if (report.hadError) {
-      state = LocalMusicActionState(
-        message: location.isAndroidMediaStore
+      final String message;
+      if (location.isAndroidMediaStore) {
+        message = report.error == LocalScanError.mediaPermission
             ? 'Could not scan the device music library. Check Music and audio '
                 'access in Android settings, or choose a folder instead.'
-            : "Couldn't scan that folder. Try selecting it again.",
-        isError: true,
-      );
+            : "Couldn't read Android's shared music library. Try again, or "
+                'choose a folder instead.';
+      } else {
+        message = "Couldn't scan that folder. Try selecting it again.";
+      }
+      state = LocalMusicActionState(message: message, isError: true);
       return;
     }
     if (report.importedTracks > 0) {
