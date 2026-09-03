@@ -28,7 +28,8 @@ class LocalMusicActionState {
 ///
 /// Android exposes two deliberate choices:
 ///  - a targeted SAF folder grant; or
-///  - the system-visible Music and audio permission for the device MediaStore.
+///  - device-wide MediaStore access, backed by READ_MEDIA_AUDIO on Android 13+
+///    and the legacy shared-storage read permission on older Android releases.
 /// The second path is only requested when the user explicitly chooses it.
 class LocalMusicController extends Notifier<LocalMusicActionState> {
   @override
@@ -48,8 +49,7 @@ class LocalMusicController extends Notifier<LocalMusicActionState> {
 
   /// Opts into Android's device-wide shared music library.
   ///
-  /// This requests only the narrow audio/media permission for the current
-  /// Android release. A denial leaves the existing folder/catalog untouched.
+  /// A denial leaves the existing folder/catalog untouched.
   Future<void> useAllDeviceMusic() async {
     if (!ref.read(hostPlatformProvider).isAndroid) return;
     state = const LocalMusicActionState(busy: true);
@@ -59,7 +59,7 @@ class LocalMusicController extends Notifier<LocalMusicActionState> {
     ref.invalidate(localFolderAccessProvider);
     if (status != AndroidMusicPermissionStatus.allowed) {
       state = const LocalMusicActionState(
-        message: 'Music and audio access was not granted. You can keep using a '
+        message: 'Device music access was not granted. You can keep using a '
             'selected folder instead.',
         isError: true,
       );
@@ -119,7 +119,7 @@ class LocalMusicController extends Notifier<LocalMusicActionState> {
       final String message;
       if (location.isAndroidMediaStore) {
         message = report.error == LocalScanError.mediaPermission
-            ? 'Could not scan the device music library. Check Music and audio '
+            ? 'Could not scan the device music library. Check device music '
                 'access in Android settings, or choose a folder instead.'
             : "Couldn't read Android's shared music library. Try again, or "
                 'choose a folder instead.';
