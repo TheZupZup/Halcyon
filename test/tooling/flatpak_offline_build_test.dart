@@ -177,7 +177,7 @@ void main() {
           continue;
         }
 
-        final int end = (index + 8).clamp(0, lines.length);
+        final int end = index + 8 < lines.length ? index + 8 : lines.length;
         final Iterable<String> block = lines.sublist(index, end);
         expect(
           block.any((String line) => line.trim().startsWith('sha256:')),
