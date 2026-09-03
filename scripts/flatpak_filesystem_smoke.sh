@@ -24,7 +24,15 @@ check_override_scope() {
   local label="$1"
   shift
   local overrides
-  overrides="$(flatpak override "$@" --show 2>/dev/null || true)"
+
+  # This audit is only meaningful if every effective override scope can be
+  # inspected. Fail closed on an unreadable/broken user or system override
+  # instead of treating a failed query as an empty, therefore clean, scope.
+  if ! overrides="$(flatpak override "$@" --show 2>&1)"; then
+    printf '%s\n' "$overrides" >&2
+    fail "could not inspect $label; refusing to assume the scope is clean"
+  fi
+
   if grep -Eq '^[[:space:]]*(filesystems|persistent)=' <<<"$overrides"; then
     printf '%s\n' "$overrides" >&2
     fail "$label contains a filesystem/persist override; remove it before testing"
@@ -53,6 +61,7 @@ fi
 # system overrides. Reject filesystem/persist entries in every scope. Otherwise
 # a globally granted xdg-music/home path could make a clean package look safely
 # sandboxed while this smoke was actually exercising the local override.
+# A query failure is also fatal: an unreadable/broken scope is unknown, not clean.
 check_override_scope "global user override" --user
 check_override_scope "app-specific user override" --user "$APP_ID"
 check_override_scope "global system override" --system
