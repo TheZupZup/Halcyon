@@ -15,7 +15,8 @@ void main() {
   test('MediaStore scan fails closed when no cursor is returned', () {
     expect(
       channel,
-      contains('?: throw IllegalStateException("MediaStore query returned no cursor")'),
+      contains(
+          '?: throw IllegalStateException("MediaStore query returned no cursor")'),
     );
   });
 
