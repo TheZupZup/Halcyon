@@ -17,9 +17,10 @@ import io.flutter.plugin.common.MethodChannel
 /**
  * Android's device-wide local-music integration.
  *
- * This is intentionally separate from SAF folder access. The user opts into the
- * normal Android "Music and audio" permission for a MediaStore-wide scan, or can
- * keep using the existing folder picker for a targeted persisted grant. This
+ * This is intentionally separate from SAF folder access. Android 13+ exposes
+ * the normal "Music and audio" permission for MediaStore; older supported
+ * releases use the legacy shared-storage read permission for this device-wide
+ * mode. The existing folder picker remains the narrower targeted option. This
  * class never requests MANAGE_EXTERNAL_STORAGE, photo, or video access.
  */
 class AndroidMediaLibraryChannel(private val activity: Activity) {
@@ -106,7 +107,7 @@ class AndroidMediaLibraryChannel(private val activity: Activity) {
         if (permissionStatus() != STATUS_ALLOWED) {
             result.error(
                 "permission_denied",
-                "Music and audio permission is not granted.",
+                "Device music access is not granted.",
                 null,
             )
             return
@@ -129,7 +130,7 @@ class AndroidMediaLibraryChannel(private val activity: Activity) {
                 activity.runOnUiThread {
                     result.error(
                         "permission_denied",
-                        "Music and audio permission is not granted.",
+                        "Device music access is not granted.",
                         null,
                     )
                 }
@@ -153,6 +154,7 @@ class AndroidMediaLibraryChannel(private val activity: Activity) {
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
             MediaStore.Audio.Media.ALBUM,
+            MediaStore.Audio.Media.ALBUM_ID,
             MediaStore.Audio.Media.TRACK,
             MediaStore.Audio.Media.DURATION,
         )
@@ -171,6 +173,7 @@ class AndroidMediaLibraryChannel(private val activity: Activity) {
             val titleIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
             val artistIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
             val albumIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
+            val albumIdIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
             val trackIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TRACK)
             val durationIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
 
@@ -180,7 +183,11 @@ class AndroidMediaLibraryChannel(private val activity: Activity) {
                 val name = cleanMediaValue(cursor.getString(nameIndex))
                     ?: title
                     ?: "Audio $id"
-                val track = cursor.getInt(trackIndex).takeIf { it > 0 }
+                val rawTrack = cursor.getInt(trackIndex)
+                val track = (rawTrack % 1000).takeIf { it > 0 }
+                val rawAlbumId = cursor.getLong(albumIdIndex)
+                val albumId = rawAlbumId.takeIf { it > 0L }
+                    ?.let { "android-mediastore:$it" }
                 val durationMs = cursor.getLong(durationIndex).takeIf { it > 0L }
                 val uri = ContentUris.withAppendedId(
                     MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
@@ -195,6 +202,7 @@ class AndroidMediaLibraryChannel(private val activity: Activity) {
                         "artist" to cleanMediaValue(cursor.getString(artistIndex)),
                         "albumArtist" to null,
                         "album" to cleanMediaValue(cursor.getString(albumIndex)),
+                        "albumId" to albumId,
                         "track" to track,
                         "durationMs" to durationMs,
                         "artworkUri" to null,
