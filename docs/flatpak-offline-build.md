@@ -40,7 +40,8 @@ step, not Flatpak build-time networking.
 `flatpak/generated/sources/pubspec.json` contains one versioned pub.dev archive
 for every hosted package in `pubspec.lock`, with a SHA-256 and a destination
 inside the build's private `.pub-cache`. Matching hosted-hash entries are also
-pre-created.
+pre-created. Remote `type: file` inputs, including native plugin inputs such as
+SQLite and mimalloc, are required to carry their own SHA-256 as well.
 
 The generated Flutter SDK module provides `setup-flutter.sh`, whose dependency
 resolution command is:
@@ -66,7 +67,8 @@ committed lockfile as the dependency set.
 
 The generated manifest declares the native runtime chain explicitly. Current
 modules include FFmpeg, libplacebo and its build helpers, libass, and mpv. Each
-archive source carries a SHA-256.
+remote archive/file source that supports content hashing carries a SHA-256.
+Generated Flutter SDK archives are checked by the same rule.
 
 Two Flutter plugins deserve special attention because their upstream Linux
 builds can otherwise fetch native code from CMake:
@@ -98,15 +100,17 @@ quietly depend on a warm developer cache.
 suite. It checks that:
 
 - the template keeps lockfile enforcement and a `--no-pub` build;
-- the generated build uses the offline setup script and has no build network
-  grant;
+- the generated build uses the offline setup script;
+- `--share=network` appears only in the top-level runtime `finish-args`, never
+  in build options for the app or a generated module;
 - every hosted package/version in `pubspec.lock` has a generated pub-cache
   archive and hosted-hash entry;
-- generated archive downloads have SHA-256 values;
+- every remote archive/file source it audits has its **own** valid SHA-256,
+  including generated Flutter SDK, SQLite and mimalloc inputs;
+- a later source's hash cannot accidentally satisfy an earlier source mapping;
 - the SQLite pre-fetch seam and mimalloc-disable switch remain in CMake;
-- the generated source set still carries the known SQLite/mimalloc native
-  inputs;
-- top-level native archive sources in the generated manifest remain hashed.
+- the end-to-end smoke keeps `--download-only`, `--disable-cache` and
+  `--disable-download` together.
 
 This is intentionally a structural CI guard. The end-to-end proof is the build
 smoke below.
@@ -125,23 +129,29 @@ The script performs two separate `flatpak-builder` invocations against the
 
 1. `--download-only` fetches the manifest-declared sources into
    flatpak-builder's source cache and exits;
-2. the module build directory is discarded, then a clean build runs with
-   `--disable-download`.
+2. the output build directory is discarded, then every module is rebuilt with
+   both `--disable-cache` and `--disable-download`.
+
+`--disable-cache` is important: it prevents a previous successful module build
+from satisfying phase 2 without executing that module's build commands again.
+It does **not** delete the downloaded source objects populated by phase 1.
+`--disable-download` then requires those already-declared sources to be enough
+for the full uncached rebuild.
 
 The second phase therefore cannot ask flatpak-builder to retrieve a missing
-source. Normal flatpak-builder build sandboxing also means a hidden `pub get`,
-CMake `FetchContent`, curl/wget, or similar undeclared build-time download does
-not get a network escape hatch from Linthra's runtime `--share=network` finish
-argument.
+source and cannot hide behind a warm module cache. The structural guard also
+rejects build-time `--share=network`, so a hidden `pub get`, CMake
+`FetchContent`, curl/wget, or similar undeclared fetch cannot borrow Linthra's
+runtime network permission.
 
 A failure in phase 2 is useful: it means something required by the build was not
 properly declared/prefetched, which is exactly what #442 is meant to catch.
 
-The smoke deliberately uses the normal `.flatpak-builder` source cache between
-the two phases. That is not a developer pub cache: it is flatpak-builder's own
-cache populated exclusively from the manifest during phase 1. The app module's
-`PUB_CACHE` points into `/run/build/linthra/.pub-cache`, populated by declared
-sources for that build.
+The smoke deliberately keeps the normal `.flatpak-builder` **source cache**
+between the two phases. That is not a developer pub cache or a module build
+result: it is flatpak-builder's own source store populated from the manifest
+during phase 1. The app module's `PUB_CACHE` points into
+`/run/build/linthra/.pub-cache`, populated by declared sources for that build.
 
 ## Clean-machine validation
 
