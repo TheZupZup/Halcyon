@@ -302,32 +302,27 @@ class _SelectedFolderView extends StatelessWidget {
         ],
         if (report != null) ...[
           const SizedBox(height: AppSpacing.sm),
-          _ScanSummary(
-            report: report!,
-            host: host,
-            isDeviceLibrary: isDeviceLibrary,
-          ),
+          _ScanSummary(report: report!, host: host),
         ],
       ],
     );
   }
 }
 
+/// The recap of the last scan.
+///
+/// It describes *the scan the report came from*, not whatever source happens to
+/// be selected right now: trying device-wide mode and failing leaves the old
+/// folder selected while the newest report is a MediaStore one, and telling
+/// that user to reselect a folder Linthra never scanned would be nonsense. So
+/// the source kind is read off the report itself.
 class _ScanSummary extends StatelessWidget {
-  const _ScanSummary({
-    required this.report,
-    required this.host,
-    required this.isDeviceLibrary,
-  });
+  const _ScanSummary({required this.report, required this.host});
 
   final LocalScanReport report;
   final HostPlatform host;
 
-  /// Whether the *currently selected* source is Android's device-wide
-  /// MediaStore library rather than a folder. The report alone cannot say so
-  /// (a MediaStore scan carries no content URI and no folder counts), and
-  /// without it an empty or failed device scan reads as an unreadable folder.
-  final bool isDeviceLibrary;
+  bool get isDeviceLibrary => report.isDeviceLibrary;
 
   @override
   Widget build(BuildContext context) {

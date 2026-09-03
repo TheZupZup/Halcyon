@@ -116,6 +116,9 @@ void main() {
       expect(scan.tracks.single.duration, const Duration(seconds: 123));
       expect(scan.report.importedTracks, 1);
       expect(scan.report.isContentUri, isFalse);
+      // Not a SAF tree and not a filesystem path: the report has to say which
+      // backend it read, or diagnostics call a MediaStore scan `kind=path`.
+      expect(scan.report.isDeviceLibrary, isTrue);
     });
   });
 }

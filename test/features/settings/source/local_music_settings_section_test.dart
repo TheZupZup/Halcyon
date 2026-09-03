@@ -380,6 +380,7 @@ void main() {
         report: const LocalScanReport(
           folderSelected: true,
           isContentUri: false,
+          isDeviceLibrary: true,
           filesVisited: 0,
           foldersVisited: 0,
           audioCandidates: 0,
@@ -413,6 +414,7 @@ void main() {
         report: const LocalScanReport.failure(
           folderSelected: true,
           isContentUri: false,
+          isDeviceLibrary: true,
           error: LocalScanError.unexpected,
         ),
       );
@@ -439,6 +441,7 @@ void main() {
         report: const LocalScanReport.failure(
           folderSelected: true,
           isContentUri: false,
+          isDeviceLibrary: true,
           error: LocalScanError.mediaPermission,
         ),
       );
@@ -472,6 +475,37 @@ void main() {
         find.textContaining("shared music library"),
         findsNothing,
       );
+    });
+
+    testWidgets('a failed trial of device mode is not blamed on the folder', (
+      tester,
+    ) async {
+      // The transactional switch keeps the folder selected when the first
+      // MediaStore scan fails, so the newest report describes a source that is
+      // not the selected one. The recap follows the report: the folder was
+      // never scanned, so telling the user to reselect it would be nonsense.
+      await _pump(
+        tester,
+        host: HostPlatform.android,
+        initialFolder: _safFolder,
+        report: const LocalScanReport.failure(
+          folderSelected: true,
+          isContentUri: false,
+          isDeviceLibrary: true,
+          error: LocalScanError.unexpected,
+        ),
+      );
+
+      // Still a folder user: the selection and its label are untouched.
+      expect(find.text('primary:Music'), findsOneWidget);
+      expect(
+        find.textContaining("couldn't read Android's shared music library"),
+        findsOneWidget,
+      );
+      for (final String text in _renderedText(tester)) {
+        expect(text, isNot(contains('folder chooser')));
+        expect(text, isNot(contains('Select it again')));
+      }
     });
   });
 }

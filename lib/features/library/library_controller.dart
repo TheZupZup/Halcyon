@@ -49,6 +49,7 @@ class LibraryController extends Notifier<LibraryState> {
             LocalScanReport.failure(
               folderSelected: folderPath.isNotEmpty,
               isContentUri: location.isContentUri,
+              isDeviceLibrary: location.isAndroidMediaStore,
               error: location.isAndroidMediaStore
                   ? error.code == 'permission_denied'
                       ? LocalScanError.mediaPermission
@@ -64,6 +65,7 @@ class LibraryController extends Notifier<LibraryState> {
             LocalScanReport.failure(
               folderSelected: folderPath.isNotEmpty,
               isContentUri: location.isContentUri,
+              isDeviceLibrary: location.isAndroidMediaStore,
               error: LocalScanError.unexpected,
             ),
           );

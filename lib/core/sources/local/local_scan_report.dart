@@ -33,8 +33,12 @@ class LocalScanReport {
     this.foldersVisited = 0,
     this.importedTracks = 0,
     this.recursive = true,
+    this.isDeviceLibrary = false,
     this.error,
-  });
+  }) : assert(
+          !(isContentUri && isDeviceLibrary),
+          'a scan reads either a SAF tree or the device library, never both',
+        );
 
   /// Builds a failure report (all counts zero) from what the caller knows about
   /// the selection — used when the scan threw before producing any counts.
@@ -42,16 +46,29 @@ class LocalScanReport {
     required this.folderSelected,
     required this.isContentUri,
     required LocalScanError this.error,
+    this.isDeviceLibrary = false,
   })  : filesVisited = 0,
         foldersVisited = 0,
         audioCandidates = 0,
         importedTracks = 0,
         skippedUnsupported = 0,
         readFailures = 0,
-        recursive = true;
+        recursive = true,
+        assert(
+          !(isContentUri && isDeviceLibrary),
+          'a scan reads either a SAF tree or the device library, never both',
+        );
 
   final bool folderSelected;
   final bool isContentUri;
+
+  /// Whether this scan read Android's device-wide MediaStore library rather
+  /// than a folder. MediaStore reads no content-URI *tree* and walks no
+  /// directories, so without this flag its reports are indistinguishable from a
+  /// plain filesystem scan: the diagnostics line would call it `kind=path`, and
+  /// recovery text would send the user to a folder chooser for a source that is
+  /// not a folder.
+  final bool isDeviceLibrary;
   final int filesVisited;
   final int foldersVisited;
   final int audioCandidates;

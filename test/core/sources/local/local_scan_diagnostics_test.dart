@@ -105,6 +105,44 @@ void main() {
       expect(summary, contains('error=unexpected'));
     });
 
+    test('a device-wide scan is labelled mediastore, not path', () {
+      // MediaStore reads no SAF tree and walks no directories, so without an
+      // explicit kind its reports look exactly like a filesystem scan and the
+      // bug report would name the wrong backend.
+      const report = LocalScanReport(
+        folderSelected: true,
+        isContentUri: false,
+        isDeviceLibrary: true,
+        filesVisited: 12,
+        audioCandidates: 12,
+        importedTracks: 12,
+        skippedUnsupported: 0,
+        readFailures: 0,
+      );
+
+      final summary = LocalScanDiagnostics.describe(report);
+
+      expect(summary, contains('kind=mediastore'));
+      expect(summary, isNot(contains('kind=path')));
+    });
+
+    test('an empty device-wide scan is still labelled mediastore', () {
+      const report = LocalScanReport(
+        folderSelected: true,
+        isContentUri: false,
+        isDeviceLibrary: true,
+        filesVisited: 0,
+        audioCandidates: 0,
+        skippedUnsupported: 0,
+        readFailures: 0,
+      );
+
+      expect(
+        LocalScanDiagnostics.describe(report),
+        contains('kind=mediastore'),
+      );
+    });
+
     test('a summary carries no path, URI, or file name', () {
       const report = LocalScanReport(
         folderSelected: true,

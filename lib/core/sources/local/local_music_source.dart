@@ -92,7 +92,7 @@ class LocalMusicSource implements MusicSource {
 
   Future<LocalScan> _scanAndroidMediaStore() async {
     final SafScanResult result = await _androidMediaLibrary.listDeviceAudio();
-    return _scanDocuments(result, isContentUri: false);
+    return _scanDocuments(result, isContentUri: false, isDeviceLibrary: true);
   }
 
   /// Walks an Android SAF tree through the content resolver. Falls back to the
@@ -113,6 +113,7 @@ class LocalMusicSource implements MusicSource {
   LocalScan _scanDocuments(
     SafScanResult result, {
     required bool isContentUri,
+    bool isDeviceLibrary = false,
   }) {
     final List<Track> tracks = <Track>[];
     for (final SafAudioDocument document in result.documents) {
@@ -132,6 +133,7 @@ class LocalMusicSource implements MusicSource {
       report: LocalScanReport(
         folderSelected: true,
         isContentUri: isContentUri,
+        isDeviceLibrary: isDeviceLibrary,
         filesVisited: result.filesVisited,
         foldersVisited: result.foldersVisited,
         audioCandidates: candidates,
