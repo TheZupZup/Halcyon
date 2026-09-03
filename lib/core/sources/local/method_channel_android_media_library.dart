@@ -25,7 +25,8 @@ class MethodChannelAndroidMediaLibrary implements AndroidMediaLibrary {
       return AndroidMusicPermissionStatus.unavailable;
     }
     try {
-      final String? raw = await _channel.invokeMethod<String>('permissionStatus');
+      final String? raw =
+          await _channel.invokeMethod<String>('permissionStatus');
       return parsePermissionStatus(raw);
     } on MissingPluginException {
       return AndroidMusicPermissionStatus.unavailable;
@@ -40,7 +41,8 @@ class MethodChannelAndroidMediaLibrary implements AndroidMediaLibrary {
       return AndroidMusicPermissionStatus.unavailable;
     }
     try {
-      final String? raw = await _channel.invokeMethod<String>('requestPermission');
+      final String? raw =
+          await _channel.invokeMethod<String>('requestPermission');
       return parsePermissionStatus(raw);
     } on MissingPluginException {
       return AndroidMusicPermissionStatus.unavailable;
@@ -78,11 +80,13 @@ class MethodChannelAndroidMediaLibrary implements AndroidMediaLibrary {
         throw const FolderScanException(
           'Music and audio access is turned off. Enable it in Android settings '
           'or choose a folder instead.',
+          code: 'permission_denied',
         );
       }
-      throw const FolderScanException(
+      throw FolderScanException(
         "Couldn't read Android's shared music library. Try again, or choose a "
         'folder instead.',
+        code: error.code,
       );
     }
     return MethodChannelSafDocumentLister.parseScanResult(result);
