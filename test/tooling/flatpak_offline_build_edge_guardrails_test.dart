@@ -12,29 +12,29 @@ const String _generatedPubSourcesPath = 'flatpak/generated/sources/pubspec.json'
 /// not interpret it. Fail closed on that form instead of letting a source skip
 /// the content-addressing audit.
 void _expectNoBareDashSequenceEntries(String manifest) {
-  final List<String> lines = const LineSplitter().convert(manifest);
-  for (int index = 0; index < lines.length; index++) {
-    final String trimmed = lines[index].trim();
-    if (trimmed == '-') {
-      fail(
-        'Unsupported bare-dash YAML sequence entry near line ${index + 1}. '
-        'Regenerate the Flatpak manifest with the mapping key on the same line '
-        'as the dash, or teach the offline guard this form before accepting it.',
-      );
-    }
+  final lines = const LineSplitter().convert(manifest);
+  for (var index = 0; index < lines.length; index++) {
+    final trimmed = lines[index].trim();
+    if (trimmed != '-') continue;
+
+    fail(
+      'Unsupported bare-dash YAML sequence entry near line ${index + 1}. '
+      'Regenerate the Flatpak manifest with the mapping key on the same line '
+      'as the dash, or teach the offline guard this form before accepting it.',
+    );
   }
 }
 
 Iterable<Map<String, dynamic>> _sourceMaps(Object? decoded) sync* {
   if (decoded is! List<dynamic>) return;
-  for (final Object? source in decoded) {
+  for (final source in decoded) {
     if (source is Map<String, dynamic>) yield source;
   }
 }
 
 bool _isSqlitePrefetch(Map<String, dynamic> source) {
-  final Object? url = source['url'];
-  final Object? dest = source['dest'];
+  final url = source['url'];
+  final dest = source['dest'];
   return url is String &&
       dest is String &&
       url.contains('sqlite-autoconf-') &&
@@ -42,8 +42,8 @@ bool _isSqlitePrefetch(Map<String, dynamic> source) {
 }
 
 bool _isMimallocPrefetch(Map<String, dynamic> source) {
-  final Object? url = source['url'];
-  final Object? dest = source['dest'];
+  final url = source['url'];
+  final dest = source['dest'];
   return url is String &&
       dest is String &&
       url.contains('/mimalloc/archive/refs/tags/') &&
@@ -52,11 +52,9 @@ bool _isMimallocPrefetch(Map<String, dynamic> source) {
 }
 
 void _expectNativePrefetchesRemainFiles(Object? decoded) {
-  final List<Map<String, dynamic>> sources = _sourceMaps(decoded).toList();
-  final List<Map<String, dynamic>> sqlite =
-      sources.where(_isSqlitePrefetch).toList();
-  final List<Map<String, dynamic>> mimalloc =
-      sources.where(_isMimallocPrefetch).toList();
+  final sources = _sourceMaps(decoded).toList();
+  final sqlite = sources.where(_isSqlitePrefetch).toList();
+  final mimalloc = sources.where(_isMimallocPrefetch).toList();
 
   expect(
     sqlite,
@@ -69,10 +67,10 @@ void _expectNativePrefetchesRemainFiles(Object? decoded) {
     reason: 'The generated sources contain no mimalloc prefetch.',
   );
 
-  for (final Map<String, dynamic> source in <Map<String, dynamic>>[
-    ...sqlite,
-    ...mimalloc,
-  ]) {
+  final prefetches = <Map<String, dynamic>>[];
+  prefetches.addAll(sqlite);
+  prefetches.addAll(mimalloc);
+  for (final source in prefetches) {
     expect(
       source['type'],
       'file',
@@ -83,14 +81,20 @@ void _expectNativePrefetchesRemainFiles(Object? decoded) {
   }
 }
 
+Object? _readGeneratedSources() {
+  final contents = File(_generatedPubSourcesPath).readAsStringSync();
+  return jsonDecode(contents);
+}
+
 void main() {
   group('Flatpak offline build edge guardrails', () {
     test('generated manifest avoids unsupported bare-dash mappings', () {
-      _expectNoBareDashSequenceEntries(File(_manifestPath).readAsStringSync());
+      final manifest = File(_manifestPath).readAsStringSync();
+      _expectNoBareDashSequenceEntries(manifest);
     });
 
     test('a bare-dash mapping fails closed', () {
-      const String fixture = '''
+      const fixture = '''
 sources:
   -
     type: archive
@@ -104,18 +108,18 @@ sources:
     });
 
     test('SQLite and mimalloc prefetches remain file sources', () {
-      final Object? decoded =
-          jsonDecode(File(_generatedPubSourcesPath).readAsStringSync());
-      _expectNativePrefetchesRemainFiles(decoded);
+      _expectNativePrefetchesRemainFiles(_readGeneratedSources());
     });
 
     test('changing a native prefetch to archive is rejected', () {
-      final Object? decoded =
-          jsonDecode(File(_generatedPubSourcesPath).readAsStringSync());
-      final List<Map<String, dynamic>> sources =
-          _sourceMaps(decoded).map(Map<String, dynamic>.from).toList();
-      final int index = sources.indexWhere(_isSqlitePrefetch);
-      expect(index, isNonNegative);
+      final decoded = _readGeneratedSources();
+      final sources = <Map<String, dynamic>>[];
+      for (final source in _sourceMaps(decoded)) {
+        sources.add(Map<String, dynamic>.from(source));
+      }
+
+      final index = sources.indexWhere(_isSqlitePrefetch);
+      expect(index, greaterThanOrEqualTo(0));
       sources[index]['type'] = 'archive';
 
       expect(
