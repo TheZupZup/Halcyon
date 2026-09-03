@@ -1,0 +1,149 @@
+name: Google Play Closed Testing
+
+# Publishes the release-signed AAB produced by Android Release Build to a
+# non-production Google Play testing track. The workflow is intentionally
+# separate from the build workflow: the AAB is built once, then reused here.
+#
+# Before Google Play is configured, this workflow exits successfully with a
+# notice. See docs/google-play-publishing.md for the one-time setup.
+#
+# Safety rules:
+#   * only successful tag-triggered Android Release Build runs are considered;
+#   * only the release-signed AAB artifact is accepted;
+#   * manual release builds are never auto-published;
+#   * the production track is explicitly rejected.
+
+on:
+  workflow_run:
+    workflows:
+      - Android Release Build
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  GOOGLE_PLAY_PACKAGE_NAME: io.github.thezupzup.linthra
+  GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+  GOOGLE_PLAY_TRACK: ${{ vars.GOOGLE_PLAY_TRACK }}
+
+jobs:
+  publish-closed-test:
+    name: Publish signed AAB to Google Play testing
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check Google Play configuration
+        id: config
+        shell: bash
+        run: |
+          enabled=true
+
+          if [ -z "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            echo "::notice::Google Play publishing is not connected yet: GOOGLE_PLAY_SERVICE_ACCOUNT_JSON is missing."
+            enabled=false
+          fi
+
+          if [ -z "$GOOGLE_PLAY_TRACK" ]; then
+            echo "::notice::Google Play publishing is not connected yet: GOOGLE_PLAY_TRACK is missing."
+            enabled=false
+          elif [ "$GOOGLE_PLAY_TRACK" = "production" ]; then
+            echo "::error::Automatic production publishing is intentionally disabled. Set GOOGLE_PLAY_TRACK to a testing track."
+            exit 1
+          fi
+
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+
+          if [ "$enabled" != "true" ]; then
+            echo "Google Play upload skipped. Complete docs/google-play-publishing.md to enable it." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Find release-signed AAB artifact
+        id: artifact
+        if: steps.config.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          count="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts" \
+              --jq '[.artifacts[] | select(.name == "linthra-release-signed-aab" and .expired == false)] | length'
+          )"
+
+          if [ "$count" = "0" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::The source release did not produce a release-signed AAB. Google Play upload skipped."
+            echo "Google Play upload skipped because the source build was not release-signed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ "$count" != "1" ]; then
+            echo "::error::Expected exactly one linthra-release-signed-aab artifact, found $count."
+            exit 1
+          fi
+
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
+      - name: Download release-signed AAB
+        if: >-
+          steps.config.outputs.enabled == 'true' &&
+          steps.artifact.outputs.available == 'true'
+        uses: actions/download-artifact@v7
+        with:
+          name: linthra-release-signed-aab
+          path: play-upload
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Verify downloaded bundle
+        id: bundle
+        if: >-
+          steps.config.outputs.enabled == 'true' &&
+          steps.artifact.outputs.available == 'true'
+        shell: bash
+        run: |
+          mapfile -t bundles < <(find play-upload -type f -name '*.aab' -print)
+
+          if [ "${#bundles[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one downloaded AAB, found ${#bundles[@]}."
+            exit 1
+          fi
+
+          echo "path=${bundles[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to Google Play testing
+        if: >-
+          steps.config.outputs.enabled == 'true' &&
+          steps.artifact.outputs.available == 'true'
+        # v1.1.5 — pinned so a third-party action update cannot silently change
+        # the release pipeline. Update the SHA deliberately with its guardrail test.
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5
+        with:
+          serviceAccountJsonPlainText: ${{ env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: ${{ env.GOOGLE_PLAY_PACKAGE_NAME }}
+          releaseFiles: ${{ steps.bundle.outputs.path }}
+          tracks: ${{ env.GOOGLE_PLAY_TRACK }}
+          status: completed
+
+      - name: Record publication summary
+        if: >-
+          steps.config.outputs.enabled == 'true' &&
+          steps.artifact.outputs.available == 'true'
+        shell: bash
+        run: |
+          {
+            echo "### Google Play testing upload"
+            echo ""
+            echo "- Package: \`$GOOGLE_PLAY_PACKAGE_NAME\`"
+            echo "- Track: \`$GOOGLE_PLAY_TRACK\`"
+            echo "- Source run: \`${{ github.event.workflow_run.id }}\`"
+            echo "- Source commit: \`${{ github.event.workflow_run.head_sha }}\`"
+            echo "- Bundle: \`${{ steps.bundle.outputs.path }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
