@@ -160,7 +160,9 @@ class ContentUriAudioFileScanner implements AudioFileScanner {
 /// Desktop/Linux selections are filesystem paths and go straight to
 /// [IoAudioFileScanner], preserving existing behavior exactly. Android SAF
 /// selections are `content://` URIs and go to [ContentUriAudioFileScanner].
-/// This is the only place that knows about the platform split.
+/// MediaStore is handled before this scanner by [LocalMusicSource]; seeing that
+/// sentinel here is a programming error and fails closed rather than treating it
+/// as a filesystem path.
 class PlatformAudioFileScanner implements AudioFileScanner {
   const PlatformAudioFileScanner({
     AudioFileScanner filesystemScanner = const IoAudioFileScanner(),
@@ -179,6 +181,12 @@ class PlatformAudioFileScanner implements AudioFileScanner {
         return _filesystemScanner.listFiles(folder);
       case FolderLocationKind.contentUri:
         return _contentUriScanner.listFiles(folder);
+      case FolderLocationKind.androidMediaStore:
+        throw FolderScanException(
+          'Android MediaStore must be scanned through the media library bridge.',
+          folder: folder,
+          code: 'media_store_wrong_scanner',
+        );
     }
   }
 }
