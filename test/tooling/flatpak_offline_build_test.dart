@@ -18,6 +18,12 @@ const Map<String, String> _flutterArchDirectories = <String, String>{
   'aarch64': 'arm64',
 };
 
+/// pub's own cache layout inside the build. `flutter pub get --offline`
+/// resolves packages from the first and validates them against the second, so
+/// a generated source that lands anywhere else is staged but unusable.
+const String _hostedRoot = '.pub-cache/hosted/pub.dev';
+const String _hostedHashRoot = '.pub-cache/hosted-hashes/pub.dev';
+
 typedef _HostedPackage = ({String version, String sha256});
 
 typedef _FetchContentDeclaration = ({
@@ -394,6 +400,29 @@ String _linthraModule(String manifest) {
   return manifest.substring(start, nextModule);
 }
 
+/// The `generated/...json` files a manifest module includes under [key].
+///
+/// Auditing a generated file by its path on disk proves nothing on its own: if
+/// regeneration stops referencing it, the file lingers and every assertion
+/// against it still passes while the real build stages nothing. Reading the
+/// list out of the module keeps the audit pointed at what actually gets built.
+List<String> _generatedIncludes(String module, String key) {
+  final int start = module.indexOf('\n    $key:\n');
+  if (start == -1) return const <String>[];
+
+  final List<String> includes = <String>[];
+  for (final String line
+      in const LineSplitter().convert(module.substring(start + 1)).skip(1)) {
+    if (line.trim().isEmpty) continue;
+    if (line.length - line.trimLeft().length <= 4) break;
+    final RegExpMatch? match = RegExp(
+      r'^- (generated/\S+\.json)$',
+    ).firstMatch(line.trim());
+    if (match != null) includes.add(match.group(1)!);
+  }
+  return includes;
+}
+
 /// The exact expansion each `flatpak-builder` phase is invoked through.
 const String _builderToken = r'"${BUILDER[@]}"';
 
@@ -434,6 +463,19 @@ void main() {
         .where((File file) => file.path.endsWith('.json'))
         .toList();
     expect(generatedModules, isNotEmpty);
+
+    // The manifest decides what gets built. A generated module the linthra
+    // module no longer includes is an orphan every assertion below would still
+    // happily pass.
+    expect(
+      generatedModules.map((File file) => file.path).toSet(),
+      _generatedIncludes(
+        linthraModule,
+        'modules',
+      ).map((String include) => 'flatpak/$include').toSet(),
+      reason: 'The generated modules on disk and the ones the linthra module '
+          'includes have drifted apart',
+    );
 
     final List<File> sdkModules = generatedModules
         .where((File file) => file.path.contains('flutter-sdk-'))
@@ -483,13 +525,24 @@ void main() {
       reason: 'The generated Flutter SDK checkout is not pinned to a commit',
     );
 
-    final String pubSourcesText =
-        _read('flatpak/generated/sources/pubspec.json');
-    final Object? pubSources = jsonDecode(pubSourcesText);
-    _expectRemoteSourcesHashed(
-      pubSources,
-      'flatpak/generated/sources/pubspec.json',
+    // Same rule for the pub sources: read the path out of the module rather
+    // than off disk, so an audited-but-unreferenced file cannot pass while the
+    // build stages no `.pub-cache` for `setup-flutter.sh` to resolve from.
+    final List<String> pubSourceIncludes = _generatedIncludes(
+      linthraModule,
+      'sources',
     );
+    expect(
+      pubSourceIncludes,
+      hasLength(1),
+      reason: 'The linthra module does not include exactly one generated pub '
+          'source file',
+    );
+
+    final String pubSourcesPath = 'flatpak/${pubSourceIncludes.single}';
+    final String pubSourcesText = _read(pubSourcesPath);
+    final Object? pubSources = jsonDecode(pubSourcesText);
+    _expectRemoteSourcesHashed(pubSources, pubSourcesPath);
 
     final List<Map<String, dynamic>> pubSourceMaps = _maps(pubSources).toList();
     final Map<String, _HostedPackage> hosted =
@@ -498,7 +551,7 @@ void main() {
 
     for (final MapEntry<String, _HostedPackage> package in hosted.entries) {
       final String basename = '${package.key}-${package.value.version}';
-      final String destination = '.pub-cache/hosted/pub.dev/$basename';
+      final String destination = '$_hostedRoot/$basename';
       final String hashFilename = '$basename.sha256';
 
       final List<Map<String, dynamic>> archives = pubSourceMaps
@@ -518,16 +571,22 @@ void main() {
         reason: '$basename archive SHA-256 drifted from pubspec.lock',
       );
 
+      // The hash has to be an inline source under pub's hosted-hashes dir:
+      // that is where `flutter pub get --offline` looks to validate the
+      // cached package. A correct hash staged anywhere else is dead weight.
       final List<Map<String, dynamic>> hashEntries = pubSourceMaps
           .where(
             (Map<String, dynamic> source) =>
+                source['type'] == 'inline' &&
+                source['dest'] == _hostedHashRoot &&
                 source['dest-filename'] == hashFilename,
           )
           .toList();
       expect(
         hashEntries,
         hasLength(1),
-        reason: '$basename has no generated hosted-hash entry',
+        reason: '$basename has no generated hosted-hash entry under '
+            '$_hostedHashRoot',
       );
       expect(
         hashEntries.single['contents'],
@@ -585,7 +644,7 @@ void main() {
       filename: sqlite.url.split('/').last,
       requiredArches: nativeArches,
       label: 'SQLite',
-      context: 'flatpak/generated/sources/pubspec.json',
+      context: pubSourcesPath,
     );
 
     // media_kit_libs_linux: the allocator fetch is switched off in CMake, and
@@ -623,7 +682,7 @@ void main() {
       filename: mimallocFilenames.single,
       requiredArches: nativeArches,
       label: 'mimalloc',
-      context: 'flatpak/generated/sources/pubspec.json',
+      context: pubSourcesPath,
     );
 
     final String smoke = _read('scripts/flatpak_offline_build_smoke.sh');

@@ -40,7 +40,9 @@ step, not Flatpak build-time networking.
 `flatpak/generated/sources/pubspec.json` contains one versioned pub.dev archive
 for every hosted package in `pubspec.lock`, with a SHA-256 and a destination
 inside the build's private `.pub-cache`. Matching hosted-hash entries are also
-pre-created. Remote `type: file` inputs, including native plugin inputs such as
+pre-created, as inline sources under `.pub-cache/hosted-hashes/pub.dev`: that is
+where `flutter pub get --offline` reads them to validate a cached package, so a
+correct hash staged anywhere else is dead weight. Remote `type: file` inputs, including native plugin inputs such as
 SQLite and mimalloc, are required to carry their own SHA-256 as well.
 
 The SDK module itself checks Flutter out from Git rather than from a hashed
@@ -128,8 +130,11 @@ suite. It checks that:
 - the generated build uses the offline setup script;
 - `--share=network` appears only in the top-level runtime `finish-args`, never
   in build options for the app or a generated module;
+- the generated files it audits are the ones the `linthra` module actually
+  includes, so an orphaned generated file cannot pass for a staged one;
 - every hosted package/version in `pubspec.lock` has a generated pub-cache
-  archive and hosted-hash entry;
+  archive, and an inline hosted-hash entry under
+  `.pub-cache/hosted-hashes/pub.dev` where `pub get --offline` reads it;
 - every remote archive/file source it audits has its **own** valid SHA-256,
   including generated Flutter SDK, SQLite and mimalloc inputs;
 - every remote `git` source pins a full commit, not just a tag or branch;
