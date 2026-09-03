@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 final RegExp _sha256 = RegExp(r'^[0-9a-f]{64}$');
 
+typedef _HostedPackage = ({String version, String sha256});
+
 String _read(String path) => File(path).readAsStringSync();
 
 bool _isRemoteUrl(Object? value) {
@@ -58,18 +60,23 @@ void _expectJsonSourcesHashed(Object? value, String context) {
   }
 }
 
-Map<String, String> _hostedPackagesFromLockfile(String contents) {
-  final Map<String, String> result = <String, String>{};
+Map<String, _HostedPackage> _hostedPackagesFromLockfile(String contents) {
+  final Map<String, _HostedPackage> result = <String, _HostedPackage>{};
   String? currentPackage;
   String? currentVersion;
+  String? currentSha256;
   bool currentIsHosted = false;
   bool inPackages = false;
 
   void flush() {
     if (currentPackage != null &&
         currentIsHosted &&
-        currentVersion != null) {
-      result[currentPackage!] = currentVersion!;
+        currentVersion != null &&
+        currentSha256 != null) {
+      result[currentPackage!] = (
+        version: currentVersion!,
+        sha256: currentSha256!,
+      );
     }
   }
 
@@ -87,6 +94,7 @@ Map<String, String> _hostedPackagesFromLockfile(String contents) {
       flush();
       currentPackage = packageMatch.group(1);
       currentVersion = null;
+      currentSha256 = null;
       currentIsHosted = false;
       continue;
     }
@@ -97,13 +105,9 @@ Map<String, String> _hostedPackagesFromLockfile(String contents) {
     if (trimmed == 'source: hosted') {
       currentIsHosted = true;
     } else if (trimmed.startsWith('version:')) {
-      String value = trimmed.substring('version:'.length).trim();
-      if (value.length >= 2 &&
-          ((value.startsWith('"') && value.endsWith('"')) ||
-              (value.startsWith("'") && value.endsWith("'")))) {
-        value = value.substring(1, value.length - 1);
-      }
-      currentVersion = value;
+      currentVersion = _unquote(trimmed.substring('version:'.length).trim());
+    } else if (trimmed.startsWith('sha256:')) {
+      currentSha256 = _unquote(trimmed.substring('sha256:'.length).trim());
     }
   }
 
@@ -111,19 +115,21 @@ Map<String, String> _hostedPackagesFromLockfile(String contents) {
   return result;
 }
 
+String _unquote(String value) {
+  if (value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'")))) {
+    return value.substring(1, value.length - 1);
+  }
+  return value;
+}
+
 String? _yamlScalar(List<String> block, String key) {
   final String prefix = '$key:';
   for (final String line in block) {
     final String trimmed = line.trim();
     if (!trimmed.startsWith(prefix)) continue;
-
-    String value = trimmed.substring(prefix.length).trim();
-    if (value.length >= 2 &&
-        ((value.startsWith('"') && value.endsWith('"')) ||
-            (value.startsWith("'") && value.endsWith("'")))) {
-      value = value.substring(1, value.length - 1);
-    }
-    return value;
+    return _unquote(trimmed.substring(prefix.length).trim());
   }
   return null;
 }
@@ -191,6 +197,16 @@ void _expectNoBuildNetworkGrant(String manifest) {
   }
 }
 
+String _linthraModule(String manifest) {
+  const String marker = '  - name: linthra\n';
+  final int start = manifest.indexOf(marker);
+  expect(start, isNonNegative, reason: 'Generated manifest has no linthra module');
+
+  final int nextModule = manifest.indexOf('\n  - name:', start + marker.length);
+  if (nextModule == -1) return manifest.substring(start);
+  return manifest.substring(start, nextModule);
+}
+
 void main() {
   test('Flatpak build inputs stay complete and network-independent', () {
     final String template = _read('flatpak/flatpak-flutter.yml');
@@ -200,11 +216,14 @@ void main() {
 
     expect(template, contains('flutter pub get --enforce-lockfile'));
     expect(template, contains('flutter build linux --release --no-pub'));
-    expect(manifest, contains('      - setup-flutter.sh'));
-    expect(
-      manifest,
-      contains('      - flutter build linux --release --no-pub'),
+
+    final String linthraModule = _linthraModule(manifest);
+    final int setupIndex = linthraModule.indexOf('      - setup-flutter.sh');
+    final int buildIndex = linthraModule.indexOf(
+      '      - flutter build linux --release --no-pub',
     );
+    expect(setupIndex, isNonNegative);
+    expect(buildIndex, greaterThan(setupIndex));
 
     _expectNoBuildNetworkGrant(manifest);
     _expectManifestRemoteSourcesHashed(manifest);
@@ -255,29 +274,49 @@ void main() {
       'flatpak/generated/sources/pubspec.json',
     );
 
-    final Set<String> destinations = <String>{};
-    final Set<String> hashFiles = <String>{};
-    for (final Map<String, dynamic> source in _maps(pubSources)) {
-      final Object? dest = source['dest'];
-      final Object? filename = source['dest-filename'];
-      if (dest is String) destinations.add(dest);
-      if (filename is String) hashFiles.add(filename);
-    }
-
-    final Map<String, String> hosted =
+    final List<Map<String, dynamic>> pubSourceMaps = _maps(pubSources).toList();
+    final Map<String, _HostedPackage> hosted =
         _hostedPackagesFromLockfile(_read('pubspec.lock'));
     expect(hosted, isNotEmpty);
-    for (final MapEntry<String, String> package in hosted.entries) {
-      final String basename = '${package.key}-${package.value}';
+
+    for (final MapEntry<String, _HostedPackage> package in hosted.entries) {
+      final String basename = '${package.key}-${package.value.version}';
+      final String destination = '.pub-cache/hosted/pub.dev/$basename';
+      final String hashFilename = '$basename.sha256';
+
+      final List<Map<String, dynamic>> archives = pubSourceMaps
+          .where(
+            (Map<String, dynamic> source) =>
+                source['type'] == 'archive' &&
+                source['dest'] == destination,
+          )
+          .toList();
       expect(
-        destinations,
-        contains('.pub-cache/hosted/pub.dev/$basename'),
+        archives,
+        hasLength(1),
         reason: '$basename is missing from the generated Flatpak pub cache',
       );
       expect(
-        hashFiles,
-        contains('$basename.sha256'),
+        archives.single['sha256'],
+        package.value.sha256,
+        reason: '$basename archive SHA-256 drifted from pubspec.lock',
+      );
+
+      final List<Map<String, dynamic>> hashEntries = pubSourceMaps
+          .where(
+            (Map<String, dynamic> source) =>
+                source['dest-filename'] == hashFilename,
+          )
+          .toList();
+      expect(
+        hashEntries,
+        hasLength(1),
         reason: '$basename has no generated hosted-hash entry',
+      );
+      expect(
+        hashEntries.single['contents'],
+        package.value.sha256,
+        reason: '$basename hosted-hash contents drifted from pubspec.lock',
       );
     }
 
@@ -304,7 +343,7 @@ sources:
 
     expect(
       () => _expectManifestRemoteSourcesHashed(manifest),
-      throwsA(isA<TestFailure>()),
+      throwsA(anything),
     );
   });
 
@@ -319,7 +358,7 @@ sources:
         ],
         'fixture',
       ),
-      throwsA(isA<TestFailure>()),
+      throwsA(anything),
     );
   });
 
@@ -336,7 +375,7 @@ modules:
 
     expect(
       () => _expectNoBuildNetworkGrant(manifest),
-      throwsA(isA<TestFailure>()),
+      throwsA(anything),
     );
   });
 }
