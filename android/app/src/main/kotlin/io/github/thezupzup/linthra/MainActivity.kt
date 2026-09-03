@@ -43,6 +43,14 @@ class MainActivity : AudioServiceActivity() {
         InstallHistoryChannel(applicationContext)
     }
 
+    // Optional device-wide local-library path. Unlike SAF, this uses Android's
+    // explicit Music and audio runtime permission and MediaStore. Kept on its
+    // own channel so broad-library access is auditable separately from targeted
+    // folder grants.
+    private val androidMediaLibraryChannel by lazy {
+        AndroidMediaLibraryChannel(this)
+    }
+
     override fun onResume() {
         super.onResume()
         displayRefreshRate.onResume()
@@ -110,6 +118,9 @@ class MainActivity : AudioServiceActivity() {
                 }
             }
 
+        // Android's explicit Music and audio permission + MediaStore library.
+        androidMediaLibraryChannel.configure(flutterEngine.dartExecutor.binaryMessenger)
+
         // Android metering-aware network state: one-shot current value plus a
         // change stream. Separate from SAF/share/icon channels so the data guard
         // stays small and auditable.
@@ -137,6 +148,17 @@ class MainActivity : AudioServiceActivity() {
         ).setMethodCallHandler { call, result ->
             shareChannel.handle(call, result)
         }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        if (androidMediaLibraryChannel.onRequestPermissionsResult(requestCode, grantResults)) {
+            return
+        }
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
     private fun startFolderPick(result: MethodChannel.Result) {
