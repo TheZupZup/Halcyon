@@ -14,9 +14,11 @@ import 'local_music_controller.dart';
 
 /// Settings home for music already stored on the device.
 ///
-/// Android deliberately exposes two privacy levels: the normal system-visible
-/// Music and audio permission for a device-wide MediaStore scan, or a targeted
-/// SAF folder grant. The UI names both so no local access is a "ghost" setting.
+/// Android deliberately exposes two privacy levels: device-wide MediaStore
+/// access, or a targeted SAF folder grant. Android 13+ names the device-wide
+/// runtime permission "Music and audio"; Android 12 and older use the legacy
+/// shared-storage read permission instead. The UI states that distinction so
+/// no local access is a "ghost" setting.
 class LocalMusicSettingsSection extends ConsumerWidget {
   const LocalMusicSettingsSection({super.key});
 
@@ -142,9 +144,11 @@ class LocalMusicSettingsSection extends ConsumerWidget {
 
 String _blurbFor(HostPlatform host) {
   if (host.isAndroid) {
-    return 'Choose all music on this device to use Android’s visible Music and '
-        'audio permission, or select one folder for narrower Android folder '
-        'access. Linthra never requests All files access.';
+    return 'Choose all music on this device for device-wide MediaStore access, '
+        'or select one folder for narrower Android folder access. Android 13+ '
+        'uses the Music and audio permission; Android 12 and older use the '
+        'legacy shared-storage read permission. Linthra never requests All '
+        'files access.';
   }
   return 'Play music from a folder on this computer or an external drive. '
       'Linthra reads only the folder you choose in the system file chooser — '
@@ -182,7 +186,7 @@ class _AndroidPrivacyStatus extends StatelessWidget {
             Text('Privacy & permissions', style: theme.textTheme.titleSmall),
             const SizedBox(height: AppSpacing.xs),
             Text(
-              'Music and audio: ${_permissionLabel(permission)}',
+              'Device music access: ${_permissionLabel(permission)}',
               style: theme.textTheme.bodyMedium,
             ),
             const SizedBox(height: AppSpacing.xs),
@@ -228,7 +232,9 @@ class _AndroidPrivacyStatus extends StatelessWidget {
   static String _accessExplanation(FolderLocation? location) {
     if (location?.isAndroidMediaStore ?? false) {
       return 'Local library mode: all device music through Android MediaStore. '
-          'Revoking Music and audio access stops this scan.';
+          'Android 13+ exposes Music and audio; older Android versions use the '
+          'legacy shared-storage read permission for this device-wide mode. '
+          'Revoking that access stops this scan.';
     }
     if (location?.isContentUri ?? false) {
       return 'Selected folder: targeted Storage Access Framework grant. This '
@@ -286,8 +292,8 @@ class _SelectedFolderView extends StatelessWidget {
           const SizedBox(height: AppSpacing.xs),
           Text(
             isDeviceLibrary
-                ? 'Music and audio access is currently off. Your indexed '
-                    'library stays in Linthra; re-enable access to rescan.'
+                ? 'Device music access is currently off. Your indexed library '
+                    'stays in Linthra; re-enable access to rescan.'
                 : 'Linthra can no longer reach this folder. Select it again to '
                     'restore access — your library stays as it is until you do.',
             style: theme.textTheme.bodySmall
@@ -363,8 +369,8 @@ class _ScanSummary extends StatelessWidget {
   static String? _hint(LocalScanReport report, HostPlatform host) {
     if (report.importedTracks > 0) return null;
     if (report.error == LocalScanError.mediaPermission) {
-      return 'Music and audio access is off. Re-enable it in Android settings '
-          'or select a folder instead.';
+      return 'Device music access is off. Re-enable it in Android settings or '
+          'select a folder instead.';
     }
     final bool blocked = report.hadError ||
         report.readFailures > 0 ||
