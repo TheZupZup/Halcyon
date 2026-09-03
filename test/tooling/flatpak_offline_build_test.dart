@@ -220,8 +220,7 @@ List<String> _builderInvocations(String smoke) {
 void main() {
   test('Flatpak build inputs stay complete and network-independent', () {
     final String template = _read('flatpak/flatpak-flutter.yml');
-    final String manifest =
-        _read('flatpak/io.github.thezupzup.linthra.yml');
+    final String manifest = _read('flatpak/io.github.thezupzup.linthra.yml');
     final String cmake = _read('linux/CMakeLists.txt');
 
     expect(template, contains('flutter pub get --enforce-lockfile'));
@@ -297,8 +296,7 @@ void main() {
       final List<Map<String, dynamic>> archives = pubSourceMaps
           .where(
             (Map<String, dynamic> source) =>
-                source['type'] == 'archive' &&
-                source['dest'] == destination,
+                source['type'] == 'archive' && source['dest'] == destination,
           )
           .toList();
       expect(
