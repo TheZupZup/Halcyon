@@ -70,12 +70,14 @@ class MethodChannelSafDocumentLister implements SafDocumentLister {
           final Object? name = entry['name'];
           final Object? mime = entry['mime'];
           if (uri is String && uri.isNotEmpty && name is String) {
-            documents.add(SafAudioDocument(
-              uri: uri,
-              name: name,
-              mimeType: mime is String ? mime : null,
-              metadata: parseMetadata(entry),
-            ));
+            documents.add(
+              SafAudioDocument(
+                uri: uri,
+                name: name,
+                mimeType: mime is String ? mime : null,
+                metadata: parseMetadata(entry),
+              ),
+            );
           }
         }
       }
@@ -95,8 +97,9 @@ class MethodChannelSafDocumentLister implements SafDocumentLister {
 
   /// Builds the [LocalAudioMetadata] for one document [entry] from the optional
   /// tag fields the native walk attached (`title`, `artist`, `albumArtist`,
-  /// `album`, `track`, `durationMs`, `artworkUri`), or null when none are present
-  /// — an older native build, or a file the platform could not read tags from.
+  /// `album`, `albumId`, `track`, `durationMs`, `artworkUri`), or null when none
+  /// are present — an older native build, or a file the platform could not read
+  /// tags from.
   ///
   /// Pure and tolerant so it is unit-testable and never throws on a malformed or
   /// partial reply: a non-string text field, a `track` like `"3/12"`, a
@@ -109,6 +112,7 @@ class MethodChannelSafDocumentLister implements SafDocumentLister {
     final String? artist = _string(entry['artist']);
     final String? albumArtist = _string(entry['albumArtist']);
     final String? album = _string(entry['album']);
+    final String? albumId = _string(entry['albumId']);
     final int? trackNumber = _trackNumber(entry['track']);
     final Duration? duration = _durationMs(entry['durationMs']);
     final Uri? artworkUri = _artworkUri(entry['artworkUri']);
@@ -116,6 +120,7 @@ class MethodChannelSafDocumentLister implements SafDocumentLister {
         artist == null &&
         albumArtist == null &&
         album == null &&
+        albumId == null &&
         trackNumber == null &&
         duration == null &&
         artworkUri == null) {
@@ -126,6 +131,7 @@ class MethodChannelSafDocumentLister implements SafDocumentLister {
       artist: artist,
       albumArtist: albumArtist,
       album: album,
+      albumId: albumId,
       trackNumber: trackNumber,
       duration: duration,
       artworkUri: artworkUri,
