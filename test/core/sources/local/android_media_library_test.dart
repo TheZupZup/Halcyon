@@ -59,7 +59,8 @@ void main() {
     });
 
     test('MediaStore parser preserves the source-namespaced album id', () {
-      final SafScanResult result = MethodChannelSafDocumentLister.parseScanResult(
+      final SafScanResult result =
+          MethodChannelSafDocumentLister.parseScanResult(
         <Object?, Object?>{
           'documents': <Object?>[
             <Object?, Object?>{
