@@ -14,6 +14,7 @@ on:
       - 'flatpak/**'
       - 'linux/CMakeLists.txt'
       - 'linux/packaging/**'
+      - 'linux/runner/**'
       - 'pubspec.yaml'
       - 'pubspec.lock'
       - 'scripts/check_linux_runner.py'
@@ -21,6 +22,7 @@ on:
       - 'scripts/regenerate_flatpak_sources.sh'
       - 'test/tooling/check_linux_runner_test.py'
       - 'third_party/**'
+      - 'tool/branding/linthra_icon.svg'
   pull_request:
     paths:
       - '.github/workflows/flatpak-build.yml'
@@ -28,6 +30,7 @@ on:
       - 'flatpak/**'
       - 'linux/CMakeLists.txt'
       - 'linux/packaging/**'
+      - 'linux/runner/**'
       - 'pubspec.yaml'
       - 'pubspec.lock'
       - 'scripts/check_linux_runner.py'
@@ -35,6 +38,7 @@ on:
       - 'scripts/regenerate_flatpak_sources.sh'
       - 'test/tooling/check_linux_runner_test.py'
       - 'third_party/**'
+      - 'tool/branding/linthra_icon.svg'
   workflow_dispatch:
 
 # Fork PRs run this workflow too, so keep it read-only and secret-free.
