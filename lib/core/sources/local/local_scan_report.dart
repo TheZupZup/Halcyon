@@ -6,11 +6,14 @@ enum LocalScanError {
   /// Access Framework (revoked grant, unresolvable provider, unreadable path).
   safTraversal,
 
+  /// Android's device-wide Music and audio / MediaStore access is unavailable
+  /// or revoked. This is distinct from SAF because the recovery action is the
+  /// normal Android app-permission screen, not re-picking a folder.
+  mediaPermission,
+
   /// The selected folder itself could not be opened on a filesystem scan: it
   /// is missing, unreadable, or (in the Flatpak) the portal document that
-  /// exposed it was revoked. Recoverable by reselecting the folder, and
-  /// deliberately distinct from [safTraversal] so a desktop report does not
-  /// read as an Android permission problem.
+  /// exposed it was revoked. Recoverable by reselecting the folder.
   folderUnavailable,
 
   /// Any other unexpected scan failure (a `dart:io` fault, a plugin error).
@@ -19,12 +22,6 @@ enum LocalScanError {
 
 /// A secret-free snapshot of the last local-folder scan, so a bug report can
 /// show *why* a scan turned up empty without revealing anything private.
-///
-/// Security: by construction this holds only booleans, counts, and a fixed
-/// [LocalScanError] enum name. There is deliberately **no** field for the folder
-/// path/URI, a file name, or a raw error message — the things that could leak a
-/// user's library layout. This mirrors the "diagnostic, never secret" rule the
-/// rest of the diagnostics utilities follow.
 class LocalScanReport {
   const LocalScanReport({
     required this.folderSelected,
@@ -53,45 +50,15 @@ class LocalScanReport {
         readFailures = 0,
         recursive = true;
 
-  /// Whether a music folder was selected at all when the scan ran.
   final bool folderSelected;
-
-  /// Whether the selection was an Android SAF `content://` tree URI (vs a plain
-  /// filesystem path). Tells a "no music found" report apart by storage kind.
   final bool isContentUri;
-
-  /// How many non-directory entries the scan walked (audio and non-audio).
   final int filesVisited;
-
-  /// How many directories the scan successfully listed — the selected root plus
-  /// any readable subfolders. Surfaced on the SAF path (the Android case);
-  /// filesystem-path scans report 0 here.
   final int foldersVisited;
-
-  /// How many of those entries looked like audio (a recognized extension or an
-  /// `audio/*` content type) — the candidates before the catalog's own filter.
   final int audioCandidates;
-
-  /// How many candidates actually became tracks in the catalog. Normally equal
-  /// to [audioCandidates] — the catalog's supported-types filter mirrors the
-  /// provider's — but kept distinct so a future divergence stays visible.
   final int importedTracks;
-
-  /// How many entries were skipped because they were not a recognized audio
-  /// file (the usual `cover.jpg`/`notes.txt` case).
   final int skippedUnsupported;
-
-  /// How many entries or subfolders could not be read and were skipped — the
-  /// scoped-storage / removable-SD-card signal. A non-zero value with zero
-  /// candidates points at a permission problem rather than an empty folder.
   final int readFailures;
-
-  /// Whether the scan descended into subfolders (it always does; surfaced so a
-  /// report can confirm nested artist/album folders were searched).
   final bool recursive;
-
-  /// The failure kind when the scan threw, or null when it completed (even if it
-  /// completed with zero candidates).
   final LocalScanError? error;
 
   bool get hadError => error != null;
