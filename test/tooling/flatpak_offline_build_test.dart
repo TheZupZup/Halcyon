@@ -146,9 +146,7 @@ void _expectManifestRemoteSourcesHashed(String manifest) {
 
     final int indent = line.length - line.trimLeft().length;
     final List<String> block = <String>[line];
-    for (int peerIndex = index + 1;
-        peerIndex < lines.length;
-        peerIndex++) {
+    for (int peerIndex = index + 1; peerIndex < lines.length; peerIndex++) {
       final String peer = lines[peerIndex];
       if (peer.trim().isEmpty) {
         block.add(peer);
@@ -200,7 +198,11 @@ void _expectNoBuildNetworkGrant(String manifest) {
 String _linthraModule(String manifest) {
   const String marker = '  - name: linthra\n';
   final int start = manifest.indexOf(marker);
-  expect(start, isNonNegative, reason: 'Generated manifest has no linthra module');
+  expect(
+    start,
+    isNonNegative,
+    reason: 'Generated manifest has no linthra module',
+  );
 
   final int nextModule = manifest.indexOf('\n  - name:', start + marker.length);
   if (nextModule == -1) return manifest.substring(start);
