@@ -90,7 +90,8 @@ void main() {
       expect(
         buildOptions,
         isNot(contains('--share=network')),
-        reason: 'Runtime network access must never leak into the build sandbox.',
+        reason:
+            'Runtime network access must never leak into the build sandbox.',
       );
 
       final List<FileSystemEntity> sdkModules = Directory(
