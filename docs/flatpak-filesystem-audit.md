@@ -101,8 +101,9 @@ The smoke test does four things without modifying persistent Flatpak overrides:
 
 1. inspects the **installed** package and fails if it exposes a filesystem or
    persist permission;
-2. refuses to run if a local user override grants extra filesystem access,
-   because that would make the result meaningless;
+2. refuses to run if **any global or app-specific override, in either user or
+   system scope**, grants filesystem/persist access, because an effective
+   override would make the package-level result meaningless;
 3. creates a temporary sentinel in the real host home and proves a shell inside
    Linthra's sandbox cannot see or read it;
 4. proves the sandbox's own XDG data/cache directories remain writable, which
@@ -139,16 +140,20 @@ These commands are useful before a release or Flathub submission:
 
 ```bash
 flatpak info --show-permissions io.github.thezupzup.linthra
+flatpak override --user --show
 flatpak override --user --show io.github.thezupzup.linthra
+flatpak override --system --show
+flatpak override --system --show io.github.thezupzup.linthra
 ```
 
-Expected package result:
+Expected package/test result:
 
 - `shared=network;ipc;`
 - Wayland/fallback-X11, DRI and PulseAudio sockets/devices as documented by the
   manifest
-- **no `filesystems=` entry**
-- no filesystem-related persistent override for the validation run
+- **no `filesystems=` entry** in package metadata
+- no filesystem/persist grant in any global/app-specific user/system override
+  used for the validation run
 
 The filesystem audit should be repeated after any future change to Flatpak
 finish-args, local folder selection, cache/offline storage, or downloads.
