@@ -41,10 +41,10 @@ class LocalMusicSource implements MusicSource {
     AndroidMediaLibrary androidMediaLibrary =
         const UnsupportedAndroidMediaLibrary(),
     LocalMetadataReader metadataReader = const UnsupportedLocalMetadataReader(),
-  }) : _scanner = scanner,
-       _safDocumentLister = safDocumentLister,
-       _androidMediaLibrary = androidMediaLibrary,
-       _metadataReader = metadataReader;
+  })  : _scanner = scanner,
+        _safDocumentLister = safDocumentLister,
+        _androidMediaLibrary = androidMediaLibrary,
+        _metadataReader = metadataReader;
 
   /// Filesystem path, SAF tree URI, [FolderLocation.androidMediaStoreAudio], or
   /// null when the user has not configured local music.
@@ -153,13 +153,11 @@ class LocalMusicSource implements MusicSource {
       if (AudioFileTypes.isSupported(path)) {
         final LocalAudioMetadata? metadata =
             await _metadataReader.readFromPath(path);
-        tracks.add(
-          LocalTrackMapper.fromPath(
-            path,
-            metadata: metadata,
-            scanRoot: folder,
-          ),
-        );
+        tracks.add(LocalTrackMapper.fromPath(
+          path,
+          metadata: metadata,
+          scanRoot: folder,
+        ));
       }
     }
     final int visited = files.length;
