@@ -55,9 +55,27 @@ void main() {
     // was never actually tagged, which still produces a tag-shaped bundle
     // name. The name alone is therefore not proof that a release exists.
     test('confirms the tag named by the bundle actually exists', () {
+      // A tag ref specifically: the Commits API would also accept a branch
+      // named like a version, which would prove nothing about a tag.
       expect(
-          workflow, contains(r'gh api "repos/${GITHUB_REPOSITORY}/commits/'));
+        workflow,
+        contains(r'gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/'),
+      );
+      expect(
+        workflow,
+        isNot(contains(r'gh api "repos/${GITHUB_REPOSITORY}/commits/')),
+      );
       expect(workflow, contains('Refusing to publish an untagged build.'));
+    });
+
+    // The stable release workflow creates an annotated tag, whose ref points
+    // at a tag object rather than the commit it names.
+    test('dereferences annotated tags before comparing commits', () {
+      expect(workflow, contains(r'[ "$tag_object_type" = "tag" ]'));
+      expect(
+        workflow,
+        contains(r'gh api "repos/${GITHUB_REPOSITORY}/git/tags/'),
+      );
     });
 
     // Android Release Build checks out its dispatch ref, never the tag, so a

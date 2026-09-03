@@ -177,12 +177,28 @@ jobs:
           tag="${name#linthra-}"
           tag="${tag%-release-signed.aab}"
 
-          # Resolve the tag to its commit. This fails outright when the tag does
-          # not exist, and the Commits API dereferences annotated tags, which is
-          # what the stable release workflow creates.
-          if ! tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha 2>/dev/null)" || [ -z "$tag_sha" ]; then
+          # Look the name up as a tag ref specifically. The Commits API would
+          # also accept a branch or a raw SHA, so a branch named like a version
+          # would satisfy it with no such tag anywhere in the repository.
+          tag_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" --jq '.object.type + " " + .object.sha' 2>/dev/null)" || tag_ref=""
+
+          if [ -z "$tag_ref" ]; then
             echo "::error::Bundle claims tag '${tag}', but no such tag exists in this repository. Refusing to publish an untagged build."
             exit 1
+          fi
+
+          tag_object_type="${tag_ref%% *}"
+          tag_sha="${tag_ref##* }"
+
+          # The stable release workflow creates an annotated tag, whose ref
+          # points at a tag object rather than at the commit. Dereference one
+          # more hop so the comparison below is commit against commit.
+          if [ "$tag_object_type" = "tag" ]; then
+            tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" --jq .object.sha 2>/dev/null)" || tag_sha=""
+            if [ -z "$tag_sha" ]; then
+              echo "::error::Could not resolve annotated tag '${tag}' to a commit."
+              exit 1
+            fi
           fi
 
           # Existing is not the same as matching. Android Release Build checks

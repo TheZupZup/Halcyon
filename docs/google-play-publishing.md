@@ -37,8 +37,10 @@ proof on its own: a manual dispatch can pass a `release_tag` that matches
 `pubspec.yaml` but was never tagged. `Android Release Build` also checks out
 its dispatch ref rather than the tag, so a build started while the branch had
 moved past the tag would carry code the tag does not name. Before uploading,
-the tag is resolved through the API and must point at the commit the build
-actually ran on. Both a missing tag and a mismatched commit fail the run.
+the name is looked up as a tag ref specifically (`git/ref/tags/...`, not a
+generic ref that a branch of the same name would also satisfy), annotated tags
+are dereferenced to their commit, and that commit must equal the one the build
+actually ran on. A missing tag and a mismatched commit fail separately.
 
 If a stable release trips the commit check, the artifact genuinely is not the
 tagged code: re-run the build against the tagged commit rather than relaxing
