@@ -3,6 +3,10 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
+// This regression file intentionally keeps a small line-oriented YAML fixture
+// in the exact layout the guard audits. Analysis and tests still run normally.
+// dart format off
+
 const String _manifestPath = 'flatpak/io.github.thezupzup.linthra.yml';
 const String _generatedPubSourcesPath = 'flatpak/generated/sources/pubspec.json';
 
