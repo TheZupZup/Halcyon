@@ -125,9 +125,8 @@ class LocalMusicSource implements MusicSource {
     }
     final int candidates = result.documents.length;
     final int imported = tracks.length;
-    final int skipped = result.filesVisited > candidates
-        ? result.filesVisited - candidates
-        : 0;
+    final int skipped =
+        result.filesVisited > candidates ? result.filesVisited - candidates : 0;
     return LocalScan(
       tracks: tracks,
       report: LocalScanReport(
