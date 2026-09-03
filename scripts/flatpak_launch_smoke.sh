@@ -9,7 +9,7 @@
 set -euo pipefail
 
 APP_ID="io.github.thezupzup.linthra"
-REMOTE_NAME="linthra-ci-smoke"
+REMOTE_NAME="linthra-ci-smoke-$$"
 REPO_PATH="${1:-repo-ci}"
 WINDOW_TITLE="Linthra"
 TIMEOUT_SECONDS="${LINTHRA_FLATPAK_LAUNCH_TIMEOUT:-30}"
@@ -27,6 +27,14 @@ command -v dbus-run-session >/dev/null 2>&1 || fail "dbus-run-session is not ins
 REPO_PATH="$(cd "$REPO_PATH" && pwd)" || fail "local Flatpak repo not found: $REPO_PATH"
 [[ -f "$REPO_PATH/config" ]] || fail "not a Flatpak repository: $REPO_PATH"
 
+# Never replace or remove a contributor's existing Linthra installation. CI
+# starts clean, while a local reproduction must opt into a clean environment
+# instead of accidentally launching an older installed build.
+if flatpak --user info "$APP_ID" >/dev/null 2>&1 ||
+  flatpak --system info "$APP_ID" >/dev/null 2>&1; then
+  fail "$APP_ID is already installed; remove it or run this smoke in a clean user environment"
+fi
+
 cleanup() {
   flatpak kill "$APP_ID" >/dev/null 2>&1 || true
   flatpak --user uninstall -y "$APP_ID" >/dev/null 2>&1 || true
@@ -34,9 +42,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# This remote points only at the unsigned repository produced by the same CI
-# job. --no-gpg-verify must never be used for Flathub or another public remote.
-flatpak --user remote-delete "$REMOTE_NAME" >/dev/null 2>&1 || true
+# This uniquely named remote points only at the unsigned repository produced by
+# the same CI job. --no-gpg-verify must never be used for Flathub or another
+# public remote.
 flatpak --user remote-add \
   --no-gpg-verify \
   "$REMOTE_NAME" \
