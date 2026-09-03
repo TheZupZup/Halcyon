@@ -95,7 +95,7 @@ jobs:
         if: >-
           steps.config.outputs.enabled == 'true' &&
           steps.artifact.outputs.available == 'true'
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: linthra-release-signed-aab
           path: play-upload

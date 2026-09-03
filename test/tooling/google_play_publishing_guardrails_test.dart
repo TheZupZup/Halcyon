@@ -66,7 +66,7 @@ void main() {
 
   group('Google Play publisher safety', () {
     test('never accepts production as an automatic target', () {
-      expect(workflow, contains('[ "$GOOGLE_PLAY_TRACK" = "production" ]'));
+      expect(workflow, contains(r'[ "$GOOGLE_PLAY_TRACK" = "production" ]'));
       expect(
         workflow,
         contains('Automatic production publishing is intentionally disabled.'),
