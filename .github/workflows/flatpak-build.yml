@@ -3,8 +3,8 @@ name: Flatpak build
 # Build the real Flatpak whenever packaging-relevant inputs change. This job is
 # intentionally independent from the native Linux workflow: it uses the
 # Flatpak SDK/runtime declared by the generated manifest and proves that a
-# clean GitHub-hosted runner can resolve the declared prerequisites and build
-# the package without relying on developer-machine state.
+# clean GitHub-hosted runner can resolve the declared prerequisites, build the
+# package, install it, and reach a real desktop window without developer state.
 on:
   push:
     branches: [main]
@@ -17,6 +17,7 @@ on:
       - 'pubspec.yaml'
       - 'pubspec.lock'
       - 'scripts/check_linux_runner.py'
+      - 'scripts/flatpak_launch_smoke.sh'
       - 'scripts/regenerate_flatpak_sources.sh'
       - 'test/tooling/check_linux_runner_test.py'
       - 'third_party/**'
@@ -30,6 +31,7 @@ on:
       - 'pubspec.yaml'
       - 'pubspec.lock'
       - 'scripts/check_linux_runner.py'
+      - 'scripts/flatpak_launch_smoke.sh'
       - 'scripts/regenerate_flatpak_sources.sh'
       - 'test/tooling/check_linux_runner_test.py'
       - 'third_party/**'
@@ -45,22 +47,25 @@ concurrency:
 
 jobs:
   build-flatpak:
-    name: Build Flatpak from declared sources
+    name: Build and launch Flatpak
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Install host validation tools
+      - name: Install host validation and smoke tools
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             appstream \
+            dbus-x11 \
             desktop-file-utils \
             flatpak \
-            flatpak-builder
+            flatpak-builder \
+            x11-utils \
+            xvfb
 
       - name: Validate committed packaging metadata
         run: |
@@ -121,3 +126,7 @@ jobs:
           test -f repo-ci/config
           flatpak build-update-repo repo-ci
           echo 'Flatpak build and repository export completed successfully.'
+
+      - name: Install and launch packaged Flatpak
+        working-directory: flatpak
+        run: bash ../scripts/flatpak_launch_smoke.sh repo-ci
