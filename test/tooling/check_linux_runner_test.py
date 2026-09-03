@@ -566,6 +566,109 @@ class FlatpakPermissionTest(CheckoutCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("--talk-name=org.example.Service", problems[0])
 
+    def test_the_secret_service_permission_is_not_granted(self) -> None:
+        # #441 is served by the xdg-desktop-portal Secret portal, which needs
+        # no finish-arg, so the direct Secret Service name is not shipped. If
+        # someone adds it back, this list says so rather than absorbing it.
+        self.assertNotIn(
+            "--talk-name=org.freedesktop.secrets",
+            checker.EXPECTED_FLATPAK_FINISH_ARGS,
+        )
+        build_checkout(
+            self.root,
+            flatpak_manifest=FLATPAK_MANIFEST.format(
+                app_id=APP_ID, binary=BINARY
+            ).replace(
+                "  - --share=network\n",
+                "  - --share=network\n  - --talk-name=org.freedesktop.secrets\n",
+            ),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("unrelated permission", problems[0])
+        self.assertIn("--talk-name=org.freedesktop.secrets", problems[0])
+
+    def test_broader_secret_service_permissions_are_caught(self) -> None:
+        # Every broader way to reach the same service. One exact well-known
+        # name on the session bus is what libsecret connects to; anything
+        # wider is a bigger sandbox for no benefit.
+        for permission in (
+            "--socket=session-bus",
+            "--talk-name=org.freedesktop.*",
+            "--talk-name=org.freedesktop.secrets.*",
+            "--own-name=org.freedesktop.secrets",
+            "--system-talk-name=org.freedesktop.secrets",
+            "--talk-name=org.freedesktop.impl.portal.Secret",
+        ):
+            with self.subTest(permission=permission):
+                root = self.root / permission.replace("/", "_").replace(
+                    "*", "star"
+                )
+                root.mkdir(parents=True, exist_ok=True)
+                build_checkout(
+                    root,
+                    flatpak_manifest=FLATPAK_MANIFEST.format(
+                        app_id=APP_ID, binary=BINARY
+                    ).replace(
+                        "  - --share=network\n",
+                        f"  - --share=network\n  - {permission}\n",
+                    ),
+                )
+                problems = checker.check(root)
+                self.assertEqual(len(problems), 1)
+                self.assertIn("unrelated permission", problems[0])
+                self.assertIn(permission, problems[0])
+
+    def test_filesystem_permissions_stay_rejected(self) -> None:
+        # A keyring grant must not become a reason to hand out host files:
+        # nothing in the credential path reads or writes a file.
+        for permission in (
+            "--filesystem=host",
+            "--filesystem=home",
+            "--filesystem=xdg-data/keyrings",
+            "--persist=.local/share/keyrings",
+        ):
+            with self.subTest(permission=permission):
+                root = self.root / permission.replace("/", "_").replace(
+                    "=", "_"
+                )
+                root.mkdir(parents=True, exist_ok=True)
+                build_checkout(
+                    root,
+                    flatpak_manifest=FLATPAK_MANIFEST.format(
+                        app_id=APP_ID, binary=BINARY
+                    ).replace(
+                        "  - --share=network\n",
+                        f"  - --share=network\n  - {permission}\n",
+                    ),
+                )
+                problems = checker.check(root)
+                self.assertEqual(len(problems), 1)
+                self.assertIn("unrelated permission", problems[0])
+                self.assertIn(permission, problems[0])
+
+    def test_the_approved_surface_carries_no_dbus_grant(self) -> None:
+        # #543's network grant stands; #441 adds nothing beside it. The
+        # approved surface has no D-Bus entry of any shape.
+        self.assertIn("--share=network", checker.EXPECTED_FLATPAK_FINISH_ARGS)
+        self.assertEqual(
+            [
+                permission
+                for permission in sorted(checker.EXPECTED_FLATPAK_FINISH_ARGS)
+                if permission.startswith(
+                    (
+                        "--talk-name",
+                        "--system-talk-name",
+                        "--own-name",
+                        "--system-own-name",
+                        "--socket=session-bus",
+                        "--socket=system-bus",
+                    )
+                )
+            ],
+            [],
+        )
+
     def test_allowed_permission_with_inline_comment_is_recognised(self) -> None:
         manifest = FLATPAK_MANIFEST.format(app_id=APP_ID, binary=BINARY).replace(
             "  - --share=network\n",

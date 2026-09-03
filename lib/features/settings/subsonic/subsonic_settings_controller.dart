@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/models/playlist.dart';
 import '../../../core/models/subsonic_session.dart';
+import '../../../core/repositories/secure_storage_exception.dart';
 import '../../../core/services/remote_cache/remote_cache_key.dart';
 import '../../../core/sources/music_provider.dart';
 import '../../../core/sources/subsonic/subsonic_api.dart';
@@ -54,8 +55,25 @@ class SubsonicSettingsController extends Notifier<SubsonicSettingsState> {
     final SubsonicSession? saved;
     try {
       saved = await ref.read(subsonicSessionStoreProvider).read();
-    } catch (_) {
-      // A storage hiccup must not break startup or playback; stay disconnected.
+    } catch (error) {
+      // A keyring that is missing, locked or denied must not break startup or
+      // playback: stay disconnected, but say so (statically, credential-free)
+      // so a user who *was* signed in isn't left wondering where their server
+      // went. A missing or corrupt record already reads back as null inside
+      // the store and stays silent.
+      //
+      // Only when nothing has taken over the card in the meantime: a locked
+      // keyring can block this read behind an unlock prompt for as long as the
+      // user leaves it there, and a sign-in that already started (or finished)
+      // in that time owns the state now.
+      if (_session == null &&
+          state.phase == SubsonicConnectionPhase.disconnected &&
+          state.errorMessage == null) {
+        state = SubsonicSettingsState(
+          errorMessage: "Couldn't restore your saved Navidrome/Subsonic "
+              'sign-in from this device. ${_storageRemedy(error)}',
+        );
+      }
       return;
     }
     if (saved == null) {
@@ -131,7 +149,21 @@ class SubsonicSettingsController extends Notifier<SubsonicSettingsState> {
                 username: username,
                 password: password,
               );
-      await ref.read(subsonicSessionStoreProvider).write(newSession);
+      try {
+        await ref.read(subsonicSessionStoreProvider).write(newSession);
+      } catch (error) {
+        // The new session couldn't reach the keyring. Adopting it anyway would
+        // look signed in until the next launch and then silently be gone, so
+        // don't: report it and let the user fix the keyring and retry. The
+        // derived salt+token is dropped here rather than kept anywhere else.
+        _setFailure(
+          "Couldn't save your Navidrome/Subsonic sign-in on this device. "
+          '${_storageRemedy(error)}',
+          url: url,
+          username: username,
+        );
+        return false;
+      }
       _session = newSession;
       // The just-signed-in server becomes the active/default provider for
       // picking among duplicate sources: a song that also lives on Jellyfin now
@@ -177,7 +209,18 @@ class SubsonicSettingsController extends Notifier<SubsonicSettingsState> {
   /// playlists (scoped to Subsonic, so a still-connected Jellyfin account keeps
   /// its own); on-device favourites and local-only playlists are kept.
   Future<void> clear() async {
-    await ref.read(subsonicSessionStoreProvider).clear();
+    try {
+      await ref.read(subsonicSessionStoreProvider).clear();
+    } catch (error) {
+      // The credential would stay in the keyring; report it rather than
+      // pretending the sign-out happened. Nothing else is torn down, so a
+      // retry after unlocking the keyring completes the same sign-out.
+      _setFailure(
+        "Couldn't remove your Navidrome/Subsonic sign-in from this device. "
+        '${_storageRemedy(error)}',
+      );
+      return;
+    }
     _session = null;
     try {
       await ref
@@ -205,6 +248,12 @@ class SubsonicSettingsController extends Notifier<SubsonicSettingsState> {
         .read(remoteCacheIndexProvider)
         .removeSource(RemoteCacheKey.sourceIdSubsonic);
   }
+
+  /// The user-facing tail for a secure-storage failure: what went wrong with
+  /// the keyring and what to do about it. Never carries any part of the value
+  /// that was being read or written (see [SecureStorageException]).
+  String _storageRemedy(Object error) =>
+      error is SecureStorageException ? error.remedy : 'Try again.';
 
   /// Reports an error without dropping an existing connection: a failed test or
   /// re-auth keeps any session that's still valid, it just surfaces the message.

@@ -58,6 +58,39 @@ finish-args:
   # scope: direct configured endpoints need no discovery-specific grant.
   - --share=network
   #
+  # Secure credential storage (#441) needs nothing here either, for the same
+  # reason local music folders don't: the sandbox path is a portal.
+  # flutter_secure_storage's Linux implementation
+  # (flutter_secure_storage_linux 1.2.3) is a thin wrapper over libsecret,
+  # which chooses its own backend at runtime (secret-backend.c,
+  # backend_get_impl_type): when /.flatpak-info exists and xdg-desktop-portal
+  # answers org.freedesktop.portal.Secret v1, it uses its file backend, an
+  # encrypted store under the app's own data dir whose master secret is handed
+  # over by the portal (and held by the host's keyring). Every Flatpak may talk
+  # to the portal, so no finish-arg grants it.
+  #
+  # That portal is exported only when the desktop ships an
+  # org.freedesktop.impl.portal.Secret backend (xdg-desktop-portal
+  # desktop-portal/secret.c, init_secret: no impl configured means the
+  # interface is never exported). Both desktops this targets do:
+  #   * GNOME, via gnome-keyring (daemon/dbus/gkd-secret-portal.c).
+  #   * KDE Plasma 6, via KWallet's ksecretd
+  #     (src/runtime/ksecretd/kwalletportalsecrets.cpp, which installs
+  #     org.freedesktop.impl.portal.desktop.kwallet.service and
+  #     kwallet.portal). KF6 only; the KF5 kwalletd had no portal backend.
+  # org.gnome.Platform//50 carries libsecret 0.21.7 built with libgcrypt
+  # (freedesktop-sdk 25.08 elements/components/libsecret.bst), so that file
+  # backend is compiled in and the sandbox detection above is live.
+  #
+  # So --talk-name=org.freedesktop.secrets is deliberately NOT granted. On a
+  # host with no Secret portal backend (a KF5-era KDE, a bare WM running only
+  # a Secret Service daemon) libsecret falls back to the Secret Service bus
+  # name, the sandbox's D-Bus proxy hides it, and Linthra reports a
+  # recoverable storage error and stays signed out rather than falling back to
+  # any storage of its own. A user who wants that fallback can grant it
+  # themselves with `flatpak override --user`; it is not worth a permission on
+  # every install (docs/flatpak-development.md "Secure credential storage").
+  #
   # Local music folders (#438) need nothing here on purpose. Linthra's Linux
   # runner opens GTK's GtkFileChooserNative, which GTK routes to the
   # xdg-desktop-portal FileChooser inside a sandbox — every app may talk to the
@@ -73,10 +106,14 @@ finish-args:
   #   --filesystem=host/home     (broad filesystem access. Not needed for the
   #                                local library, per the portal note above;
   #                                the remaining permission audit is #439.)
-  #   --talk-name=org.freedesktop.secrets  (Secret Service: #441)
-  # Their absence is safe: flutter_secure_storage/Jellyfin-Subsonic-Plex
-  # session restore on Linux treats every read/write failure as "not signed
-  # in" and keeps running (docs/linux-desktop.md "Secure storage").
+  #   --socket=session-bus, --talk-name=org.freedesktop.secrets, and every
+  #                                wildcard or --own-name form of it (#441
+  #                                is served by the Secret portal instead,
+  #                                per the note above).
+  # Their absence is safe: secure storage that is missing, locked or denied
+  # surfaces as a recoverable sign-in/storage error and Jellyfin/Subsonic/Plex
+  # stay signed out. Linthra never writes a credential to storage of its own,
+  # in plaintext or otherwise (docs/linux-desktop.md "Secure storage").
 
 modules:
   # === Self-contained libmpv audio runtime, built from pinned upstream source

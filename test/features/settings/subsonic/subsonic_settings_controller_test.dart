@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/subsonic_session.dart';
+import 'package:linthra/core/repositories/secure_storage_exception.dart';
+import 'package:linthra/core/repositories/subsonic_session_store.dart';
 import 'package:linthra/core/services/remote_cache/remote_cache_index.dart';
 import 'package:linthra/core/services/remote_cache/remote_cache_record.dart';
 import 'package:linthra/core/sources/subsonic/subsonic_exception.dart';
@@ -25,9 +29,67 @@ const _session = SubsonicSession(
 
 Future<void> _settle() => Future<void>.delayed(Duration.zero);
 
+/// A session store standing in for a platform keyring that cannot be used:
+/// missing, locked, or refused by a sandbox. It fails exactly the way
+/// [SecureSubsonicSessionStore] does through [SecureSessionStorage] (a typed
+/// [SecureStorageException]), so these tests exercise the controller's real
+/// failure path rather than a generic thrown object.
+class _UnusableKeyringStore implements SubsonicSessionStore {
+  _UnusableKeyringStore({
+    SubsonicSession? initialSession,
+    this.readFailure,
+    this.writeFailure,
+    this.clearFailure,
+    this.readGate,
+  }) : _session = initialSession;
+
+  SubsonicSession? _session;
+  final SecureStorageException? readFailure;
+  final SecureStorageException? writeFailure;
+  final SecureStorageException? clearFailure;
+
+  /// Holds the restore read open, the way a keyring that is waiting on an
+  /// unlock prompt does.
+  final Completer<void>? readGate;
+
+  @override
+  Future<SubsonicSession?> read() async {
+    if (readGate != null) await readGate!.future;
+    if (readFailure != null) throw readFailure!;
+    return _session;
+  }
+
+  @override
+  Future<void> write(SubsonicSession session) async {
+    if (writeFailure != null) throw writeFailure!;
+    _session = session;
+  }
+
+  @override
+  Future<void> clear() async {
+    if (clearFailure != null) throw clearFailure!;
+    _session = null;
+  }
+}
+
+const SecureStorageException _lockedRead = SecureStorageException(
+  operation: SecureStorageOperation.read,
+  failure: SecureStorageFailure.locked,
+);
+
+const SecureStorageException _unavailableWrite = SecureStorageException(
+  operation: SecureStorageOperation.write,
+  failure: SecureStorageFailure.unavailable,
+);
+
+const SecureStorageException _lockedDelete = SecureStorageException(
+  operation: SecureStorageOperation.delete,
+  failure: SecureStorageFailure.locked,
+);
+
 ProviderContainer _container({
   FakeSubsonicClient? client,
-  InMemorySubsonicSessionStore? store,
+  SubsonicSessionStore? store,
 }) {
   final container = ProviderContainer(
     overrides: <Override>[
@@ -232,6 +294,113 @@ void main() {
       final source = container.read(subsonicMusicSourceProvider);
       expect(source, isNotNull);
       expect(source!.id, 'subsonic');
+    });
+  });
+
+  group('secure storage failures', () {
+    test(
+        'a keyring it cannot read reports a restore error, not a silent '
+        'sign-out', () async {
+      final container = _container(
+        store: _UnusableKeyringStore(
+          initialSession: _session,
+          readFailure: _lockedRead,
+        ),
+      );
+      container.read(subsonicSettingsControllerProvider);
+      await _settle();
+
+      final state = container.read(subsonicSettingsControllerProvider);
+      expect(state.phase, SubsonicConnectionPhase.disconnected);
+      expect(
+        state.errorMessage,
+        contains("Couldn't restore your saved Navidrome/Subsonic sign-in"),
+      );
+      expect(state.errorMessage, contains('Unlock your keyring'));
+    });
+
+    test(
+        'a sign-in that cannot be saved fails with a storage error and keeps '
+        'no session', () async {
+      final store = _UnusableKeyringStore(writeFailure: _unavailableWrite);
+      final container = _container(store: store);
+      final notifier =
+          container.read(subsonicSettingsControllerProvider.notifier);
+      await _settle();
+
+      final ok = await notifier.signIn(
+        url: 'music.example.com',
+        username: 'alice',
+        password: 'hunter2',
+      );
+
+      expect(ok, isFalse);
+      final state = container.read(subsonicSettingsControllerProvider);
+      expect(state.phase, SubsonicConnectionPhase.disconnected);
+      expect(
+        state.errorMessage,
+        contains("Couldn't save your Navidrome/Subsonic sign-in on this "
+            'device'),
+      );
+      expect(state.errorMessage, contains('no keyring available'));
+      // Not adopted: a session that could not be persisted would look signed
+      // in now and be gone after a restart.
+      expect(notifier.session, isNull);
+      expect(await store.read(), isNull);
+      // And the password that derived the credential never reaches the UI.
+      expect(state.errorMessage, isNot(contains('hunter2')));
+    });
+
+    test('a restore failure never overwrites a sign-in that got there first',
+        () async {
+      // A locked keyring can hold the startup read open for as long as the
+      // unlock prompt sits there. If the user signs in meanwhile, the late
+      // failure must not replace their connected card with a restore error.
+      final gate = Completer<void>();
+      final container = _container(
+        store: _UnusableKeyringStore(readFailure: _lockedRead, readGate: gate),
+      );
+      final notifier =
+          container.read(subsonicSettingsControllerProvider.notifier);
+
+      final ok = await notifier.signIn(
+        url: 'music.example.com',
+        username: 'alice',
+        password: 'hunter2',
+      );
+      expect(ok, isTrue);
+
+      gate.complete();
+      await _settle();
+
+      final state = container.read(subsonicSettingsControllerProvider);
+      expect(state.phase, SubsonicConnectionPhase.connected);
+      expect(state.errorMessage, isNull);
+    });
+
+    test('a sign-out the keyring refuses says so instead of pretending',
+        () async {
+      final store = _UnusableKeyringStore(
+        initialSession: _session,
+        clearFailure: _lockedDelete,
+      );
+      final container = _container(store: store);
+      final notifier =
+          container.read(subsonicSettingsControllerProvider.notifier);
+      await notifier.ensureLoaded();
+
+      await notifier.clear();
+
+      final state = container.read(subsonicSettingsControllerProvider);
+      expect(
+        state.errorMessage,
+        contains("Couldn't remove your Navidrome/Subsonic sign-in from this "
+            'device'),
+      );
+      // Still signed in, because the credential really is still in the
+      // keyring. Retrying after unlocking completes the same sign-out.
+      expect(state.phase, SubsonicConnectionPhase.connected);
+      expect(await store.read(), _session);
     });
   });
 }

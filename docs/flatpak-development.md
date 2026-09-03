@@ -22,9 +22,10 @@ Three docs, three jobs:
 > working audio, and installs a desktop entry, Linthra's own icon, and AppStream
 > metainfo so the app appears in the application menu and in software centres.
 > It is not the Flathub submission: normal network access is enabled for
-> configured self-hosted servers, but there is no Secret Service access and no
-> filesystem grant beyond the folders the user picks through
-> the desktop portal.
+> configured self-hosted servers, provider credentials go to platform secure
+> storage through the desktop's Secret portal (no permission needed), and there
+> is no filesystem grant beyond the folders the user picks through the desktop
+> portal.
 > See [What the sandbox allows today](#what-the-sandbox-allows-today).
 
 All commands are relative to the repository. Run them from the repository root
@@ -43,7 +44,7 @@ packages for one expecting them to help the other.
 | Build | `flutter build linux --release` | `flatpak run org.flatpak.Builder …` (below) |
 | Run | `./build/linux/x64/release/bundle/linthra` | `flatpak run io.github.thezupzup.linthra` |
 | App data | `~/.local/share/` and `~/.config/` | `~/.var/app/io.github.thezupzup.linthra/` |
-| Credentials | host Secret Service (encrypted) | not granted yet — sessions degrade to "not signed in" |
+| Credentials | host Secret Service (encrypted) | libsecret's portal-keyed encrypted store, no permission ([Secure credential storage](#secure-credential-storage)) |
 | Automated checks | `./scripts/verify_linux.sh` | manual today — see [Smoke testing](#smoke-testing) |
 
 A libmpv-related failure in one says nothing about the other: the Flatpak
@@ -299,10 +300,16 @@ The committed manifest grants exactly:
 
 `--share=network` is the minimum Flatpak capability for Linthra's existing
 HTTP(S) clients to reach configured Jellyfin, Navidrome/Subsonic, and Plex
-endpoints. It enables ordinary network destinations—including LAN addresses,
-hostnames, valid HTTPS endpoints, and remote/tunnel URLs—but exposes no host
-files and grants no D-Bus API. Discovery (mDNS/SSDP/broadcast) is separate and
-is not enabled by this change.
+endpoints. It enables ordinary network destinations (LAN addresses, hostnames,
+valid HTTPS endpoints, and remote/tunnel URLs) but exposes no host files and
+grants no D-Bus API. Discovery (mDNS/SSDP/broadcast) is separate and is not
+enabled by this change.
+
+There is **no D-Bus permission at all**, credential storage included: secure
+storage reaches the platform keyring through the xdg-desktop-portal Secret
+portal, which every Flatpak may use without a finish-arg. See
+[Secure credential storage](#secure-credential-storage) for why, what is
+stored, and how to test it.
 
 The following are **expected**, not bugs, and not worth debugging:
 
@@ -312,9 +319,15 @@ The following are **expected**, not bugs, and not worth debugging:
   the chooser goes through xdg-desktop-portal and the folder comes back through
   the document portal ([#438](https://github.com/TheZupZup/Linthra/issues/438),
   see [`flatpak/README.md`](../flatpak/README.md#local-music-folders)).
-* Saved sessions come back as "not signed in" — no Secret Service access yet
-  ([#441](https://github.com/TheZupZup/Linthra/issues/441)). Linthra treats
-  that as signed-out and keeps running; it never falls back to plaintext.
+* Saved sessions come back signed in
+  ([#441](https://github.com/TheZupZup/Linthra/issues/441)), through the
+  Secret portal rather than a D-Bus grant. Two things that are *not* bugs:
+  `secret-tool` on the host does not list Linthra's item (on the portal path
+  it lives in libsecret's own encrypted file, not the host keyring's
+  collection), and a locked or unavailable keyring produces a visible storage
+  error with the providers signed out. Linthra itself never falls back to a
+  file or to plaintext. See
+  [Secure credential storage](#secure-credential-storage).
 * Linthra is in the application menu now
   ([#434](https://github.com/TheZupZup/Linthra/issues/434)) with its own icon
   ([#436](https://github.com/TheZupZup/Linthra/issues/436)) and an AppStream
@@ -344,6 +357,107 @@ flatpak run --unshare=network io.github.thezupzup.linthra
 
 Use this rather than `flatpak override`, whose grants persist and can obscure
 what the manifest actually provides.
+
+## Secure credential storage
+
+Provider credentials go to platform secure storage, and the sandbox needs **no
+finish-arg** for it.
+
+`flutter_secure_storage_linux` is a thin libsecret wrapper, and libsecret picks
+its backend at runtime: inside a sandbox it uses its own encrypted file
+backend, keyed by a master secret from xdg-desktop-portal's
+`org.freedesktop.portal.Secret`, whenever the desktop provides that portal.
+GNOME does (gnome-keyring) and KDE Plasma 6 does (KWallet's `ksecretd`), so on
+both the credential path is a portal every Flatpak may use, and
+`--talk-name=org.freedesktop.secrets` is not shipped.
+[`flatpak/README.md`](../flatpak/README.md#secure-credential-storage) has the
+full derivation, the source references, the table of what each provider
+stores, and the user-side override for hosts with no Secret portal backend.
+
+Four things worth knowing while debugging:
+
+* **Where the bytes are.** On the portal path they are in libsecret's
+  gcrypt-encrypted
+  `~/.var/app/io.github.thezupzup.linthra/data/keyrings/default.keyring`, not
+  in the host keyring's own collection, so `secret-tool` on the host will not
+  list them. That file is ciphertext libsecret writes and reads; Linthra never
+  opens it.
+* **Linthra has no fallback.** `SecureSessionStorage` is the single wrapper the
+  Jellyfin, Navidrome/Subsonic and Plex session stores use, and it has no
+  alternative path: a failed write stores nothing in preferences, SQLite, the
+  cache or any file, and a failed read is an error rather than a silent "not
+  signed in". (The GitHub Sponsors token store calls `flutter_secure_storage`
+  directly; it holds no provider credential and is outside #441.)
+* **Storage failures are visible.** Missing, locked and denied surface as
+  recoverable sign-in/storage errors on the provider's settings card. The
+  message never carries a token, a password, or the platform's own error text.
+* **Never print a secret while debugging this.** `secret-tool search` shows
+  attributes, which is all you need; `secret-tool lookup` prints the secret
+  itself, so do not use it here.
+
+### Manual test: save, read, restart, delete
+
+1. Launch, then sign in to Jellyfin, Navidrome/Subsonic and Plex.
+2. Confirm where it landed. On a GNOME or Plasma 6 host (Secret portal
+   present):
+
+   ```bash
+   ls -l ~/.var/app/io.github.thezupzup.linthra/data/keyrings/
+   ```
+
+   `default.keyring` exists and is ciphertext. On a host using the Secret
+   Service backend instead, the item shows up in the host keyring:
+
+   ```bash
+   secret-tool search account io.github.thezupzup.linthra.secureStorage
+   ```
+
+   Either result is correct; which one you get tells you which backend
+   libsecret chose.
+3. Quit and relaunch (`flatpak run io.github.thezupzup.linthra`). All three
+   providers come back signed in with no re-entry, and a track streams.
+4. Sign out of each. The cards return to signed-out and the stored entry is
+   gone.
+5. Nothing readable anywhere in app data:
+
+   ```bash
+   grep -rIl "your-test-token" ~/.var/app/io.github.thezupzup.linthra/ || \
+     echo "no readable credential anywhere in app data"
+   ```
+
+### Manual test: locked or unavailable secure storage
+
+1. **Locked.** Lock the host keyring and sign in:
+
+   ```bash
+   # GNOME/gnome-keyring, libsecret 0.20.5+. Locks the default collection;
+   # a bare `secret-tool lock` locks every collection instead.
+   secret-tool lock --collection=default
+   ```
+
+   `--collection` takes a full D-Bus path or the literal `default` alias, not
+   a wallet name like `login` (libsecret's `get_collection_path()` rejects
+   that). Seahorse does the same thing: right-click the login keyring, *Lock*.
+   KDE: close the wallet in KWalletManager. The portal cannot hand over the
+   master secret against a locked keyring, so expect a visible "Couldn't save
+   your … sign-in on this device. Unlock your keyring and try again.", the app
+   still usable, and no crash. Unlock, retry, and the sign-in completes.
+2. **Unavailable.** Use a session with neither a Secret portal backend nor a
+   reachable Secret Service (a bare window manager with no keyring daemon).
+   Saved sessions report a restore error, a new sign-in reports the storage
+   failure, nothing is written anywhere else, local music keeps working, and
+   returning to a normal session recovers with credentials intact.
+3. **The Secret Service fallback**, if you want to exercise it on such a host:
+   grant the name for your own install only, then sign in again.
+
+   ```bash
+   flatpak override --user --talk-name=org.freedesktop.secrets \
+     io.github.thezupzup.linthra
+   flatpak override --user --reset io.github.thezupzup.linthra   # undo
+   ```
+
+   This is a user-side choice, not something the manifest ships, so remember to
+   reset it before testing anything else about the packaged permissions.
 
 ## Smoke testing
 
@@ -398,6 +512,14 @@ Until #445/#446 land, the manual pass for a packaging change is:
    the same folder still scans. `flatpak document-unexport /path/to/test-music`
    on the host revokes it, after which Linthra says the folder can no longer be
    reached and keeps the library it already indexed instead of emptying it.
-7. `flatpak info --show-permissions io.github.thezupzup.linthra` → shows
-   `shared=network;ipc;` and still only the six finish-args listed above, i.e.
-   you did not widen the sandbox by accident.
+7. Credentials: sign in, restart, and sign out as described in
+   [Secure credential storage](#secure-credential-storage), including one
+   locked-keyring pass. Sessions survive the restart, sign-out clears the
+   keyring item, and a locked keyring produces a visible error rather than a
+   crash or a silent loss.
+8. `flatpak info --show-permissions io.github.thezupzup.linthra` → shows
+   `shared=network;ipc;`, no `filesystems=` line and no `[Session Bus Policy]`
+   section, i.e. still just the six finish-args listed above and no sandbox
+   widened by accident. `flatpak override --user --show` should be empty too:
+   a leftover Secret Service override from the fallback test would mask what
+   the manifest actually provides.
