@@ -145,13 +145,26 @@ suite. It checks that:
   including generated Flutter SDK, SQLite and mimalloc inputs;
 - every remote `git` source pins a full commit, not just a tag or branch;
 - a later source's hash cannot accidentally satisfy an earlier source mapping,
-  and a mapping is recognised whatever order its keys appear in;
+  a mapping is recognised whatever order its keys appear in, and a trailing
+  comment cannot hide a key's value;
 - the SQLite pre-fetch seam and mimalloc-disable switch remain in CMake, and
   both native archives are staged at the per-architecture paths those builds
   actually read;
 - the end-to-end smoke keeps `--download-only`, `--disable-cache` and
   `--disable-download` together, and still refuses to stage a host `build/`,
   `.dart_tool/` or `.pub-cache/` tree before it fetches anything.
+
+### It fails closed on YAML it cannot read
+
+flatpak-flutter emits the manifest in block style, and the checks above read it
+that way. YAML can express the same data in flow style (`{a: b}`, `[a, b]`) or
+through anchors and aliases, which those line-oriented checks would walk past
+without noticing, turning a guard into a silent no-op.
+
+So the guard treats any of those forms as a failure in itself rather than
+something to skip, and says so with the offending line. A future manifest that
+legitimately needs one of them should teach the guard that form first; until
+then, an unreadable manifest fails instead of passing.
 
 This is intentionally a structural CI guard. The end-to-end proof is the build
 smoke below.

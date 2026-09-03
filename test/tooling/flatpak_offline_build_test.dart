@@ -170,14 +170,53 @@ String _unquote(String value) {
   return value;
 }
 
+/// A scalar value with any trailing comment removed. YAML starts an inline
+/// comment at a ` #`, so `type: archive # note` is still the archive type; not
+/// stripping it would leave the value unrecognised and the source unaudited.
+String _yamlValue(String raw) {
+  final int comment = raw.indexOf(' #');
+  return _unquote((comment == -1 ? raw : raw.substring(0, comment)).trim());
+}
+
 String? _yamlScalar(List<String> block, String key) {
   final String prefix = '$key:';
   for (final String line in block) {
     final String trimmed = line.trim();
     if (!trimmed.startsWith(prefix)) continue;
-    return _unquote(trimmed.substring(prefix.length).trim());
+    return _yamlValue(trimmed.substring(prefix.length));
   }
   return null;
+}
+
+/// A guard that cannot fully interpret its input has to fail, not skip.
+///
+/// flatpak-flutter emits the manifest in block style and every check here
+/// reads it that way. YAML's flow forms (`{a: b}`, `[a, b]`) and its anchors
+/// and aliases express the same data in shapes these line-oriented checks
+/// would walk straight past, so encountering one is itself the failure. That
+/// keeps a serialization change from quietly turning a guard into a no-op.
+void _expectBlockStyleManifest(String manifest) {
+  final RegExp flow = RegExp(r'[\[{]');
+  final RegExp anchorOrAlias = RegExp(r'(^|\s)[&*][A-Za-z0-9_-]+');
+
+  final List<String> lines = const LineSplitter().convert(manifest);
+  for (int index = 0; index < lines.length; index++) {
+    final String trimmed = lines[index].trim();
+    if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
+
+    final int comment = trimmed.indexOf(' #');
+    final String content =
+        comment == -1 ? trimmed : trimmed.substring(0, comment);
+    if (flow.hasMatch(content) || anchorOrAlias.hasMatch(content)) {
+      fail(
+        'The generated manifest uses YAML flow style, an anchor or an alias '
+        'near line ${index + 1}, which these guards do not interpret: '
+        '${lines[index]}\n'
+        'Regenerate it in block style, or teach the guards that form before '
+        'trusting them.',
+      );
+    }
+  }
 }
 
 /// Every block-sequence mapping in [manifest], with the leading `- ` folded
@@ -215,6 +254,8 @@ List<_YamlMapping> _yamlSequenceMappings(String manifest) {
 }
 
 void _expectManifestRemoteSourcesHashed(String manifest) {
+  _expectBlockStyleManifest(manifest);
+
   for (final _YamlMapping mapping in _yamlSequenceMappings(manifest)) {
     final String? type = _yamlScalar(mapping.lines, 'type');
     final String? url = _yamlScalar(mapping.lines, 'url');
@@ -389,6 +430,8 @@ bool _isNetworkGrant(String argument, String? next) {
 }
 
 void _expectNoBuildNetworkGrant(String manifest) {
+  _expectBlockStyleManifest(manifest);
+
   final List<String> lines = const LineSplitter().convert(manifest);
   bool inFinishArgs = false;
 
@@ -399,13 +442,18 @@ void _expectNoBuildNetworkGrant(String manifest) {
 
   for (int index = 0; index < lines.length; index++) {
     final String line = lines[index];
+    final String trimmed = line.trim();
+
+    // A blank line or a comment ends neither a block nor a sequence, so it
+    // must not separate the two halves of a split option either.
+    if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
 
     if (line == 'finish-args:') {
       inFinishArgs = true;
       pending = null;
       continue;
     }
-    if (inFinishArgs && line.isNotEmpty && !line.startsWith(' ')) {
+    if (inFinishArgs && !line.startsWith(' ')) {
       inFinishArgs = false;
     }
     // The top-level runtime finish-args are where the grant belongs.
@@ -414,7 +462,6 @@ void _expectNoBuildNetworkGrant(String manifest) {
       continue;
     }
 
-    final String trimmed = line.trim();
     if (!trimmed.startsWith('- ')) {
       if (trimmed.contains('--share=network')) {
         fail(
@@ -426,7 +473,7 @@ void _expectNoBuildNetworkGrant(String manifest) {
       continue;
     }
 
-    final String argument = _unquote(trimmed.substring(2).trim());
+    final String argument = _yamlValue(trimmed.substring(2));
     if (_isNetworkGrant(argument, null)) {
       fail(
         'Build-time network grant near generated manifest line '
@@ -855,6 +902,36 @@ sources:
 '''),
       throwsA(anything),
     );
+
+    // A trailing comment must not hide the type and leave the source
+    // unaudited.
+    expect(
+      () => _expectManifestRemoteSourcesHashed('''
+sources:
+  - type: archive # pinned upstream
+    url: https://example.invalid/first.tar.gz
+'''),
+      throwsA(anything),
+    );
+
+    // Flow style says the same thing in a shape these checks do not read, so
+    // it is refused rather than skipped.
+    expect(
+      () => _expectManifestRemoteSourcesHashed('''
+sources:
+  - {type: archive, url: 'https://example.invalid/first.tar.gz'}
+'''),
+      throwsA(anything),
+    );
+    expect(
+      () => _expectManifestRemoteSourcesHashed('''
+sources: &shared
+  - type: archive
+    url: https://example.invalid/first.tar.gz
+    sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+'''),
+      throwsA(anything),
+    );
   });
 
   test('remote file sources require their own SHA-256', () {
@@ -1031,6 +1108,46 @@ modules:
           'build-args': <String>['--share', 'network'],
         },
       }, 'fixture'),
+      throwsA(anything),
+    );
+
+    // Neither a blank line nor a comment ends a block sequence, so they cannot
+    // be used to hold the two halves of the grant apart.
+    expect(
+      () => _expectNoBuildNetworkGrant('''
+modules:
+  - name: native
+    build-options:
+      build-args:
+        - --share
+
+        # keep the sandbox permissive
+        - network
+'''),
+      throwsA(anything),
+    );
+
+    // A trailing comment on the value must not hide it either.
+    expect(
+      () => _expectNoBuildNetworkGrant('''
+modules:
+  - name: native
+    build-options:
+      build-args:
+        - --share
+        - network # needed for the fetch
+'''),
+      throwsA(anything),
+    );
+
+    // A flow sequence is the same grant in a form these checks do not read.
+    expect(
+      () => _expectNoBuildNetworkGrant('''
+modules:
+  - name: native
+    build-options:
+      build-args: [--share, network]
+'''),
       throwsA(anything),
     );
 
