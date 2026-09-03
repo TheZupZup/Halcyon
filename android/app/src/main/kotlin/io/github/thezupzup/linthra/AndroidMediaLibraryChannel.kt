@@ -157,13 +157,14 @@ class AndroidMediaLibraryChannel(private val activity: Activity) {
             MediaStore.Audio.Media.DURATION,
         )
         val documents = ArrayList<Map<String, Any?>>()
-        context.contentResolver.query(
+        val cursor = context.contentResolver.query(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
             projection,
             "${MediaStore.Audio.Media.IS_MUSIC} != 0",
             null,
             "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC",
-        )?.use { cursor ->
+        ) ?: throw IllegalStateException("MediaStore query returned no cursor")
+        cursor.use {
             val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
             val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
             val mimeIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
