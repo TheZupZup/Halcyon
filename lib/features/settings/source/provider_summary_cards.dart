@@ -606,9 +606,8 @@ class LocalMusicProviderCard extends ConsumerWidget {
               ? 'Device music selected'
               : 'Folder selected';
       tone = ProviderStatusTone.positive;
-      detail = isDeviceLibrary
-          ? 'All music on this device'
-          : location!.displayLabel;
+      detail =
+          isDeviceLibrary ? 'All music on this device' : location!.displayLabel;
     }
 
     return ProviderSummaryCard(
