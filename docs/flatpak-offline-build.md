@@ -138,7 +138,8 @@ suite. It checks that:
   both native archives are staged at the per-architecture paths those builds
   actually read;
 - the end-to-end smoke keeps `--download-only`, `--disable-cache` and
-  `--disable-download` together.
+  `--disable-download` together, and still refuses to stage a host `build/`,
+  `.dart_tool/` or `.pub-cache/` tree before it fetches anything.
 
 This is intentionally a structural CI guard. The end-to-end proof is the build
 smoke below.
@@ -175,6 +176,23 @@ runtime network permission.
 A failure in phase 2 is useful: it means something required by the build was not
 properly declared/prefetched, which is exactly what #442 is meant to catch.
 
+### The staged source tree has to be clean
+
+The app module's source is `type: dir, path: ..` with no skip list, so
+`flatpak-builder` stages the whole checkout, including directories git ignores.
+A host `build/` tree from a local `flutter build linux` carries CMake's
+already-downloaded `FetchContent` archives and possibly a finished bundle, and a
+repo-root `.pub-cache` carries packages pub could resolve from.
+
+Those reach the sandbox as **source**, so neither `--disable-cache` (which only
+stops module build results being restored) nor `--disable-download` (which only
+stops declared sources being fetched) keeps them out. Phase 2 could then pass
+with an undeclared dependency quietly satisfied from the host.
+
+The script refuses to start when `build/`, `.dart_tool/` or `.pub-cache/` exist
+at the repository root, and prints the exact `rm -rf` to clear them. It does not
+delete anything itself. Remove them (or run from a fresh clone) and re-run.
+
 The smoke deliberately keeps the normal `.flatpak-builder` **source cache**
 between the two phases. That is not a developer pub cache or a module build
 result: it is flatpak-builder's own source store populated from the manifest
@@ -187,9 +205,8 @@ For the strongest local validation, start without Linthra's previous Flatpak
 build state:
 
 ```bash
-cd flatpak
-rm -rf .flatpak-builder flatpak-builder-offline-smoke
-cd ..
+rm -rf build .dart_tool .pub-cache
+rm -rf flatpak/.flatpak-builder flatpak/flatpak-builder-offline-smoke
 bash scripts/flatpak_offline_build_smoke.sh
 ```
 

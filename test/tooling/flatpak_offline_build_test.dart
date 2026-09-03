@@ -394,13 +394,19 @@ String _linthraModule(String manifest) {
   return manifest.substring(start, nextModule);
 }
 
+/// The exact expansion each `flatpak-builder` phase is invoked through.
+const String _builderToken = r'"${BUILDER[@]}"';
+
 List<String> _builderInvocations(String smoke) {
   return smoke
-      .split(r'"${BUILDER[@]}"'.replaceAll(r'\', ''))
+      .split(_builderToken)
       .skip(1)
       .map((String tail) => tail.split('\n\n').first)
       .toList();
 }
+
+/// Everything the smoke runs before it invokes the builder for the first time.
+String _smokePreflight(String smoke) => smoke.split(_builderToken).first;
 
 void main() {
   test('Flatpak build inputs stay complete and network-independent', () {
@@ -620,9 +626,32 @@ void main() {
       context: 'flatpak/generated/sources/pubspec.json',
     );
 
-    final List<String> invocations = _builderInvocations(
-      _read('scripts/flatpak_offline_build_smoke.sh'),
+    final String smoke = _read('scripts/flatpak_offline_build_smoke.sh');
+
+    // The app module stages the whole checkout with `type: dir, path: ..`, so
+    // a host build tree reaches the sandbox as *source*. Neither
+    // --disable-cache (module build results) nor --disable-download (declared
+    // source fetches) keeps it out, so the smoke has to refuse before it
+    // fetches anything rather than report a PASS that proves less.
+    final String preflight = _smokePreflight(smoke);
+    final RegExpMatch? guardedArtifacts = RegExp(
+      r'for\s+artifact\s+in\s+([^;\n]+);\s*do',
+    ).firstMatch(preflight);
+    expect(
+      guardedArtifacts,
+      isNotNull,
+      reason: 'The smoke does not check for host build artifacts before '
+          'invoking flatpak-builder',
     );
+    expect(
+      guardedArtifacts!.group(1)!.trim().split(RegExp(r'\s+')).toSet(),
+      <String>{'build', '.dart_tool', '.pub-cache'},
+      reason: 'The smoke no longer refuses every host artifact tree that the '
+          'staged source directory could smuggle into the build',
+    );
+    expect(preflight, contains('host build artifacts'));
+
+    final List<String> invocations = _builderInvocations(smoke);
     expect(invocations, hasLength(2));
     expect(invocations[0], contains('--download-only'));
     expect(invocations[0], isNot(contains('--disable-cache')));

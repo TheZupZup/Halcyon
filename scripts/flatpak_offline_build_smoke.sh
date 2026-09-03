@@ -82,6 +82,28 @@ for extension in "${sdk_extensions[@]}"; do
     fail "missing $extension_ref; install the Flatpak build prerequisites documented in docs/flatpak-development.md"
 done
 
+# The app module's source is `type: dir, path: ..` with no skip list, so
+# flatpak-builder stages the entire checkout, including directories git
+# ignores. A host `build/` tree carries CMake's already-downloaded FetchContent
+# archives and possibly a finished bundle; a repo-root `.pub-cache` carries
+# packages pub could resolve from. Those arrive as *source*, so neither
+# --disable-cache (which only stops module build results being restored) nor
+# --disable-download (which only stops declared sources being fetched) keeps
+# them out. Refuse to run rather than print a PASS that proves less than it
+# claims.
+host_artifacts=""
+for artifact in build .dart_tool .pub-cache; do
+  if [[ -e "$REPO_ROOT/$artifact" ]]; then
+    host_artifacts="$host_artifacts $artifact"
+  fi
+done
+if [[ -n "$host_artifacts" ]]; then
+  fail "host build artifacts would be staged into the sandbox:$host_artifacts
+flatpak/$MANIFEST stages the checkout with 'type: dir, path: ..', so these can
+satisfy build inputs the manifest never declares. Remove them and re-run:
+  cd $REPO_ROOT && rm -rf$host_artifacts"
+fi
+
 cd "$FLATPAK_DIR"
 
 info "Phase 1/2: fetch only manifest-declared sources"
