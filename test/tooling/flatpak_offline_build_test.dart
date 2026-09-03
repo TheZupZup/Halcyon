@@ -200,13 +200,21 @@ String _linthraModule(String manifest) {
   final int start = manifest.indexOf(marker);
   expect(
     start,
-    isNonNegative,
+    greaterThanOrEqualTo(0),
     reason: 'Generated manifest has no linthra module',
   );
 
   final int nextModule = manifest.indexOf('\n  - name:', start + marker.length);
   if (nextModule == -1) return manifest.substring(start);
   return manifest.substring(start, nextModule);
+}
+
+List<String> _builderInvocations(String smoke) {
+  return smoke
+      .split(r'"${BUILDER[@]}"')
+      .skip(1)
+      .map((String tail) => tail.split('\n\n').first)
+      .toList();
 }
 
 void main() {
@@ -224,7 +232,7 @@ void main() {
     final int buildIndex = linthraModule.indexOf(
       '      - flutter build linux --release --no-pub',
     );
-    expect(setupIndex, isNonNegative);
+    expect(setupIndex, greaterThanOrEqualTo(0));
     expect(buildIndex, greaterThan(setupIndex));
 
     _expectNoBuildNetworkGrant(manifest);
@@ -327,10 +335,16 @@ void main() {
     expect(pubSourcesText, contains('sqlite-autoconf-'));
     expect(pubSourcesText, contains('mimalloc-'));
 
-    final String smoke = _read('scripts/flatpak_offline_build_smoke.sh');
-    expect(smoke, contains('--download-only'));
-    expect(smoke, contains('--disable-cache'));
-    expect(smoke, contains('--disable-download'));
+    final List<String> invocations = _builderInvocations(
+      _read('scripts/flatpak_offline_build_smoke.sh'),
+    );
+    expect(invocations, hasLength(2));
+    expect(invocations[0], contains('--download-only'));
+    expect(invocations[0], isNot(contains('--disable-cache')));
+    expect(invocations[0], isNot(contains('--disable-download')));
+    expect(invocations[1], isNot(contains('--download-only')));
+    expect(invocations[1], contains('--disable-cache'));
+    expect(invocations[1], contains('--disable-download'));
   });
 
   test('manifest hash belongs to the same source mapping', () {
