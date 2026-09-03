@@ -20,6 +20,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
+check_override_scope() {
+  local label="$1"
+  shift
+  local overrides
+  overrides="$(flatpak override "$@" --show 2>/dev/null || true)"
+  if grep -Eq '^[[:space:]]*(filesystems|persistent)=' <<<"$overrides"; then
+    printf '%s\n' "$overrides" >&2
+    fail "$label contains a filesystem/persist override; remove it before testing"
+  fi
+}
+
 command -v flatpak >/dev/null 2>&1 || fail "flatpak is not installed"
 flatpak info "$APP_ID" >/dev/null 2>&1 ||
   fail "$APP_ID is not installed; build/install the Flatpak first"
@@ -37,14 +48,15 @@ if grep -Eq '^[[:space:]]*persistent=' <<<"$permissions"; then
   fail "the installed package declares a persist permission"
 fi
 
-# A persistent user override can make a correctly packaged Flatpak appear to
-# pass a feature test with broader access than users actually receive. Refuse
-# that setup instead of producing a misleading result.
-overrides="$(flatpak override --user --show "$APP_ID" 2>/dev/null || true)"
-if grep -Eq '^[[:space:]]*(filesystems|persistent)=' <<<"$overrides"; then
-  printf '%s\n' "$overrides" >&2
-  fail "a user filesystem/persist override is active; remove it before testing"
-fi
+# Effective permissions can be widened outside the package metadata at four
+# levels: global user, app-specific user, global system, and app-specific
+# system overrides. Reject filesystem/persist entries in every scope. Otherwise
+# a globally granted xdg-music/home path could make a clean package look safely
+# sandboxed while this smoke was actually exercising the local override.
+check_override_scope "global user override" --user
+check_override_scope "app-specific user override" --user "$APP_ID"
+check_override_scope "global system override" --system
+check_override_scope "app-specific system override" --system "$APP_ID"
 
 case "$HOME" in
   "$HOME/.var/app/$APP_ID"|"$HOME/.var/app/$APP_ID/"*)
@@ -88,6 +100,7 @@ if ! flatpak run --command=sh "$APP_ID" -c '
 fi
 
 printf 'PASS: %s declares no filesystem/persist grant.\n' "$APP_ID"
+printf 'PASS: global/app user and system overrides add no filesystem/persist grant.\n'
 printf 'PASS: unrelated host file was invisible inside the sandbox.\n'
 printf 'PASS: sandbox-local XDG data and cache locations are writable.\n'
 printf 'Manual portal-selected library validation: docs/flatpak-filesystem-audit.md\n'
