@@ -571,6 +571,9 @@ class LocalMusicProviderCard extends ConsumerWidget {
         ref.watch(localMusicControllerProvider);
     final bool? persisted = ref.watch(localFolderAccessProvider).valueOrNull;
     final bool hasFolder = folder != null && folder.isNotEmpty;
+    final FolderLocation? location =
+        hasFolder ? FolderLocation.parse(folder) : null;
+    final bool isDeviceLibrary = location?.isAndroidMediaStore ?? false;
     final LocalMusicController controller =
         ref.read(localMusicControllerProvider.notifier);
 
@@ -587,20 +590,31 @@ class LocalMusicProviderCard extends ConsumerWidget {
       tone = ProviderStatusTone.neutral;
       detail = 'Pick a folder on this device to play your own music.';
     } else if (persisted == false) {
-      status = 'Folder access lost';
+      if (isDeviceLibrary) {
+        status = 'Device music access off';
+        detail = 'All music on this device';
+      } else {
+        status = 'Folder access lost';
+        detail = location!.displayLabel;
+      }
       tone = ProviderStatusTone.error;
-      detail = FolderLocation.parse(folder).displayLabel;
     } else {
       final int tracks = report?.importedTracks ?? 0;
       status = tracks > 0
           ? '$tracks ${tracks == 1 ? 'track' : 'tracks'}'
-          : 'Folder selected';
+          : isDeviceLibrary
+              ? 'Device music selected'
+              : 'Folder selected';
       tone = ProviderStatusTone.positive;
-      detail = FolderLocation.parse(folder).displayLabel;
+      detail = isDeviceLibrary
+          ? 'All music on this device'
+          : location!.displayLabel;
     }
 
     return ProviderSummaryCard(
-      icon: Icons.folder_special_outlined,
+      icon: isDeviceLibrary
+          ? Icons.library_music_outlined
+          : Icons.folder_special_outlined,
       title: 'Local music',
       statusLabel: status,
       statusTone: tone,
