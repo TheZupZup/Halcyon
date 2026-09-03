@@ -25,8 +25,17 @@ info() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FLATPAK_DIR="$REPO_ROOT/flatpak"
+MANIFEST_PATH="$FLATPAK_DIR/$MANIFEST"
+
+manifest_scalar() {
+  local key="$1"
+  sed -n "s/^${key}:[[:space:]]*//p" "$MANIFEST_PATH" |
+    head -n 1 |
+    tr -d "'\""
+}
 
 command -v flatpak >/dev/null 2>&1 || fail "flatpak is not installed"
+[[ -f "$MANIFEST_PATH" ]] || fail "missing generated manifest: flatpak/$MANIFEST"
 
 if command -v flatpak-builder >/dev/null 2>&1; then
   BUILDER=(flatpak-builder)
@@ -36,20 +45,44 @@ else
   fail "flatpak-builder is unavailable; install org.flatpak.Builder or your distro's flatpak-builder package"
 fi
 
-# flatpak-builder does not install SDK/runtime dependencies implicitly. Keep
-# this smoke focused on source/build network independence and fail with a clear
-# prerequisite message instead of turning missing runtimes into a misleading
-# offline-source failure.
-for runtime in \
-  "org.gnome.Platform//50" \
-  "org.gnome.Sdk//50" \
-  "org.freedesktop.Sdk.Extension.llvm20//25.08"; do
-  flatpak info "$runtime" >/dev/null 2>&1 ||
-    fail "missing $runtime; install the Flatpak build prerequisites documented in docs/flatpak-development.md"
+# Read the current runtime requirements from the generated manifest instead of
+# duplicating version numbers here. The GNOME SDK itself reports the matching
+# freedesktop SDK branch; SDK extensions such as llvm20 use that branch rather
+# than GNOME's runtime-version.
+runtime_id="$(manifest_scalar runtime)"
+runtime_version="$(manifest_scalar runtime-version)"
+sdk_id="$(manifest_scalar sdk)"
+[[ -n "$runtime_id" && -n "$runtime_version" && -n "$sdk_id" ]] ||
+  fail "could not derive runtime/sdk prerequisites from flatpak/$MANIFEST"
+
+runtime_ref="$runtime_id//$runtime_version"
+sdk_ref="$sdk_id//$runtime_version"
+for runtime_ref_to_check in "$runtime_ref" "$sdk_ref"; do
+  flatpak info "$runtime_ref_to_check" >/dev/null 2>&1 ||
+    fail "missing $runtime_ref_to_check; install the Flatpak build prerequisites documented in docs/flatpak-development.md"
+done
+
+sdk_base_ref="$(flatpak info --show-runtime "$sdk_ref" 2>/dev/null)" ||
+  fail "could not determine the base runtime for $sdk_ref"
+sdk_extension_branch="${sdk_base_ref##*/}"
+[[ -n "$sdk_extension_branch" ]] ||
+  fail "could not derive the SDK extension branch from $sdk_base_ref"
+
+mapfile -t sdk_extensions < <(
+  awk '
+    /^sdk-extensions:/ { in_extensions = 1; next }
+    in_extensions && /^  - / { sub(/^  - /, ""); print; next }
+    in_extensions && /^[^ ]/ { exit }
+  ' "$MANIFEST_PATH" | tr -d "'\""
+)
+for extension in "${sdk_extensions[@]}"; do
+  [[ -n "$extension" ]] || continue
+  extension_ref="$extension//$sdk_extension_branch"
+  flatpak info "$extension_ref" >/dev/null 2>&1 ||
+    fail "missing $extension_ref; install the Flatpak build prerequisites documented in docs/flatpak-development.md"
 done
 
 cd "$FLATPAK_DIR"
-[[ -f "$MANIFEST" ]] || fail "missing generated manifest: flatpak/$MANIFEST"
 
 info "Phase 1/2: fetch only manifest-declared sources"
 "${BUILDER[@]}" --user --download-only --force-clean "$BUILD_DIR" "$MANIFEST"
