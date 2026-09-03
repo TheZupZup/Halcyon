@@ -43,6 +43,12 @@ inside the build's private `.pub-cache`. Matching hosted-hash entries are also
 pre-created. Remote `type: file` inputs, including native plugin inputs such as
 SQLite and mimalloc, are required to carry their own SHA-256 as well.
 
+The SDK module itself checks Flutter out from Git rather than from a hashed
+archive, so the guard requires that source to carry a full `commit`, not just
+the `tag` matching `.flutter-version`. A tag can be repointed upstream, which
+would let the fetch phase pull different code and the build phase reuse it
+without anything noticing.
+
 The generated Flutter SDK module provides `setup-flutter.sh`, whose dependency
 resolution command is:
 
@@ -81,6 +87,23 @@ Linthra's `linux/CMakeLists.txt` provides `LINTHRA_SQLITE3_SOURCE_DIR` and sets
 The Flatpak source generator also predeclares the exact SQLite archive used by
 the locked plugin version.
 
+Predeclaring it is only half the job: the archive has to land where
+`FetchContent` looks for it, or an uncached download-disabled build still tries
+to reach sqlite.org. That location is CMake's own download directory for the
+declaration, under the Flutter release build directory:
+
+```text
+./build/linux/<arch>/release/_deps/sqlite3-subbuild/sqlite3-populate-prefix/src
+```
+
+The regression guard reads the archive URL and SHA-256 out of the committed
+`sqlite3_flutter_libs` CMake patch (the input the locked plugin actually
+builds against), then requires a generated source with that exact URL and hash
+staged at that path for **every** architecture the generated sources declare,
+currently `x86_64` and `aarch64`. A regenerated source set that keeps the
+hashed archive but moves, drops or single-architectures its destination fails
+CI instead of failing much later inside a sandboxed build.
+
 ### media_kit_libs_linux
 
 The plugin can optionally fetch/build mimalloc. Linthra does not require that
@@ -92,7 +115,9 @@ MIMALLOC_USE_STATIC_LIBS OFF
 
 before generated plugin CMake is included. The generated source set also
 contains the plugin's pinned mimalloc input, so a generator/plugin change cannot
-quietly depend on a warm developer cache.
+quietly depend on a warm developer cache. Its destination is held to the same
+per-architecture rule as SQLite's, against the release build directory the
+plugin would download into.
 
 ## Automatic regression guard
 
@@ -107,8 +132,11 @@ suite. It checks that:
   archive and hosted-hash entry;
 - every remote archive/file source it audits has its **own** valid SHA-256,
   including generated Flutter SDK, SQLite and mimalloc inputs;
+- every remote `git` source pins a full commit, not just a tag or branch;
 - a later source's hash cannot accidentally satisfy an earlier source mapping;
-- the SQLite pre-fetch seam and mimalloc-disable switch remain in CMake;
+- the SQLite pre-fetch seam and mimalloc-disable switch remain in CMake, and
+  both native archives are staged at the per-architecture paths those builds
+  actually read;
 - the end-to-end smoke keeps `--download-only`, `--disable-cache` and
   `--disable-download` together.
 

@@ -5,7 +5,26 @@ import 'package:flutter_test/flutter_test.dart';
 
 final RegExp _sha256 = RegExp(r'^[0-9a-f]{64}$');
 
+/// A full Git object name, in either the SHA-1 or the SHA-256 object format.
+/// An abbreviated hash, a tag or a branch is not enough: only a full commit
+/// identifies the exact tree flatpak-builder will check out.
+final RegExp _gitCommit = RegExp(r'^([0-9a-f]{40}|[0-9a-f]{64})$');
+
+/// Flatpak architecture -> the architecture directory Flutter's Linux tool
+/// uses for `build/linux/<arch>/release`, which is also the CMake binary dir
+/// every plugin's generated CMake resolves its download paths against.
+const Map<String, String> _flutterArchDirectories = <String, String>{
+  'x86_64': 'x64',
+  'aarch64': 'arm64',
+};
+
 typedef _HostedPackage = ({String version, String sha256});
+
+typedef _FetchContentDeclaration = ({
+  String name,
+  String url,
+  String sha256,
+});
 
 String _read(String path) => File(path).readAsStringSync();
 
@@ -25,9 +44,27 @@ void _expectRemoteSourcesHashed(Object? value, String context) {
   for (final Map<String, dynamic> source in _maps(value)) {
     final Object? type = source['type'];
     final Object? url = source['url'];
-    if ((type != 'archive' && type != 'file') || !_isRemoteUrl(url)) {
+    if (!_isRemoteUrl(url)) continue;
+
+    // A `git` source is content-addressed by its commit, not by a digest of
+    // the fetched bytes. A tag or a branch is mutable upstream, so without a
+    // commit phase 1 could fetch different code tomorrow and phase 2 would
+    // rebuild from it without noticing.
+    if (type == 'git') {
+      expect(
+        source['commit'],
+        isA<String>().having(
+          (String value) => _gitCommit.hasMatch(value),
+          'full commit hash',
+          isTrue,
+        ),
+        reason:
+            '$context remote git source is not pinned to a full commit: $url',
+      );
       continue;
     }
+
+    if (type != 'archive' && type != 'file') continue;
 
     final Object? digest = source['sha256'];
     expect(
@@ -73,9 +110,9 @@ Map<String, _HostedPackage> _hostedPackagesFromLockfile(String contents) {
         currentIsHosted &&
         currentVersion != null &&
         currentSha256 != null) {
-      result[currentPackage!] = (
-        version: currentVersion!,
-        sha256: currentSha256!,
+      result[currentPackage] = (
+        version: currentVersion,
+        sha256: currentSha256,
       );
     }
   }
@@ -140,7 +177,7 @@ void _expectManifestRemoteSourcesHashed(String manifest) {
   for (int index = 0; index < lines.length; index++) {
     final String line = lines[index];
     final RegExpMatch? typeMatch = RegExp(
-      r'''^- type:\s*["']?(archive|file)["']?$''',
+      r'''^- type:\s*["']?(archive|file|git)["']?$''',
     ).firstMatch(line.trim());
     if (typeMatch == null) continue;
 
@@ -159,17 +196,165 @@ void _expectManifestRemoteSourcesHashed(String manifest) {
       block.add(peer);
     }
 
+    final String type = typeMatch.group(1)!;
     final String? url = _yamlScalar(block, 'url');
     if (!_isRemoteUrl(url)) continue;
+
+    if (type == 'git') {
+      final String? commit = _yamlScalar(block, 'commit');
+      expect(
+        commit != null && _gitCommit.hasMatch(commit),
+        isTrue,
+        reason: 'Remote git source near line ${index + 1} is not pinned to a '
+            'full commit: $url',
+      );
+      continue;
+    }
 
     final String? digest = _yamlScalar(block, 'sha256');
     expect(
       digest != null && _sha256.hasMatch(digest),
       isTrue,
-      reason: 'Remote ${typeMatch.group(1)} source near line '
+      reason: 'Remote $type source near line '
           '${index + 1} is missing its own valid SHA-256: $url',
     );
   }
+}
+
+List<String> _onlyArches(Map<String, dynamic> source) {
+  final Object? arches = source['only-arches'];
+  if (arches is! List<dynamic>) return const <String>[];
+  return arches.whereType<String>().toList();
+}
+
+Set<String> _declaredArches(Iterable<Map<String, dynamic>> sources) {
+  return sources.expand(_onlyArches).toSet();
+}
+
+String _flutterReleaseDirectory(String arch) {
+  final String? directory = _flutterArchDirectories[arch];
+  expect(
+    directory,
+    isNotNull,
+    reason: 'No Flutter build directory is known for Flatpak arch $arch',
+  );
+  return './build/linux/$directory/release';
+}
+
+/// Where CMake's `FetchContent` parks the archive it downloads for [name],
+/// relative to the CMake binary dir. An already-present file with a matching
+/// `URL_HASH` there is what makes the download step a no-op, which is the
+/// whole point of predeclaring the archive as a Flatpak source.
+String _fetchContentDownloadDir(String releaseDirectory, String name) {
+  return '$releaseDirectory/_deps/$name-subbuild/$name-populate-prefix/src';
+}
+
+/// Reads the `FetchContent_Declare` the locked plugin actually builds with,
+/// out of the committed patch applied to its `CMakeLists.txt`. Deriving the
+/// name, URL and hash from there means the guard follows a plugin bump instead
+/// of pinning a copy of it that can silently go stale.
+_FetchContentDeclaration _fetchContentDeclarationFromPatch(String patch) {
+  bool inDeclaration = false;
+  String? name;
+  String? url;
+  String? sha256;
+
+  for (final String line in const LineSplitter().convert(patch)) {
+    // Drop the unified-diff marker so context and added lines read alike.
+    final String trimmed = (line.isEmpty ? line : line.substring(1)).trim();
+
+    if (trimmed == 'FetchContent_Declare(') {
+      inDeclaration = true;
+      name = null;
+      url = null;
+      sha256 = null;
+      continue;
+    }
+    if (!inDeclaration) continue;
+    if (trimmed == ')') {
+      inDeclaration = false;
+      continue;
+    }
+
+    if (trimmed.startsWith('URL_HASH SHA256=')) {
+      sha256 = trimmed.substring('URL_HASH SHA256='.length).trim();
+    } else if (trimmed.startsWith('URL ')) {
+      url = trimmed.substring('URL '.length).trim();
+    } else {
+      name ??= trimmed;
+    }
+
+    if (name != null && url != null && sha256 != null) {
+      return (name: name, url: url, sha256: sha256);
+    }
+  }
+
+  fail('The patched plugin CMake declares no hashed FetchContent source');
+}
+
+/// Assert that a native archive the build fetches for itself is predeclared as
+/// a Flatpak source *and* lands exactly where that build looks for it.
+///
+/// A hash alone is not enough: with the archive staged anywhere else, an
+/// uncached `--disable-download` build still reaches upstream and fails.
+void _expectPreFetchedNativeInput({
+  required Iterable<Map<String, dynamic>> sources,
+  required String url,
+  required String sha256,
+  required String Function(String arch) destination,
+  required String filename,
+  required Set<String> requiredArches,
+  required String label,
+  required String context,
+}) {
+  final List<Map<String, dynamic>> matches = sources
+      .where((Map<String, dynamic> source) => source['url'] == url)
+      .toList();
+  expect(
+    matches,
+    isNotEmpty,
+    reason: '$context predeclares no $label source for $url',
+  );
+
+  final Set<String> covered = <String>{};
+  for (final Map<String, dynamic> source in matches) {
+    expect(
+      source['sha256'],
+      sha256,
+      reason: '$context $label source is not pinned to $sha256',
+    );
+
+    // With no `dest-filename` flatpak-builder keeps the URL's own basename.
+    expect(
+      source['dest-filename'] ?? url.split('/').last,
+      filename,
+      reason: '$context $label source does not land as $filename',
+    );
+
+    final List<String> arches = _onlyArches(source);
+    expect(
+      arches,
+      isNotEmpty,
+      reason: '$context $label source declares no only-arches, so its '
+          'architecture-specific destination cannot be checked',
+    );
+
+    for (final String arch in arches) {
+      expect(
+        source['dest'],
+        destination(arch),
+        reason: '$context $label source for $arch is not staged where the '
+            'build looks for it',
+      );
+      covered.add(arch);
+    }
+  }
+
+  expect(
+    covered,
+    requiredArches,
+    reason: '$context does not stage $label for every declared architecture',
+  );
 }
 
 void _expectNoBuildNetworkGrant(String manifest) {
@@ -275,6 +460,23 @@ void main() {
       contains(r'flutter pub get --offline $@'),
     );
 
+    // The SDK module checks Flutter out from Git rather than from a hashed
+    // archive, so its commit is the only thing making that checkout
+    // reproducible. `_expectJsonSourcesHashed` above already rejects an
+    // unpinned remote Git source; this keeps the SDK's own checkout from
+    // disappearing into a source type nothing audits.
+    final List<Map<String, dynamic>> sdkGitSources = _maps(sdk['sources'])
+        .where((Map<String, dynamic> source) => source['type'] == 'git')
+        .toList();
+    expect(sdkGitSources, hasLength(1));
+    expect(sdkGitSources.single['dest'], 'flutter');
+    expect(_isRemoteUrl(sdkGitSources.single['url']), isTrue);
+    expect(
+      sdkGitSources.single['commit'],
+      matches(_gitCommit),
+      reason: 'The generated Flutter SDK checkout is not pinned to a commit',
+    );
+
     final String pubSourcesText =
         _read('flatpak/generated/sources/pubspec.json');
     final Object? pubSources = jsonDecode(pubSourcesText);
@@ -328,10 +530,95 @@ void main() {
       );
     }
 
-    expect(cmake, contains('FETCHCONTENT_SOURCE_DIR_SQLITE3'));
+    // Native plugin inputs. Both plugins fetch these themselves from CMake, so
+    // a hashed source that lands in the wrong place leaves the uncached,
+    // download-disabled build reaching upstream anyway.
+    final Set<String> nativeArches = _declaredArches(pubSourceMaps);
+    expect(
+      nativeArches,
+      isNotEmpty,
+      reason: 'The generated sources declare no architecture-specific inputs',
+    );
+
+    // sqlite3_flutter_libs: take the SQLite archive the locked plugin build
+    // actually asks for from the committed patch to its CMakeLists.txt, then
+    // require that exact archive to be staged in FetchContent's own download
+    // directory for every architecture the generated sources cover.
+    final List<Map<String, dynamic>> sqlitePatches = pubSourceMaps
+        .where(
+          (Map<String, dynamic> source) =>
+              source['type'] == 'patch' &&
+              '${source['dest']}'.contains('/sqlite3_flutter_libs-'),
+        )
+        .toList();
+    expect(
+      sqlitePatches,
+      hasLength(1),
+      reason: 'sqlite3_flutter_libs has no generated CMake patch',
+    );
+
+    final _FetchContentDeclaration sqlite = _fetchContentDeclarationFromPatch(
+      _read('flatpak/${sqlitePatches.single['path']}'),
+    );
+    expect(
+      sqlite.url.split('/').last,
+      matches(RegExp(r'^sqlite-autoconf-\d+\.tar\.gz$')),
+      reason: 'The locked plugin no longer fetches a SQLite amalgamation',
+    );
+    expect(
+      cmake,
+      contains('FETCHCONTENT_SOURCE_DIR_${sqlite.name.toUpperCase()}'),
+    );
+
+    _expectPreFetchedNativeInput(
+      sources: pubSourceMaps,
+      url: sqlite.url,
+      sha256: sqlite.sha256,
+      destination: (String arch) =>
+          _fetchContentDownloadDir(_flutterReleaseDirectory(arch), sqlite.name),
+      filename: sqlite.url.split('/').last,
+      requiredArches: nativeArches,
+      label: 'SQLite',
+      context: 'flatpak/generated/sources/pubspec.json',
+    );
+
+    // media_kit_libs_linux: the allocator fetch is switched off in CMake, and
+    // the archive it would otherwise download is predeclared next to the build
+    // directory it expects. Hold that destination to the same rule so the
+    // switch and the staged input cannot drift apart unnoticed.
     expect(cmake, contains('MIMALLOC_USE_STATIC_LIBS OFF'));
-    expect(pubSourcesText, contains('sqlite-autoconf-'));
-    expect(pubSourcesText, contains('mimalloc-'));
+
+    final List<Map<String, dynamic>> mimallocSources = pubSourceMaps
+        .where(
+          (Map<String, dynamic> source) => RegExp(
+            r'^mimalloc-[0-9][0-9.]*\.tar\.gz$',
+          ).hasMatch('${source['dest-filename']}'),
+        )
+        .toList();
+    expect(
+      mimallocSources,
+      isNotEmpty,
+      reason: "media_kit's mimalloc input is no longer predeclared",
+    );
+    final Set<String> mimallocUrls = mimallocSources
+        .map((Map<String, dynamic> source) => '${source['url']}')
+        .toSet();
+    final Set<String> mimallocFilenames = mimallocSources
+        .map((Map<String, dynamic> source) => '${source['dest-filename']}')
+        .toSet();
+    expect(mimallocUrls, hasLength(1));
+    expect(mimallocFilenames, hasLength(1));
+
+    _expectPreFetchedNativeInput(
+      sources: pubSourceMaps,
+      url: mimallocUrls.single,
+      sha256: '${mimallocSources.first['sha256']}',
+      destination: _flutterReleaseDirectory,
+      filename: mimallocFilenames.single,
+      requiredArches: nativeArches,
+      label: 'mimalloc',
+      context: 'flatpak/generated/sources/pubspec.json',
+    );
 
     final List<String> invocations = _builderInvocations(
       _read('scripts/flatpak_offline_build_smoke.sh'),
@@ -371,6 +658,132 @@ sources:
           },
         ],
         'fixture',
+      ),
+      throwsA(anything),
+    );
+  });
+
+  test('remote git sources require a pinned commit', () {
+    const String url = 'https://github.com/flutter/flutter.git';
+
+    // A URL and a tag, but no commit: the tag can move upstream.
+    expect(
+      () => _expectRemoteSourcesHashed(
+        <Map<String, dynamic>>[
+          <String, dynamic>{
+            'type': 'git',
+            'url': url,
+            'tag': '3.44.7',
+            'dest': 'flutter',
+          },
+        ],
+        'fixture',
+      ),
+      throwsA(anything),
+    );
+
+    // An abbreviated commit is not a pin either.
+    expect(
+      () => _expectRemoteSourcesHashed(
+        <Map<String, dynamic>>[
+          <String, dynamic>{
+            'type': 'git',
+            'url': url,
+            'commit': '84fc5cbb22',
+          },
+        ],
+        'fixture',
+      ),
+      throwsA(anything),
+    );
+
+    // Control: a full commit hash is accepted.
+    _expectRemoteSourcesHashed(
+      <Map<String, dynamic>>[
+        <String, dynamic>{
+          'type': 'git',
+          'url': url,
+          'tag': '3.44.7',
+          'commit': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        },
+      ],
+      'fixture',
+    );
+
+    // The same rule holds for a Git source written into the manifest itself.
+    expect(
+      () => _expectManifestRemoteSourcesHashed(
+        'sources:\n  - type: git\n    url: $url\n    tag: 3.44.7\n',
+      ),
+      throwsA(anything),
+    );
+  });
+
+  test('a hashed native input with the wrong destination is rejected', () {
+    const String url =
+        'https://example.invalid/2026/sqlite-autoconf-3520000.tar.gz';
+    const String filename = 'sqlite-autoconf-3520000.tar.gz';
+    const String sha256 =
+        '1111111111111111111111111111111111111111111111111111111111111111';
+
+    String destination(String arch) =>
+        _fetchContentDownloadDir(_flutterReleaseDirectory(arch), 'sqlite3');
+
+    List<Map<String, dynamic>> sources(
+      Map<String, dynamic> overrides, {
+      List<String> arches = const <String>['x86_64'],
+    }) {
+      return <Map<String, dynamic>>[
+        for (final String arch in arches)
+          <String, dynamic>{
+            'type': 'file',
+            'only-arches': <String>[arch],
+            'url': url,
+            'sha256': sha256,
+            'dest': destination(arch),
+            ...overrides,
+          },
+      ];
+    }
+
+    void check(
+      List<Map<String, dynamic>> candidates, {
+      Set<String> requiredArches = const <String>{'x86_64'},
+    }) {
+      _expectPreFetchedNativeInput(
+        sources: candidates,
+        url: url,
+        sha256: sha256,
+        destination: destination,
+        filename: filename,
+        requiredArches: requiredArches,
+        label: 'SQLite',
+        context: 'fixture',
+      );
+    }
+
+    // Control: the mapping the current build seam needs is accepted.
+    check(sources(<String, dynamic>{}));
+
+    // Correctly hashed, but staged off the FetchContent download path.
+    expect(
+      () => check(
+        sources(<String, dynamic>{'dest': './build/linux/x64/release'}),
+      ),
+      throwsA(anything),
+    );
+
+    // Correctly hashed, but with no destination at all.
+    expect(
+      () => check(sources(<String, dynamic>{'dest': null})),
+      throwsA(anything),
+    );
+
+    // Correctly hashed and staged, but only for one of the declared arches.
+    expect(
+      () => check(
+        sources(<String, dynamic>{}),
+        requiredArches: <String>{'x86_64', 'aarch64'},
       ),
       throwsA(anything),
     );
