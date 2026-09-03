@@ -101,10 +101,14 @@ declaration, under the Flutter release build directory:
 The regression guard reads the archive URL and SHA-256 out of the committed
 `sqlite3_flutter_libs` CMake patch (the input the locked plugin actually
 builds against), then requires a generated source with that exact URL and hash
-staged at that path for **every** architecture the generated sources declare,
-currently `x86_64` and `aarch64`. A regenerated source set that keeps the
-hashed archive but moves, drops or single-architectures its destination fails
-CI instead of failing much later inside a sandboxed build.
+staged at that path for **every** architecture the *Flutter SDK module*
+declares, currently `x86_64` and `aarch64`. That list deliberately comes from
+the SDK module rather than from the native inputs being audited: derived from
+the inputs themselves it would shrink whenever both architectures' entries
+disappeared together, passing over the very gap it exists to catch. A
+regenerated source set that keeps the hashed archive but moves, drops or
+single-architectures its destination fails CI instead of failing much later
+inside a sandboxed build.
 
 ### media_kit_libs_linux
 
@@ -140,7 +144,8 @@ suite. It checks that:
 - every remote archive/file source it audits has its **own** valid SHA-256,
   including generated Flutter SDK, SQLite and mimalloc inputs;
 - every remote `git` source pins a full commit, not just a tag or branch;
-- a later source's hash cannot accidentally satisfy an earlier source mapping;
+- a later source's hash cannot accidentally satisfy an earlier source mapping,
+  and a mapping is recognised whatever order its keys appear in;
 - the SQLite pre-fetch seam and mimalloc-disable switch remain in CMake, and
   both native archives are staged at the per-architecture paths those builds
   actually read;

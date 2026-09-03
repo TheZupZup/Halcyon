@@ -26,6 +26,9 @@ const String _hostedHashRoot = '.pub-cache/hosted-hashes/pub.dev';
 
 typedef _HostedPackage = ({String version, String sha256});
 
+/// One block-sequence mapping: the 1-based line it starts on, and its lines.
+typedef _YamlMapping = ({int line, List<String> lines});
+
 typedef _FetchContentDeclaration = ({
   String name,
   String url,
@@ -177,52 +180,65 @@ String? _yamlScalar(List<String> block, String key) {
   return null;
 }
 
-void _expectManifestRemoteSourcesHashed(String manifest) {
+/// Every block-sequence mapping in [manifest], with the leading `- ` folded
+/// into the indentation so its first key reads like the rest.
+///
+/// YAML gives no significance to key order, so `- url: ...` followed by
+/// `type: archive` is the same mapping as the other way round. The mapping has
+/// to be gathered before any key is read from it, or a reordered source slips
+/// past the guard entirely.
+List<_YamlMapping> _yamlSequenceMappings(String manifest) {
   final List<String> lines = const LineSplitter().convert(manifest);
+  final List<_YamlMapping> mappings = <_YamlMapping>[];
 
   for (int index = 0; index < lines.length; index++) {
     final String line = lines[index];
-    final RegExpMatch? typeMatch = RegExp(
-      r'''^- type:\s*["']?(archive|file|git)["']?$''',
-    ).firstMatch(line.trim());
-    if (typeMatch == null) continue;
+    if (!line.trimLeft().startsWith('- ')) continue;
 
     final int indent = line.length - line.trimLeft().length;
-    final List<String> block = <String>[line];
+    final List<String> block = <String>[
+      '${' ' * (indent + 2)}${line.trimLeft().substring(2)}',
+    ];
+
     for (int peerIndex = index + 1; peerIndex < lines.length; peerIndex++) {
       final String peer = lines[peerIndex];
-      if (peer.trim().isEmpty) {
-        block.add(peer);
-        continue;
-      }
-
-      final int peerIndent = peer.length - peer.trimLeft().length;
-      if (peerIndent < indent) break;
-      if (peerIndent == indent && peer.trimLeft().startsWith('- ')) break;
+      if (peer.trim().isEmpty) continue;
+      // A peer entry or an outdented key ends this mapping.
+      if (peer.length - peer.trimLeft().length <= indent) break;
       block.add(peer);
     }
 
-    final String type = typeMatch.group(1)!;
-    final String? url = _yamlScalar(block, 'url');
+    mappings.add((line: index + 1, lines: block));
+  }
+
+  return mappings;
+}
+
+void _expectManifestRemoteSourcesHashed(String manifest) {
+  for (final _YamlMapping mapping in _yamlSequenceMappings(manifest)) {
+    final String? type = _yamlScalar(mapping.lines, 'type');
+    final String? url = _yamlScalar(mapping.lines, 'url');
     if (!_isRemoteUrl(url)) continue;
 
     if (type == 'git') {
-      final String? commit = _yamlScalar(block, 'commit');
+      final String? commit = _yamlScalar(mapping.lines, 'commit');
       expect(
         commit != null && _gitCommit.hasMatch(commit),
         isTrue,
-        reason: 'Remote git source near line ${index + 1} is not pinned to a '
-            'full commit: $url',
+        reason: 'Remote git source near line ${mapping.line} is not pinned to '
+            'a full commit: $url',
       );
       continue;
     }
 
-    final String? digest = _yamlScalar(block, 'sha256');
+    if (type != 'archive' && type != 'file') continue;
+
+    final String? digest = _yamlScalar(mapping.lines, 'sha256');
     expect(
       digest != null && _sha256.hasMatch(digest),
       isTrue,
       reason: 'Remote $type source near line '
-          '${index + 1} is missing its own valid SHA-256: $url',
+          '${mapping.line} is missing its own valid SHA-256: $url',
     );
   }
 }
@@ -678,11 +694,16 @@ void main() {
     // Native plugin inputs. Both plugins fetch these themselves from CMake, so
     // a hashed source that lands in the wrong place leaves the uncached,
     // download-disabled build reaching upstream anyway.
-    final Set<String> nativeArches = _declaredArches(pubSourceMaps);
+    // Derived from the Flutter SDK module, which is what says the build is
+    // provisioned for these architectures, not from the native inputs being
+    // audited. A set built from those same inputs would shrink whenever both
+    // architectures' entries disappeared together, and the coverage check
+    // would then pass over exactly the gap it exists to catch.
+    final Set<String> nativeArches = _declaredArches(_maps(sdk['sources']));
     expect(
       nativeArches,
       isNotEmpty,
-      reason: 'The generated sources declare no architecture-specific inputs',
+      reason: 'The generated Flutter SDK module declares no architectures',
     );
 
     // sqlite3_flutter_libs: take the SQLite archive the locked plugin build
@@ -812,6 +833,26 @@ sources:
 
     expect(
       () => _expectManifestRemoteSourcesHashed(manifest),
+      throwsA(anything),
+    );
+
+    // YAML gives no significance to key order, so a mapping that lists `url`
+    // before `type` is the same source and has to be recognised as one.
+    expect(
+      () => _expectManifestRemoteSourcesHashed('''
+sources:
+  - url: https://example.invalid/first.tar.gz
+    type: archive
+'''),
+      throwsA(anything),
+    );
+    expect(
+      () => _expectManifestRemoteSourcesHashed('''
+sources:
+  - url: https://github.com/flutter/flutter.git
+    type: git
+    tag: '3.44.7'
+'''),
       throwsA(anything),
     );
   });
