@@ -48,8 +48,10 @@ class LocalMusicSettingsSection extends ConsumerWidget {
           children: [
             Row(
               children: [
-                Icon(Icons.folder_special_outlined,
-                    color: theme.colorScheme.primary),
+                Icon(
+                  Icons.folder_special_outlined,
+                  color: theme.colorScheme.primary,
+                ),
                 const SizedBox(width: AppSpacing.sm),
                 Text('Local music', style: theme.textTheme.titleMedium),
               ],
@@ -98,6 +100,10 @@ class LocalMusicSettingsSection extends ConsumerWidget {
                 onRescan: controller.rescan,
                 onChange: controller.pickFolder,
                 onForget: controller.forget,
+                onUseAllDeviceMusic:
+                    host.isAndroid && !location!.isAndroidMediaStore
+                        ? controller.useAllDeviceMusic
+                        : null,
                 host: host,
               )
             else if (host.isAndroid)
@@ -315,7 +321,10 @@ class _ScanSummary extends StatelessWidget {
         Text(_headline(report), style: theme.textTheme.bodyMedium),
         if (counts != null) ...[
           const SizedBox(height: AppSpacing.xs),
-          Text(counts, style: theme.textTheme.bodySmall?.copyWith(color: muted)),
+          Text(
+            counts,
+            style: theme.textTheme.bodySmall?.copyWith(color: muted),
+          ),
         ],
         if (hint != null) ...[
           const SizedBox(height: AppSpacing.xs),
@@ -406,11 +415,13 @@ class _FolderActions extends StatelessWidget {
     required this.onChange,
     required this.onForget,
     required this.host,
+    this.onUseAllDeviceMusic,
   });
 
   final VoidCallback onRescan;
   final VoidCallback onChange;
   final VoidCallback onForget;
+  final VoidCallback? onUseAllDeviceMusic;
   final HostPlatform host;
 
   @override
@@ -418,6 +429,14 @@ class _FolderActions extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (onUseAllDeviceMusic != null) ...[
+          FilledButton.icon(
+            onPressed: onUseAllDeviceMusic,
+            icon: const Icon(Icons.library_music_outlined),
+            label: const Text('All music on this device'),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+        ],
         Row(
           children: [
             Expanded(
