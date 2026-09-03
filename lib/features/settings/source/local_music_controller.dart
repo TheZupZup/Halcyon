@@ -49,7 +49,12 @@ class LocalMusicController extends Notifier<LocalMusicActionState> {
 
   /// Opts into Android's device-wide shared music library.
   ///
-  /// A denial leaves the existing folder/catalog untouched.
+  /// The switch is transactional: the permission is requested, the first
+  /// MediaStore scan runs, and only a scan that actually succeeded persists the
+  /// MediaStore sentinel. A denial or a failed first scan therefore leaves an
+  /// existing folder selection *and* its indexed catalog exactly as they were,
+  /// rather than stranding the app in MediaStore mode while it still shows
+  /// tracks from a folder it can no longer name.
   Future<void> useAllDeviceMusic() async {
     if (!ref.read(hostPlatformProvider).isAndroid) return;
     state = const LocalMusicActionState(busy: true);
@@ -66,10 +71,19 @@ class LocalMusicController extends Notifier<LocalMusicActionState> {
       return;
     }
 
+    // Scan before persisting. `scanFolder` takes the location explicitly, so
+    // nothing has to be saved first, and a failure leaves the stored selection
+    // untouched: no restore step, and no window where a crash could strand a
+    // half-applied switch.
+    final LocalScanReport? report =
+        await _scan(FolderLocation.androidMediaStoreAudio);
+    if (report == null || report.hadError) {
+      return;
+    }
     await ref
         .read(selectedFolderControllerProvider.notifier)
         .setAndPersist(FolderLocation.androidMediaStoreAudio);
-    await _scan(FolderLocation.androidMediaStoreAudio);
+    ref.invalidate(localFolderAccessProvider);
   }
 
   Future<void> refreshAndroidPermissionStatus() async {
@@ -107,13 +121,15 @@ class LocalMusicController extends Notifier<LocalMusicActionState> {
     );
   }
 
-  Future<void> _scan(String folder) async {
+  /// Scans [folder], turns the resulting report into the card's status line,
+  /// and hands the report back so a caller can act on the outcome.
+  Future<LocalScanReport?> _scan(String folder) async {
     await ref.read(libraryControllerProvider.notifier).scanFolder(folder);
     final report = ref.read(localScanReportProvider);
     final FolderLocation location = FolderLocation.parse(folder);
     if (report == null) {
       state = const LocalMusicActionState();
-      return;
+      return null;
     }
     if (report.hadError) {
       final String message;
@@ -127,7 +143,7 @@ class LocalMusicController extends Notifier<LocalMusicActionState> {
         message = "Couldn't scan that folder. Try selecting it again.";
       }
       state = LocalMusicActionState(message: message, isError: true);
-      return;
+      return report;
     }
     if (report.importedTracks > 0) {
       state = LocalMusicActionState(
@@ -135,7 +151,7 @@ class LocalMusicController extends Notifier<LocalMusicActionState> {
             '${report.importedTracks == 1 ? 'track' : 'tracks'} from '
             '${location.isAndroidMediaStore ? 'this device' : 'this folder'}.',
       );
-      return;
+      return report;
     }
     final bool looksBlocked = report.readFailures > 0 ||
         (location.isContentUri && report.filesVisited == 0);
@@ -148,6 +164,7 @@ class LocalMusicController extends Notifier<LocalMusicActionState> {
               : 'No playable audio found in that folder.',
       isError: looksBlocked,
     );
+    return report;
   }
 }
 

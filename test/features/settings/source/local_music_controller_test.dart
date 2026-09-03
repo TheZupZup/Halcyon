@@ -1,11 +1,14 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/platform/host_platform.dart';
+import 'package:linthra/core/sources/local/android_media_library.dart';
 import 'package:linthra/core/sources/local/audio_file_scanner.dart';
 import 'package:linthra/core/sources/local/directory_readability.dart';
+import 'package:linthra/core/sources/local/folder_location.dart';
 import 'package:linthra/core/sources/local/folder_scan_exception.dart';
 import 'package:linthra/core/sources/local/local_scan_diagnostics.dart';
 import 'package:linthra/core/sources/local/local_scan_report.dart';
+import 'package:linthra/core/sources/local/saf_document_lister.dart';
 import 'package:linthra/data/repositories/host_platform_provider.dart';
 import 'package:linthra/data/repositories/in_memory_music_library_repository.dart';
 import 'package:linthra/data/repositories/in_memory_selected_music_folder_repository.dart';
@@ -37,6 +40,52 @@ class _MutableScanner implements AudioFileScanner {
   }
 }
 
+/// A scriptable stand-in for Android's MediaStore seam: the permission answer
+/// and the device-audio result (rows, or a thrown failure) are both set by the
+/// test, so a switch to device-wide mode can be walked without a device.
+class _FakeAndroidMediaLibrary implements AndroidMediaLibrary {
+  _FakeAndroidMediaLibrary({
+    this.status = AndroidMusicPermissionStatus.allowed,
+    this.documents = const <SafAudioDocument>[],
+    this.failure,
+  });
+
+  AndroidMusicPermissionStatus status;
+  List<SafAudioDocument> documents;
+  Object? failure;
+  int requestCount = 0;
+
+  @override
+  Future<AndroidMusicPermissionStatus> permissionStatus() async => status;
+
+  @override
+  Future<AndroidMusicPermissionStatus> requestPermission() async {
+    requestCount++;
+    return status;
+  }
+
+  @override
+  Future<void> openAppSettings() async {}
+
+  @override
+  Future<SafScanResult> listDeviceAudio() async {
+    final Object? error = failure;
+    if (error != null) {
+      throw error;
+    }
+    return SafScanResult(
+      documents: documents,
+      filesVisited: documents.length,
+    );
+  }
+}
+
+const SafAudioDocument _deviceSong = SafAudioDocument(
+  uri: 'content://media/external/audio/media/7',
+  name: 'Device song.mp3',
+  mimeType: 'audio/mpeg',
+);
+
 /// The desktop access probe, likewise flippable mid-test.
 class _MutableReadability implements DirectoryReadability {
   _MutableReadability(this.readable);
@@ -64,6 +113,12 @@ ProviderContainer _container({
   addTearDown(container.dispose);
   return container;
 }
+
+/// What is actually on disk (well, in the in-memory repository) rather than the
+/// controller's in-flight state — the distinction the transactional switch is
+/// about.
+Future<String?> folderRepoValue(ProviderContainer container) =>
+    container.read(selectedMusicFolderRepositoryProvider).getSelectedFolder();
 
 void main() {
   setUp(LocalScanDiagnostics.reset);
@@ -213,6 +268,181 @@ void main() {
       await container.read(localMusicControllerProvider.notifier).rescan();
 
       expect(container.read(localMusicControllerProvider).message, isNull);
+    });
+
+    // Switching an existing folder user to device-wide mode has to be all or
+    // nothing (#550): the catalog is deliberately preserved when a scan fails,
+    // so persisting the MediaStore sentinel before the first scan succeeded
+    // would leave the app configured for MediaStore while still showing the old
+    // folder's tracks — with the folder reference needed to rescan them gone.
+    group('switching to device-wide music', () {
+      ProviderContainer androidContainer({
+        required _FakeAndroidMediaLibrary media,
+        required InMemorySelectedMusicFolderRepository folderRepo,
+        required InMemoryMusicLibraryRepository libraryRepo,
+        FakeAudioFileScanner? scanner,
+      }) {
+        final container = ProviderContainer(
+          overrides: [
+            hostPlatformProvider.overrideWithValue(HostPlatform.android),
+            androidMediaLibraryProvider.overrideWithValue(media),
+            selectedMusicFolderRepositoryProvider.overrideWithValue(folderRepo),
+            musicLibraryRepositoryProvider.overrideWithValue(libraryRepo),
+            audioFileScannerProvider
+                .overrideWithValue(scanner ?? FakeAudioFileScanner()),
+            folderPickerServiceProvider
+                .overrideWithValue(FakeFolderPickerService()),
+          ],
+        );
+        addTearDown(container.dispose);
+        return container;
+      }
+
+      test('a successful first scan persists the MediaStore selection',
+          () async {
+        final libraryRepo = InMemoryMusicLibraryRepository();
+        final container = androidContainer(
+          media: _FakeAndroidMediaLibrary(
+            documents: const <SafAudioDocument>[_deviceSong],
+          ),
+          folderRepo:
+              InMemorySelectedMusicFolderRepository(initialFolder: '/music'),
+          libraryRepo: libraryRepo,
+        );
+        await container.read(selectedFolderControllerProvider.future);
+
+        await container
+            .read(localMusicControllerProvider.notifier)
+            .useAllDeviceMusic();
+
+        expect(
+          container.read(selectedFolderControllerProvider).valueOrNull,
+          FolderLocation.androidMediaStoreAudio,
+        );
+        expect(await folderRepoValue(container), 'mediastore://audio');
+        expect(await libraryRepo.getAllTracks(), hasLength(1));
+        expect(
+          container.read(localMusicControllerProvider).message,
+          contains('from this device'),
+        );
+      });
+
+      test('a failed first scan leaves the previous folder selected', () async {
+        final container = androidContainer(
+          media: _FakeAndroidMediaLibrary(
+            failure: const FolderScanException(
+              "Couldn't read Android's shared music library.",
+              code: 'media_store_failed',
+            ),
+          ),
+          folderRepo:
+              InMemorySelectedMusicFolderRepository(initialFolder: '/music'),
+          libraryRepo: InMemoryMusicLibraryRepository(),
+        );
+        await container.read(selectedFolderControllerProvider.future);
+
+        await container
+            .read(localMusicControllerProvider.notifier)
+            .useAllDeviceMusic();
+
+        expect(
+          container.read(selectedFolderControllerProvider).valueOrNull,
+          '/music',
+          reason: 'the folder must survive a failed switch',
+        );
+        expect(await folderRepoValue(container), '/music');
+        // A provider fault is not a permission problem, and says so.
+        expect(
+          container.read(localScanReportProvider)?.error,
+          LocalScanError.unexpected,
+        );
+        expect(container.read(localMusicControllerProvider).isError, isTrue);
+      });
+
+      test('a failed first scan preserves the already indexed catalog',
+          () async {
+        final libraryRepo = InMemoryMusicLibraryRepository();
+        final container = androidContainer(
+          media: _FakeAndroidMediaLibrary(
+            failure: const FolderScanException(
+              "Couldn't read Android's shared music library.",
+              code: 'media_store_failed',
+            ),
+          ),
+          folderRepo: InMemorySelectedMusicFolderRepository(),
+          libraryRepo: libraryRepo,
+          scanner: FakeAudioFileScanner(files: const <String>['/music/a.mp3']),
+        );
+        // Index a folder the normal way first, then attempt the switch.
+        await container
+            .read(selectedFolderControllerProvider.notifier)
+            .setAndPersist('/music');
+        await container.read(localMusicControllerProvider.notifier).rescan();
+        expect(await libraryRepo.getAllTracks(), hasLength(1));
+
+        await container
+            .read(localMusicControllerProvider.notifier)
+            .useAllDeviceMusic();
+
+        expect(
+          await libraryRepo.getAllTracks(),
+          hasLength(1),
+          reason: 'a failed switch must not touch the indexed music',
+        );
+        expect(
+          container.read(selectedFolderControllerProvider).valueOrNull,
+          '/music',
+        );
+      });
+
+      test('with no previous folder, a successful scan still selects it',
+          () async {
+        final container = androidContainer(
+          media: _FakeAndroidMediaLibrary(
+            documents: const <SafAudioDocument>[_deviceSong],
+          ),
+          folderRepo: InMemorySelectedMusicFolderRepository(),
+          libraryRepo: InMemoryMusicLibraryRepository(),
+        );
+        await container.read(selectedFolderControllerProvider.future);
+
+        await container
+            .read(localMusicControllerProvider.notifier)
+            .useAllDeviceMusic();
+
+        expect(
+          container.read(selectedFolderControllerProvider).valueOrNull,
+          FolderLocation.androidMediaStoreAudio,
+        );
+      });
+
+      test('a denied permission never changes the selected source', () async {
+        final media = _FakeAndroidMediaLibrary(
+          status: AndroidMusicPermissionStatus.denied,
+        );
+        final container = androidContainer(
+          media: media,
+          folderRepo:
+              InMemorySelectedMusicFolderRepository(initialFolder: '/music'),
+          libraryRepo: InMemoryMusicLibraryRepository(),
+        );
+        await container.read(selectedFolderControllerProvider.future);
+
+        await container
+            .read(localMusicControllerProvider.notifier)
+            .useAllDeviceMusic();
+
+        expect(media.requestCount, 1);
+        expect(
+          container.read(selectedFolderControllerProvider).valueOrNull,
+          '/music',
+        );
+        expect(await folderRepoValue(container), '/music');
+        expect(
+          container.read(localMusicControllerProvider).message,
+          contains('was not granted'),
+        );
+      });
     });
 
     test('forget clears the selection, the local catalog, and the report',
