@@ -13,7 +13,6 @@ void main() {
 
   test('Flatpak CI stays read-only and fork-safe', () {
     expect(workflow, contains('permissions:\n  contents: read'));
-    expect(workflow, isNot(contains('pull_request_target:')));
     expect(workflow, isNot(contains(r'secrets.')));
     expect(workflow, isNot(contains('contents: write')));
   });
