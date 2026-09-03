@@ -11,19 +11,27 @@ fork pull requests can run the same validation as maintainer branches.
 
 The job starts from a clean Ubuntu runner and:
 
-1. installs Flatpak, flatpak-builder, AppStream and desktop-entry validators;
+1. installs Flatpak, flatpak-builder, AppStream, desktop-entry and headless X11
+   validation tools;
 2. runs Linthra's committed Linux packaging checks;
 3. validates the desktop entry and AppStream metadata;
 4. adds a user-level Flathub remote;
 5. asks flatpak-builder to install the SDK/runtime prerequisites declared by the
    generated manifest;
 6. builds the real generated Flatpak manifest with module-cache reuse disabled;
-7. exports the result into a local Flatpak repository and verifies that export.
+7. exports the result into a local Flatpak repository and verifies that export;
+8. installs Linthra from that local repository;
+9. launches the packaged app inside an Xvfb + D-Bus session and waits for a real
+   `Linthra` desktop window before terminating and cleaning up the test install.
 
 No `actions/cache` entry is used by this workflow. Correctness therefore does
 not depend on developer machine state or a warm GitHub Actions cache. The build
 uses `--disable-rofiles-fuse` only to avoid requiring FUSE support from the
 hosted runner; it does not widen the application's Flatpak sandbox.
+
+The launch smoke is also deliberately local and credential-free. Its temporary
+`--no-gpg-verify` remote points only at the unsigned repository built by the
+same CI job; that option is never used for Flathub or another public remote.
 
 ## Reproduce the build locally
 
@@ -63,9 +71,14 @@ flatpak-builder \
   io.github.thezupzup.linthra.yml
 
 flatpak build-update-repo repo-ci
+bash ../scripts/flatpak_launch_smoke.sh repo-ci
 ```
 
+The launch command requires `xvfb-run`, `xwininfo` and `dbus-run-session`, the
+same tools installed by the CI job.
+
 The workflow does not replace the stricter offline-source smoke from #442 or the
-installed-app launch/audio/library smoke tests tracked separately. Its job is to
-catch broken manifests, missing declared build inputs, SDK/runtime resolution
-problems and clean-runner packaging failures before they reach Flathub.
+installed-Flatpak audio/library sandbox smokes tracked in #446 and #447. Its job
+is to catch broken manifests, missing declared build inputs, SDK/runtime
+resolution problems, clean-runner packaging failures, install failures and
+startup regressions before they reach Flathub.
