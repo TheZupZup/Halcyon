@@ -147,21 +147,31 @@ class AndroidMediaLibraryChannel(private val activity: Activity) {
     }
 
     private fun queryDeviceAudio(): List<Map<String, Any?>> {
-        val projection = arrayOf(
-            MediaStore.Audio.Media._ID,
-            MediaStore.Audio.Media.DISPLAY_NAME,
-            MediaStore.Audio.Media.MIME_TYPE,
-            MediaStore.Audio.Media.TITLE,
-            MediaStore.Audio.Media.ARTIST,
-            MediaStore.Audio.Media.ALBUM,
-            MediaStore.Audio.Media.ALBUM_ID,
-            MediaStore.Audio.Media.TRACK,
-            MediaStore.Audio.Media.DURATION,
+        val projection = ArrayList(
+            listOf(
+                MediaStore.Audio.Media._ID,
+                MediaStore.Audio.Media.DISPLAY_NAME,
+                MediaStore.Audio.Media.MIME_TYPE,
+                MediaStore.Audio.Media.TITLE,
+                MediaStore.Audio.Media.ARTIST,
+                MediaStore.Audio.Media.ALBUM,
+                MediaStore.Audio.Media.ALBUM_ID,
+                MediaStore.Audio.Media.TRACK,
+                MediaStore.Audio.Media.DURATION,
+            ),
         )
+        // Android 10 is where EXTERNAL_CONTENT_URI became an aggregate over
+        // every external volume, and where VOLUME_NAME appeared to tell them
+        // apart. ALBUM_ID is only unique inside one volume's database, so on
+        // those releases the volume has to be part of the album key. Below 10
+        // there is a single external volume and no such column.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            projection.add(MediaStore.Audio.Media.VOLUME_NAME)
+        }
         val documents = ArrayList<Map<String, Any?>>()
         val cursor = context.contentResolver.query(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-            projection,
+            projection.toTypedArray(),
             "${MediaStore.Audio.Media.IS_MUSIC} != 0",
             null,
             "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC",
@@ -176,6 +186,11 @@ class AndroidMediaLibraryChannel(private val activity: Activity) {
             val albumIdIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
             val trackIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TRACK)
             val durationIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+            val volumeIndex = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                cursor.getColumnIndex(MediaStore.Audio.Media.VOLUME_NAME)
+            } else {
+                -1
+            }
 
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idIndex)
@@ -185,9 +200,14 @@ class AndroidMediaLibraryChannel(private val activity: Activity) {
                     ?: "Audio $id"
                 val rawTrack = cursor.getInt(trackIndex)
                 val track = (rawTrack % 1000).takeIf { it > 0 }
+                val volume = if (volumeIndex >= 0) {
+                    cleanMediaValue(cursor.getString(volumeIndex))
+                } else {
+                    null
+                }
                 val rawAlbumId = cursor.getLong(albumIdIndex)
                 val albumId = rawAlbumId.takeIf { it > 0L }
-                    ?.let { "android-mediastore:$it" }
+                    ?.let { albumKey(volume, it) }
                 val durationMs = cursor.getLong(durationIndex).takeIf { it > 0L }
                 val uri = ContentUris.withAppendedId(
                     MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
@@ -211,6 +231,21 @@ class AndroidMediaLibraryChannel(private val activity: Activity) {
             }
         }
         return documents
+    }
+
+    /**
+     * A stable, source-namespaced album key.
+     *
+     * The volume is part of the key wherever Android exposes it, because two
+     * external volumes (internal shared storage and an SD card, say) keep
+     * separate MediaStore databases and can hand out the same numeric ALBUM_ID
+     * for unrelated albums. Without it the catalog would merge them into one.
+     */
+    private fun albumKey(volume: String?, albumId: Long): String {
+        if (volume.isNullOrEmpty()) {
+            return "android-mediastore:$albumId"
+        }
+        return "android-mediastore:$volume:$albumId"
     }
 
     private fun cleanMediaValue(value: String?): String? {
