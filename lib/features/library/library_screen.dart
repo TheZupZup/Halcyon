@@ -510,11 +510,13 @@ class _LibrarySyncing extends StatelessWidget {
   }
 }
 
-/// The empty state, split by whether a folder has been selected yet so the
-/// user always sees the right next step:
-///  - no folder chosen → invite them to pick one;
-///  - folder chosen but nothing found → show the folder and offer a re-scan or
-///    a change of folder.
+/// The empty state, split by which local source is selected so the user always
+/// sees the right next step:
+///  - nothing chosen → invite them to pick a folder;
+///  - a folder chosen but nothing found → show the folder and offer a re-scan
+///    or a change of folder;
+///  - Android's device-wide MediaStore library chosen → there is no folder to
+///    reselect, so say the device reported no music and offer a rescan.
 class _LibraryEmpty extends StatelessWidget {
   const _LibraryEmpty({
     required this.selectedFolder,
@@ -530,12 +532,15 @@ class _LibraryEmpty extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final hasFolder = selectedFolder != null;
+    final FolderLocation? location =
+        hasFolder ? FolderLocation.parse(selectedFolder!) : null;
+    final bool isDeviceLibrary = location?.isAndroidMediaStore ?? false;
     // A folder selected as a plain filesystem path on Android is the legacy/
     // broken case: scoped storage won't let Linthra read it, so it turns up
     // empty. Nudge the user to pick it again, which now returns a SAF grant.
-    final bool needsRepick = hasFolder &&
-        Platform.isAndroid &&
-        !FolderLocation.parse(selectedFolder!).isContentUri;
+    // The MediaStore sentinel is not a path, so it must not land here.
+    final bool needsRepick =
+        hasFolder && Platform.isAndroid && location!.isFilesystemPath;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.xl),
@@ -557,10 +562,12 @@ class _LibraryEmpty extends StatelessWidget {
             ),
             const SizedBox(height: AppSpacing.sm),
             Text(
-              hasFolder
-                  ? 'Nothing playable turned up in:\n'
-                      '${FolderLocation.parse(selectedFolder!).displayLabel}'
-                  : 'Choose a folder on your device to scan for music.',
+              isDeviceLibrary
+                  ? "Android's music library reported no audio on this device."
+                  : hasFolder
+                      ? 'Nothing playable turned up in:\n'
+                          '${location!.displayLabel}'
+                      : 'Choose a folder on your device to scan for music.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
               ),
@@ -580,12 +587,16 @@ class _LibraryEmpty extends StatelessWidget {
             if (hasFolder) ...[
               FilledButton.tonal(
                 onPressed: onRescan,
-                child: const Text('Rescan folder'),
+                child: Text(
+                  isDeviceLibrary ? 'Rescan this device' : 'Rescan folder',
+                ),
               ),
               const SizedBox(height: AppSpacing.sm),
               TextButton(
                 onPressed: onPick,
-                child: const Text('Change folder'),
+                child: Text(
+                  isDeviceLibrary ? 'Use a folder instead' : 'Change folder',
+                ),
               ),
             ] else
               FilledButton(

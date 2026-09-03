@@ -2,9 +2,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/services/folder_picker_service.dart';
 import '../../core/services/platform_folder_picker_service.dart';
+import '../../core/sources/local/android_media_library.dart';
 import '../../core/sources/local/audio_file_scanner.dart';
 import '../../core/sources/local/directory_readability.dart';
 import '../../core/sources/local/local_metadata_reader.dart';
+import '../../core/sources/local/method_channel_android_media_library.dart';
 import '../../core/sources/local/method_channel_saf_document_lister.dart';
 import '../../core/sources/local/method_channel_saf_permission_probe.dart';
 import '../../core/sources/local/saf_document_lister.dart';
@@ -12,67 +14,58 @@ import '../../core/sources/local/saf_permission_probe.dart';
 import '../../data/repositories/host_platform_provider.dart';
 
 /// The storage seam the library scan uses to discover audio files.
-///
-/// Defaults to [PlatformAudioFileScanner], which routes a selected folder to
-/// the right backend: a `dart:io` walk for desktop/Linux filesystem paths, and
-/// the SAF-aware [ContentUriAudioFileScanner] for Android `content://` tree
-/// URIs. Tests override it with a fake so a scan can run end-to-end without
-/// touching a real disk. This is the only new provider the scan flow needs —
-/// the repository and library state already have their own providers
-/// (`musicLibraryRepositoryProvider`, `libraryControllerProvider`).
 final audioFileScannerProvider = Provider<AudioFileScanner>((ref) {
   return const PlatformAudioFileScanner();
 });
 
 /// The folder-chooser seam the Library uses to let the user pick a music
-/// folder. Defaults to [PlatformFolderPickerService], which on Android returns
-/// the picked `content://` tree URI (with a persisted read grant) and elsewhere
-/// falls back to the `file_picker` filesystem chooser. Tests override it with a
-/// fake so the pick-and-scan flow runs without a real OS dialog.
+/// folder. Android returns a persisted SAF tree URI; desktop uses its native
+/// chooser/portal.
 final folderPickerServiceProvider = Provider<FolderPickerService>((ref) {
   return const PlatformFolderPickerService();
 });
 
 /// The SAF traversal seam used to scan an Android `content://` folder through
-/// the content resolver. Native content-resolver traversal is Android-only, so
-/// elsewhere (desktop, tests) the unsupported binding makes a content-URI scan
-/// fall back to filesystem path resolution. Tests override it with a fake.
+/// the content resolver.
 final safDocumentListerProvider = Provider<SafDocumentLister>((ref) {
   return ref.watch(hostPlatformProvider).isAndroid
       ? const MethodChannelSafDocumentLister()
       : const UnsupportedSafDocumentLister();
 });
 
+/// Optional Android device-wide local library. This is intentionally distinct
+/// from SAF: it is backed by Android's visible/revocable Music and audio
+/// permission plus MediaStore, while the existing folder mode remains a narrow
+/// persisted grant with no broad storage permission.
+final androidMediaLibraryProvider = Provider<AndroidMediaLibrary>((ref) {
+  return ref.watch(hostPlatformProvider).isAndroid
+      ? const MethodChannelAndroidMediaLibrary()
+      : const UnsupportedAndroidMediaLibrary();
+});
+
+/// Reactive permission state shown in Settings ▸ Local music. Auto-dispose means
+/// leaving and reopening the screen asks Android again rather than keeping stale
+/// permission state forever; actions also invalidate it after a request.
+final androidMusicPermissionStatusProvider =
+    FutureProvider.autoDispose<AndroidMusicPermissionStatus>((ref) {
+  return ref.watch(androidMediaLibraryProvider).permissionStatus();
+});
+
 /// The seam diagnostics use to check whether a persisted SAF read grant is still
-/// held for the selected `content://` folder — the removable-SD-card signal that
-/// tells "no music found" apart from a lost folder permission. Android-only;
-/// elsewhere (desktop, tests) the unsupported binding reports `null` so the
-/// persisted-permission line is simply omitted. Tests override it with a fake.
+/// held for the selected `content://` folder.
 final safPermissionProbeProvider = Provider<SafPermissionProbe>((ref) {
   return ref.watch(hostPlatformProvider).isAndroid
       ? const MethodChannelSafPermissionProbe()
       : const UnsupportedSafPermissionProbe();
 });
 
-/// The seam that answers whether a *filesystem* music folder can still be
-/// listed right now — the desktop half of the "did we lose access?" signal the
-/// SAF probe above answers on Android.
-///
-/// It is what tells a Flatpak whose portal document was revoked (the exported
-/// path simply disappears) apart from a folder that is genuinely empty, and it
-/// is equally the answer for an unplugged drive or a folder the user deleted on
-/// a native Linux build. Tests override it with a fake so neither case needs a
-/// real disk.
+/// The seam that answers whether a filesystem music folder can still be listed.
 final directoryReadabilityProvider = Provider<DirectoryReadability>((ref) {
   return const IoDirectoryReadability();
 });
 
-/// The tag-reading seam used to enrich *filesystem* (desktop/Linux and
-/// resolved-path) tracks with their audio metadata. Android SAF documents read
-/// their tags natively during the content-resolver walk, so this only covers the
-/// filesystem path; until a real pure-Dart reader lands it is the unsupported
-/// binding, which reads nothing and leaves the mapper on filename/folder
-/// fallback. Tests override it with a fake to drive the tag-merge path.
+/// The tag-reading seam used to enrich filesystem (desktop/Linux and
+/// resolved-path) tracks with their audio metadata.
 final localMetadataReaderProvider = Provider<LocalMetadataReader>((ref) {
   return const UnsupportedLocalMetadataReader();
 });

@@ -29,12 +29,22 @@
          silently suppressed on modern devices. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Optional device-wide local music mode (#548). Android 13+ exposes this
+         as the normal visible/revocable "Music and audio" permission. Older
+         Android releases use READ_EXTERNAL_STORAGE for the equivalent shared
+         audio-library access, capped at API 32 so it cannot turn into broader
+         storage access on modern devices. Neither permission is requested on
+         launch: Linthra asks only when the user explicitly chooses "All music
+         on this device". The existing SAF folder mode needs neither permission. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <!-- INTERNET: needed to reach a self-hosted Jellyfin server (connection
          test, sign-in, library sync, and streaming). Declared here so a
          release build can stream too; the debug/profile manifests also add it
-         for Flutter's tooling, and the manifest merger de-duplicates. No
-         storage permission is declared — folder access uses the Storage Access
-         Framework grant the user picks. -->
+         for Flutter's tooling, and the manifest merger de-duplicates. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- ACCESS_NETWORK_STATE: reads only the active connection's Android
@@ -66,6 +76,7 @@
         android:label="Linthra"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
+        android:appCategory="audio"
         android:networkSecurityConfig="@xml/network_security_config">
         <activity
             android:name=".MainActivity"
@@ -204,10 +215,8 @@
              explicit per-URI read grants apply. It serves ONLY the private cover
              cache (res/xml/media_artwork_paths.xml), whose filenames are SHA-256
              hashes of a credential-free reference — never a username, token,
-             salt, server URL, or auth query. No storage permission is added. The
-             authority is fixed (matches kMediaArtworkAuthority in
-             lib/core/services/media_artwork_content_uri.dart) so it is identical
-             in debug and release. -->
+             salt, server URL, or auth query. The authority is fixed (matches
+             kMediaArtworkAuthority in media_artwork_content_uri.dart). -->
         <provider
             android:name=".MediaArtworkFileProvider"
             android:authorities="io.github.thezupzup.linthra.mediaartwork"

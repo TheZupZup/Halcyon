@@ -44,7 +44,7 @@ abstract final class LocalScanDiagnostics {
   static String describe(LocalScanReport report) {
     return <String>[
       'folder=${report.folderSelected ? 'selected' : 'none'}',
-      if (report.folderSelected) 'kind=${report.isContentUri ? 'saf' : 'path'}',
+      if (report.folderSelected) 'kind=${_kind(report)}',
       'visited=${report.filesVisited}',
       'folders=${report.foldersVisited}',
       'audio=${report.audioCandidates}',
@@ -54,5 +54,11 @@ abstract final class LocalScanDiagnostics {
       'recursive=${report.recursive ? 'yes' : 'no'}',
       if (report.error != null) 'error=${report.error!.name}',
     ].join(' ');
+  }
+
+  /// Which backend the scan actually read. A structural label, not a path.
+  static String _kind(LocalScanReport report) {
+    if (report.isDeviceLibrary) return 'mediastore';
+    return report.isContentUri ? 'saf' : 'path';
   }
 }

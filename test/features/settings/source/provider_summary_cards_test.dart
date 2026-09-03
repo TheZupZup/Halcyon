@@ -2,12 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/jellyfin_session.dart';
+import 'package:linthra/core/sources/local/android_media_library.dart';
+import 'package:linthra/core/sources/local/folder_location.dart';
 import 'package:linthra/core/sources/local/local_scan_diagnostics.dart';
 import 'package:linthra/core/sources/local/local_scan_report.dart';
+import 'package:linthra/core/sources/local/saf_document_lister.dart';
 import 'package:linthra/data/repositories/in_memory_jellyfin_session_store.dart';
 import 'package:linthra/data/repositories/in_memory_selected_music_folder_repository.dart';
 import 'package:linthra/data/repositories/jellyfin_session_store_provider.dart';
 import 'package:linthra/data/repositories/selected_music_folder_repository_provider.dart';
+import 'package:linthra/features/library/library_providers.dart';
 import 'package:linthra/features/settings/jellyfin/jellyfin_settings_providers.dart';
 import 'package:linthra/features/settings/source/provider_summary_cards.dart';
 
@@ -25,6 +29,24 @@ const JellyfinSession _session = JellyfinSession(
 
 const String _safFolder =
     'content://com.android.externalstorage.documents/tree/primary%3AMusic';
+
+class _FakeAndroidMediaLibrary implements AndroidMediaLibrary {
+  const _FakeAndroidMediaLibrary(this.status);
+
+  final AndroidMusicPermissionStatus status;
+
+  @override
+  Future<AndroidMusicPermissionStatus> permissionStatus() async => status;
+
+  @override
+  Future<AndroidMusicPermissionStatus> requestPermission() async => status;
+
+  @override
+  Future<void> openAppSettings() async {}
+
+  @override
+  Future<SafScanResult> listDeviceAudio() async => const SafScanResult();
+}
 
 Future<void> _pumpJellyfin(
   WidgetTester tester, {
@@ -54,6 +76,7 @@ Future<void> _pumpLocal(
   WidgetTester tester, {
   String? initialFolder,
   LocalScanReport? report,
+  AndroidMusicPermissionStatus? deviceMusicPermission,
 }) async {
   if (report != null) {
     LocalScanDiagnostics.record(report);
@@ -64,6 +87,10 @@ Future<void> _pumpLocal(
         selectedMusicFolderRepositoryProvider.overrideWithValue(
           InMemorySelectedMusicFolderRepository(initialFolder: initialFolder),
         ),
+        if (deviceMusicPermission != null)
+          androidMediaLibraryProvider.overrideWithValue(
+            _FakeAndroidMediaLibrary(deviceMusicPermission),
+          ),
       ],
       child: const MaterialApp(
         home: Scaffold(
@@ -145,6 +172,41 @@ void main() {
       expect(find.text('8 tracks'), findsOneWidget);
       expect(find.text('Rescan'), findsOneWidget);
       expect(find.text('Manage'), findsOneWidget);
+    });
+
+    testWidgets('MediaStore uses device-music wording when access is allowed',
+        (tester) async {
+      await _pumpLocal(
+        tester,
+        initialFolder: FolderLocation.androidMediaStoreAudio,
+        deviceMusicPermission: AndroidMusicPermissionStatus.allowed,
+        report: const LocalScanReport(
+          folderSelected: true,
+          isContentUri: false,
+          filesVisited: 0,
+          audioCandidates: 0,
+          importedTracks: 0,
+          skippedUnsupported: 0,
+          readFailures: 0,
+        ),
+      );
+
+      expect(find.text('Device music selected'), findsOneWidget);
+      expect(find.text('All music on this device'), findsOneWidget);
+      expect(find.text('Folder selected'), findsNothing);
+    });
+
+    testWidgets('MediaStore uses device-music wording when access is revoked',
+        (tester) async {
+      await _pumpLocal(
+        tester,
+        initialFolder: FolderLocation.androidMediaStoreAudio,
+        deviceMusicPermission: AndroidMusicPermissionStatus.denied,
+      );
+
+      expect(find.text('Device music access off'), findsOneWidget);
+      expect(find.text('All music on this device'), findsOneWidget);
+      expect(find.text('Folder access lost'), findsNothing);
     });
   });
 }

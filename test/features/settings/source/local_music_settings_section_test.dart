@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/platform/host_platform.dart';
 import 'package:linthra/core/sources/local/directory_readability.dart';
+import 'package:linthra/core/sources/local/folder_location.dart';
 import 'package:linthra/core/sources/local/local_scan_diagnostics.dart';
 import 'package:linthra/core/sources/local/local_scan_report.dart';
 import 'package:linthra/data/repositories/host_platform_provider.dart';
@@ -25,6 +26,14 @@ class _FixedReadability implements DirectoryReadability {
 
 const String _safFolder =
     'content://com.android.externalstorage.documents/tree/primary%3AMusic';
+
+const String _deviceLibrary = FolderLocation.androidMediaStoreAudio;
+
+/// Every rendered string on the card, so a test can assert what the whole
+/// surface does — and does not — say.
+Iterable<String> _renderedText(WidgetTester tester) => tester
+    .widgetList<Text>(find.byType(Text))
+    .map((Text text) => text.data ?? '');
 
 Future<void> _pump(
   WidgetTester tester, {
@@ -50,7 +59,12 @@ Future<void> _pump(
           directoryReadabilityProvider.overrideWithValue(readability),
       ],
       child: const MaterialApp(
-        home: Scaffold(body: LocalMusicSettingsSection()),
+        // The card ships inside the scrollable provider sheet, so scroll here
+        // too: the Android variant is taller than the test surface once the
+        // privacy panel and a scan hint are on screen.
+        home: Scaffold(
+          body: SingleChildScrollView(child: LocalMusicSettingsSection()),
+        ),
       ),
     ),
   );
@@ -85,7 +99,7 @@ void main() {
       // Recoverable, not destructive: reselecting is the fix, and the actions
       // to do it are still on the card.
       expect(find.text('Change'), findsOneWidget);
-      expect(find.text('Forget folder'), findsOneWidget);
+      expect(find.text('Forget local music'), findsOneWidget);
     });
 
     testWidgets('on Linux, a reachable folder says nothing about access', (
@@ -126,11 +140,11 @@ void main() {
       await _pump(tester);
 
       expect(find.text('Local music'), findsOneWidget);
-      expect(find.text('No folder selected yet.'), findsOneWidget);
+      expect(find.text('No local music source selected yet.'), findsOneWidget);
       expect(find.text('Select a folder'), findsOneWidget);
       // No rescan/forget actions until a folder exists.
       expect(find.text('Rescan'), findsNothing);
-      expect(find.text('Forget folder'), findsNothing);
+      expect(find.text('Forget local music'), findsNothing);
     });
 
     testWidgets('with a SAF folder, shows a friendly label and the actions',
@@ -145,7 +159,7 @@ void main() {
       expect(find.text('primary:Music/musi5'), findsOneWidget);
       expect(find.text('Rescan'), findsOneWidget);
       expect(find.text('Change'), findsOneWidget);
-      expect(find.text('Forget folder'), findsOneWidget);
+      expect(find.text('Forget local music'), findsOneWidget);
     });
 
     testWidgets('after a successful scan, shows a clear summary with counts',
@@ -270,9 +284,11 @@ void main() {
       // Still a clear way back: reselect the folder in the chooser Linux has.
       expect(find.textContaining("couldn't read this folder"), findsOneWidget);
       expect(
-          find.textContaining('Select it again with the system folder '
-              'chooser'),
-          findsOneWidget);
+        find.textContaining(
+          'Select it again with the system folder chooser',
+        ),
+        findsOneWidget,
+      );
       expect(find.textContaining('restore access'), findsOneWidget);
       // The SD-card aside is an Android storage note; a desktop path is not it.
       expect(find.textContaining('SD cards'), findsNothing);
@@ -348,6 +364,147 @@ void main() {
         expect(value, isNot(contains('content://')));
         expect(value, isNot(contains('/storage/')));
         expect(value.toLowerCase(), isNot(contains('.mp3')));
+      }
+    });
+
+    // The device-wide MediaStore mode has no folder behind it. Any outcome that
+    // falls back to folder wording sends the user to Android's folder chooser
+    // for a library that is not a folder — the two states below (nothing found,
+    // and a provider failure) are exactly where that used to happen.
+    testWidgets('device-wide mode with no music says so without folder wording',
+        (tester) async {
+      await _pump(
+        tester,
+        host: HostPlatform.android,
+        initialFolder: _deviceLibrary,
+        report: const LocalScanReport(
+          folderSelected: true,
+          isContentUri: false,
+          isDeviceLibrary: true,
+          filesVisited: 0,
+          foldersVisited: 0,
+          audioCandidates: 0,
+          importedTracks: 0,
+          skippedUnsupported: 0,
+          readFailures: 0,
+        ),
+      );
+
+      expect(find.textContaining('no music on this device'), findsOneWidget);
+      expect(
+        find.textContaining('reported no audio on this device'),
+        findsOneWidget,
+      );
+      for (final String text in _renderedText(tester)) {
+        expect(text, isNot(contains('folder chooser')));
+        expect(text, isNot(contains('this folder')));
+        expect(text, isNot(contains('that folder')));
+      }
+    });
+
+    testWidgets('a MediaStore provider failure keeps device-library wording',
+        (tester) async {
+      // `media_store_failed` (a null cursor, a provider fault) is classified as
+      // `unexpected`, not `mediaPermission` — permission may well still be
+      // granted. It must not be described as an unreadable folder.
+      await _pump(
+        tester,
+        host: HostPlatform.android,
+        initialFolder: _deviceLibrary,
+        report: const LocalScanReport.failure(
+          folderSelected: true,
+          isContentUri: false,
+          isDeviceLibrary: true,
+          error: LocalScanError.unexpected,
+        ),
+      );
+
+      expect(find.textContaining("couldn't finish"), findsOneWidget);
+      expect(
+        find.textContaining("couldn't read Android's shared music library"),
+        findsOneWidget,
+      );
+      for (final String text in _renderedText(tester)) {
+        expect(text, isNot(contains('folder chooser')));
+        expect(text, isNot(contains('Select it again')));
+      }
+    });
+
+    testWidgets('a revoked permission still routes to Android settings',
+        (tester) async {
+      // The one MediaStore failure that *is* about permission keeps the
+      // permission-specific recovery path.
+      await _pump(
+        tester,
+        host: HostPlatform.android,
+        initialFolder: _deviceLibrary,
+        report: const LocalScanReport.failure(
+          folderSelected: true,
+          isContentUri: false,
+          isDeviceLibrary: true,
+          error: LocalScanError.mediaPermission,
+        ),
+      );
+
+      expect(
+        find.textContaining('Re-enable it in Android settings'),
+        findsOneWidget,
+      );
+      for (final String text in _renderedText(tester)) {
+        expect(text, isNot(contains('folder chooser')));
+      }
+    });
+
+    testWidgets('a SAF folder still gets folder-specific recovery text',
+        (tester) async {
+      // The folder half of the same branch: real folder sources keep pointing
+      // at the folder chooser.
+      await _pump(
+        tester,
+        host: HostPlatform.android,
+        initialFolder: _safFolder,
+        report: const LocalScanReport.failure(
+          folderSelected: true,
+          isContentUri: true,
+          error: LocalScanError.safTraversal,
+        ),
+      );
+
+      expect(find.textContaining("Android's folder chooser"), findsOneWidget);
+      expect(
+        find.textContaining("shared music library"),
+        findsNothing,
+      );
+    });
+
+    testWidgets('a failed trial of device mode is not blamed on the folder', (
+      tester,
+    ) async {
+      // The transactional switch keeps the folder selected when the first
+      // MediaStore scan fails, so the newest report describes a source that is
+      // not the selected one. The recap follows the report: the folder was
+      // never scanned, so telling the user to reselect it would be nonsense.
+      await _pump(
+        tester,
+        host: HostPlatform.android,
+        initialFolder: _safFolder,
+        report: const LocalScanReport.failure(
+          folderSelected: true,
+          isContentUri: false,
+          isDeviceLibrary: true,
+          error: LocalScanError.unexpected,
+        ),
+      );
+
+      // Still a folder user: the selection and its label are untouched.
+      expect(find.text('primary:Music'), findsOneWidget);
+      expect(
+        find.textContaining("couldn't read Android's shared music library"),
+        findsOneWidget,
+      );
+      for (final String text in _renderedText(tester)) {
+        expect(text, isNot(contains('folder chooser')));
+        expect(text, isNot(contains('Select it again')));
       }
     });
   });
