@@ -211,7 +211,7 @@ String _linthraModule(String manifest) {
 
 List<String> _builderInvocations(String smoke) {
   return smoke
-      .split(r'"${BUILDER[@]}"')
+      .split(r'"${BUILDER[@]}"'.replaceAll(r'\', ''))
       .skip(1)
       .map((String tail) => tail.split('\n\n').first)
       .toList();
