@@ -4,6 +4,7 @@ import 'package:linthra/core/sources/local/folder_location.dart';
 import 'package:linthra/core/sources/local/local_audio_metadata.dart';
 import 'package:linthra/core/sources/local/local_music_source.dart';
 import 'package:linthra/core/sources/local/method_channel_android_media_library.dart';
+import 'package:linthra/core/sources/local/method_channel_saf_document_lister.dart';
 import 'package:linthra/core/sources/local/saf_document_lister.dart';
 
 class _FakeAndroidMediaLibrary implements AndroidMediaLibrary {
@@ -57,6 +58,26 @@ void main() {
       );
     });
 
+    test('MediaStore parser preserves the source-namespaced album id', () {
+      final SafScanResult result = MethodChannelSafDocumentLister.parseScanResult(
+        <Object?, Object?>{
+          'documents': <Object?>[
+            <Object?, Object?>{
+              'uri': 'content://media/external/audio/media/42',
+              'name': '03 - Song.mp3',
+              'mime': 'audio/mpeg',
+              'albumId': 'android-mediastore:7',
+              'track': 3,
+            },
+          ],
+          'filesVisited': 1,
+        },
+      );
+
+      expect(result.documents.single.metadata?.albumId, 'android-mediastore:7');
+      expect(result.documents.single.metadata?.trackNumber, 3);
+    });
+
     test('MediaStore rows use the existing local track mapper', () async {
       final LocalMusicSource source = LocalMusicSource(
         folderPath: FolderLocation.androidMediaStoreAudio,
@@ -71,6 +92,7 @@ void main() {
                   title: 'Tagged title',
                   artist: 'Artist',
                   album: 'Album',
+                  albumId: 'android-mediastore:7',
                   trackNumber: 3,
                   duration: Duration(seconds: 123),
                 ),
@@ -88,6 +110,7 @@ void main() {
       expect(scan.tracks.single.title, 'Tagged title');
       expect(scan.tracks.single.artistName, 'Artist');
       expect(scan.tracks.single.albumName, 'Album');
+      expect(scan.tracks.single.albumId, 'android-mediastore:7');
       expect(scan.tracks.single.trackNumber, 3);
       expect(scan.tracks.single.duration, const Duration(seconds: 123));
       expect(scan.report.importedTracks, 1);
