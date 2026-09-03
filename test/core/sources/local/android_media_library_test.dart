@@ -80,7 +80,7 @@ void main() {
     });
 
     test('MediaStore rows use the existing local track mapper', () async {
-      final LocalMusicSource source = LocalMusicSource(
+      const LocalMusicSource source = LocalMusicSource(
         folderPath: FolderLocation.androidMediaStoreAudio,
         androidMediaLibrary: _FakeAndroidMediaLibrary(
           result: SafScanResult(
@@ -89,7 +89,7 @@ void main() {
                 uri: 'content://media/external/audio/media/42',
                 name: '03 - Fallback.mp3',
                 mimeType: 'audio/mpeg',
-                metadata: const LocalAudioMetadata(
+                metadata: LocalAudioMetadata(
                   title: 'Tagged title',
                   artist: 'Artist',
                   album: 'Album',
