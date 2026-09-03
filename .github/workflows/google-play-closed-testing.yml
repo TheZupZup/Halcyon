@@ -13,7 +13,8 @@ name: Google Play Closed Testing
 #     workflow dispatched the build for it;
 #   * only the release-signed AAB artifact is accepted;
 #   * ad-hoc manual builds are never auto-published;
-#   * the release tag named by the bundle must actually exist;
+#   * the release tag named by the bundle must exist AND point at the commit
+#     the build actually ran on;
 #   * the production track is explicitly rejected, including as one entry of
 #     a multi-track value, whatever whitespace the value carries.
 
@@ -132,6 +133,7 @@ jobs:
           steps.artifact.outputs.available == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
         shell: bash
         run: |
           mapfile -t bundles < <(find play-upload -type f -name '*.aab' -print)
@@ -175,8 +177,22 @@ jobs:
           tag="${name#linthra-}"
           tag="${tag%-release-signed.aab}"
 
-          if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+          # Resolve the tag to its commit. This fails outright when the tag does
+          # not exist, and the Commits API dereferences annotated tags, which is
+          # what the stable release workflow creates.
+          if ! tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha 2>/dev/null)" || [ -z "$tag_sha" ]; then
             echo "::error::Bundle claims tag '${tag}', but no such tag exists in this repository. Refusing to publish an untagged build."
+            exit 1
+          fi
+
+          # Existing is not the same as matching. Android Release Build checks
+          # out its dispatch ref, never the tag, and uses `release_tag` only for
+          # validation and naming. A build dispatched while the branch carried
+          # commits past the tag therefore produces a tag-named bundle whose
+          # code the tag does not name. Publish only when the run really did
+          # build the tagged commit.
+          if [ "$tag_sha" != "$SOURCE_SHA" ]; then
+            echo "::error::Bundle claims tag '${tag}' (${tag_sha}), but the build ran on ${SOURCE_SHA}. Refusing to publish code the tag does not name."
             exit 1
           fi
 

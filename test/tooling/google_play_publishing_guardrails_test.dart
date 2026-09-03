@@ -55,8 +55,23 @@ void main() {
     // was never actually tagged, which still produces a tag-shaped bundle
     // name. The name alone is therefore not proof that a release exists.
     test('confirms the tag named by the bundle actually exists', () {
-      expect(workflow, contains('git/ref/tags/'));
+      expect(
+          workflow, contains(r'gh api "repos/${GITHUB_REPOSITORY}/commits/'));
       expect(workflow, contains('Refusing to publish an untagged build.'));
+    });
+
+    // Android Release Build checks out its dispatch ref, never the tag, so a
+    // build dispatched while the branch carried commits past the tag makes a
+    // tag-named bundle whose code the tag does not name. Existing is not
+    // enough; the tag has to point at the commit the build ran on.
+    test('binds the bundle to the commit the tag names', () {
+      expect(workflow,
+          contains(r'SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}'));
+      expect(workflow, contains(r'[ "$tag_sha" != "$SOURCE_SHA" ]'));
+      expect(
+        workflow,
+        contains('Refusing to publish code the tag does not name.'),
+      );
     });
 
     test('keeps repository permissions read-only', () {

@@ -19,7 +19,8 @@ For an `Android Release Build` that completes successfully for a release tag:
 3. Debug-signed prereleases are skipped automatically.
 4. The signed AAB is downloaded without rebuilding Linthra.
 5. The bundle name is checked to confirm the build really was for a tag.
-6. The tag named by that bundle is confirmed to exist in the repository.
+6. The tag named by that bundle is resolved, and must point at the very
+   commit the build ran on.
 7. The bundle is uploaded to the configured Google Play testing track with
    status `completed`.
 
@@ -33,9 +34,15 @@ the bundle name the build produces: a tag build writes
 
 The bundle name records only what the build was told to target, so it is not
 proof on its own: a manual dispatch can pass a `release_tag` that matches
-`pubspec.yaml` but was never tagged. The tag is confirmed through the API
-before anything is uploaded. `/publish-stable` pushes the tag and creates the
-Release before dispatching the build, so a genuine release always passes.
+`pubspec.yaml` but was never tagged. `Android Release Build` also checks out
+its dispatch ref rather than the tag, so a build started while the branch had
+moved past the tag would carry code the tag does not name. Before uploading,
+the tag is resolved through the API and must point at the commit the build
+actually ran on. Both a missing tag and a mismatched commit fail the run.
+
+If a stable release trips the commit check, the artifact genuinely is not the
+tagged code: re-run the build against the tagged commit rather than relaxing
+the check.
 
 The workflow explicitly rejects `production` as a track, including as one entry
 of a multi-track value such as `internal,production`, since the upload action
@@ -152,6 +159,7 @@ The publisher is intentionally conservative:
 - missing track variable → skip with a notice;
 - `production` track, alone or inside a multi-track value → fail;
 - bundle names a tag that does not exist → fail;
+- tag does not point at the commit the build ran on → fail;
 - upstream Android release failed → publisher does not run;
 - ad-hoc manual Android release build (no release tag) → skip with a notice;
 - no release-signed AAB (for example, a debug-signed prerelease) → skip with a
