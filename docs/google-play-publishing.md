@@ -19,7 +19,8 @@ For an `Android Release Build` that completes successfully for a release tag:
 3. Debug-signed prereleases are skipped automatically.
 4. The signed AAB is downloaded without rebuilding Linthra.
 5. The bundle name is checked to confirm the build really was for a tag.
-6. The bundle is uploaded to the configured Google Play testing track with
+6. The tag named by that bundle is confirmed to exist in the repository.
+7. The bundle is uploaded to the configured Google Play testing track with
    status `completed`.
 
 Both release paths are covered: a directly pushed `v*` tag, and
@@ -30,10 +31,18 @@ the bundle name the build produces: a tag build writes
 `linthra-<tag>-release-signed.aab`, while a manual build writes
 `linthra-release-signed.aab`.
 
+The bundle name records only what the build was told to target, so it is not
+proof on its own: a manual dispatch can pass a `release_tag` that matches
+`pubspec.yaml` but was never tagged. The tag is confirmed through the API
+before anything is uploaded. `/publish-stable` pushes the tag and creates the
+Release before dispatching the build, so a genuine release always passes.
+
 The workflow explicitly rejects `production` as a track, including as one entry
 of a multi-track value such as `internal,production`, since the upload action
-accepts a comma-separated list. Promotion to production stays a manual
-maintainer decision in Play Console.
+accepts a comma-separated list. All whitespace is stripped from the value
+before it is split, so a newline cannot hide an entry from the check, and the
+upload action is given that same normalized value rather than the raw variable.
+Promotion to production stays a manual maintainer decision in Play Console.
 
 ## One-time Google Play setup
 
@@ -142,6 +151,7 @@ The publisher is intentionally conservative:
 - missing service-account secret → skip with a notice;
 - missing track variable → skip with a notice;
 - `production` track, alone or inside a multi-track value → fail;
+- bundle names a tag that does not exist → fail;
 - upstream Android release failed → publisher does not run;
 - ad-hoc manual Android release build (no release tag) → skip with a notice;
 - no release-signed AAB (for example, a debug-signed prerelease) → skip with a

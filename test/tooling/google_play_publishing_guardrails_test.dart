@@ -51,6 +51,14 @@ void main() {
       );
     });
 
+    // A manual dispatch can pass a `release_tag` that matches pubspec.yaml but
+    // was never actually tagged, which still produces a tag-shaped bundle
+    // name. The name alone is therefore not proof that a release exists.
+    test('confirms the tag named by the bundle actually exists', () {
+      expect(workflow, contains('git/ref/tags/'));
+      expect(workflow, contains('Refusing to publish an untagged build.'));
+    });
+
     test('keeps repository permissions read-only', () {
       expect(workflow, contains('actions: read'));
       expect(workflow, contains('contents: read'));
@@ -105,6 +113,19 @@ void main() {
       expect(
         workflow,
         isNot(contains(r'[ "$GOOGLE_PLAY_TRACK" = "production" ]')),
+      );
+    });
+
+    // `read` stops at the first newline, so a value carrying one could hide an
+    // entry behind it. The whole value is stripped of whitespace before being
+    // split, and the upload action receives that same normalized value.
+    test('strips whitespace before splitting, and ships what it checked', () {
+      expect(workflow, contains("tr -d '[:space:]'"));
+      expect(workflow, contains(r'<<< "$tracks"'));
+      expect(workflow, contains(r'tracks: ${{ steps.config.outputs.tracks }}'));
+      expect(
+        workflow,
+        isNot(contains(r'tracks: ${{ env.GOOGLE_PLAY_TRACK }}')),
       );
     });
 

@@ -13,8 +13,9 @@ name: Google Play Closed Testing
 #     workflow dispatched the build for it;
 #   * only the release-signed AAB artifact is accepted;
 #   * ad-hoc manual builds are never auto-published;
+#   * the release tag named by the bundle must actually exist;
 #   * the production track is explicitly rejected, including as one entry of
-#     a multi-track value.
+#     a multi-track value, whatever whitespace the value carries.
 
 on:
   workflow_run:
@@ -53,16 +54,24 @@ jobs:
             enabled=false
           fi
 
-          if [ -z "$GOOGLE_PLAY_TRACK" ]; then
+          # Strip every whitespace character from the whole value before
+          # looking at it. `read` stops at the first newline, so validating the
+          # raw variable would only ever see line one: a value like
+          # "internal,<newline>production" would pass the check below and still
+          # reach the upload action with production in it. Normalizing first
+          # also means the value shipped to the action is exactly the value
+          # that was validated.
+          tracks="$(printf '%s' "$GOOGLE_PLAY_TRACK" | tr -d '[:space:]')"
+
+          if [ -z "$tracks" ]; then
             echo "::notice::Google Play publishing is not connected yet: GOOGLE_PLAY_TRACK is missing."
             enabled=false
           else
             # The upload action's `tracks` input is plural: a comma-separated
             # list. Reject production as any entry, not just as the whole
             # value, so "internal,production" cannot slip past the check.
-            IFS=',' read -ra requested_tracks <<< "$GOOGLE_PLAY_TRACK"
+            IFS=',' read -ra requested_tracks <<< "$tracks"
             for requested in "${requested_tracks[@]}"; do
-              requested="$(printf '%s' "$requested" | tr -d '[:space:]')"
               if [ "$requested" = "production" ]; then
                 echo "::error::Automatic production publishing is intentionally disabled. Set GOOGLE_PLAY_TRACK to a testing track."
                 exit 1
@@ -71,6 +80,7 @@ jobs:
           fi
 
           echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+          echo "tracks=$tracks" >> "$GITHUB_OUTPUT"
 
           if [ "$enabled" != "true" ]; then
             echo "Google Play upload skipped. Complete docs/google-play-publishing.md to enable it." >> "$GITHUB_STEP_SUMMARY"
@@ -120,6 +130,8 @@ jobs:
         if: >-
           steps.config.outputs.enabled == 'true' &&
           steps.artifact.outputs.available == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           mapfile -t bundles < <(find play-upload -type f -name '*.aab' -print)
@@ -151,6 +163,23 @@ jobs:
               ;;
           esac
 
+          # The file name only records what the upstream build was TOLD to
+          # target. A manual dispatch can pass a `release_tag` that matches
+          # pubspec.yaml but was never actually tagged: the upstream preflight
+          # still passes and its attach job treats the missing Release as a
+          # no-op success, so a run like that would reach here with a
+          # tag-shaped name. Confirm the tag really exists before anything
+          # reaches Play. The stable release workflow pushes the tag and
+          # creates the Release before dispatching the build, so a genuine
+          # release always passes this.
+          tag="${name#linthra-}"
+          tag="${tag%-release-signed.aab}"
+
+          if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+            echo "::error::Bundle claims tag '${tag}', but no such tag exists in this repository. Refusing to publish an untagged build."
+            exit 1
+          fi
+
           echo "publish=true" >> "$GITHUB_OUTPUT"
           echo "path=$bundle" >> "$GITHUB_OUTPUT"
 
@@ -166,7 +195,7 @@ jobs:
           serviceAccountJsonPlainText: ${{ env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: ${{ env.GOOGLE_PLAY_PACKAGE_NAME }}
           releaseFiles: ${{ steps.bundle.outputs.path }}
-          tracks: ${{ env.GOOGLE_PLAY_TRACK }}
+          tracks: ${{ steps.config.outputs.tracks }}
           status: completed
 
       - name: Record publication summary
@@ -174,13 +203,15 @@ jobs:
           steps.config.outputs.enabled == 'true' &&
           steps.artifact.outputs.available == 'true' &&
           steps.bundle.outputs.publish == 'true'
+        env:
+          PUBLISHED_TRACKS: ${{ steps.config.outputs.tracks }}
         shell: bash
         run: |
           {
             echo "### Google Play testing upload"
             echo ""
             echo "- Package: \`$GOOGLE_PLAY_PACKAGE_NAME\`"
-            echo "- Track: \`$GOOGLE_PLAY_TRACK\`"
+            echo "- Track: \`$PUBLISHED_TRACKS\`"
             echo "- Source run: \`${{ github.event.workflow_run.id }}\`"
             echo "- Source commit: \`${{ github.event.workflow_run.head_sha }}\`"
             echo "- Bundle: \`${{ steps.bundle.outputs.path }}\`"
