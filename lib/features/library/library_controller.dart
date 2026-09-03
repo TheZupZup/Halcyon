@@ -45,22 +45,28 @@ class LibraryController extends Notifier<LibraryState> {
       ref.read(localScanReportProvider.notifier).record(scan.report);
       await _load();
     } on FolderScanException catch (error) {
-      ref.read(localScanReportProvider.notifier).record(LocalScanReport.failure(
-            folderSelected: folderPath.isNotEmpty,
-            isContentUri: location.isContentUri,
-            error: location.isAndroidMediaStore
-                ? LocalScanError.mediaPermission
-                : location.isContentUri
-                    ? LocalScanError.safTraversal
-                    : LocalScanError.folderUnavailable,
-          ));
+      ref.read(localScanReportProvider.notifier).record(
+            LocalScanReport.failure(
+              folderSelected: folderPath.isNotEmpty,
+              isContentUri: location.isContentUri,
+              error: location.isAndroidMediaStore
+                  ? error.code == 'permission_denied'
+                      ? LocalScanError.mediaPermission
+                      : LocalScanError.unexpected
+                  : location.isContentUri
+                      ? LocalScanError.safTraversal
+                      : LocalScanError.folderUnavailable,
+            ),
+          );
       state = LibraryState.error(error.message);
     } catch (_) {
-      ref.read(localScanReportProvider.notifier).record(LocalScanReport.failure(
-            folderSelected: folderPath.isNotEmpty,
-            isContentUri: location.isContentUri,
-            error: LocalScanError.unexpected,
-          ));
+      ref.read(localScanReportProvider.notifier).record(
+            LocalScanReport.failure(
+              folderSelected: folderPath.isNotEmpty,
+              isContentUri: location.isContentUri,
+              error: LocalScanError.unexpected,
+            ),
+          );
       state = const LibraryState.error(_scanFailedMessage);
     }
   }
