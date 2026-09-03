@@ -85,7 +85,7 @@ void main() {
       // Recoverable, not destructive: reselecting is the fix, and the actions
       // to do it are still on the card.
       expect(find.text('Change'), findsOneWidget);
-      expect(find.text('Forget folder'), findsOneWidget);
+      expect(find.text('Forget local music'), findsOneWidget);
     });
 
     testWidgets('on Linux, a reachable folder says nothing about access', (
@@ -126,11 +126,11 @@ void main() {
       await _pump(tester);
 
       expect(find.text('Local music'), findsOneWidget);
-      expect(find.text('No folder selected yet.'), findsOneWidget);
+      expect(find.text('No local music source selected yet.'), findsOneWidget);
       expect(find.text('Select a folder'), findsOneWidget);
       // No rescan/forget actions until a folder exists.
       expect(find.text('Rescan'), findsNothing);
-      expect(find.text('Forget folder'), findsNothing);
+      expect(find.text('Forget local music'), findsNothing);
     });
 
     testWidgets('with a SAF folder, shows a friendly label and the actions',
@@ -145,7 +145,7 @@ void main() {
       expect(find.text('primary:Music/musi5'), findsOneWidget);
       expect(find.text('Rescan'), findsOneWidget);
       expect(find.text('Change'), findsOneWidget);
-      expect(find.text('Forget folder'), findsOneWidget);
+      expect(find.text('Forget local music'), findsOneWidget);
     });
 
     testWidgets('after a successful scan, shows a clear summary with counts',
@@ -270,9 +270,11 @@ void main() {
       // Still a clear way back: reselect the folder in the chooser Linux has.
       expect(find.textContaining("couldn't read this folder"), findsOneWidget);
       expect(
-          find.textContaining('Select it again with the system folder '
-              'chooser'),
-          findsOneWidget);
+        find.textContaining(
+          'Select it again with the system folder chooser',
+        ),
+        findsOneWidget,
+      );
       expect(find.textContaining('restore access'), findsOneWidget);
       // The SD-card aside is an Android storage note; a desktop path is not it.
       expect(find.textContaining('SD cards'), findsNothing);
