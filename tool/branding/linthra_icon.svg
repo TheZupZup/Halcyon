@@ -1,10 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Canonical Linthra app-icon source: four rounded equalizer bars carrying a
-     single violet→orange gradient on a dark premium squircle. generate_icons.py
-     rasterises this same design into the launcher mipmaps and the F-Droid
-     icon/feature graphic; edit both together so they never drift. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"
      viewBox="0 0 512 512">
+  <!-- Canonical Linthra app-icon source: four rounded equalizer bars carrying a
+       single violet→orange gradient on a dark premium squircle.
+       generate_icons.py rasterises this same design into the launcher mipmaps
+       and the F-Droid icon/feature graphic; edit both together so they never
+       drift.
+
+       This comment sits *inside* the root element on purpose (#554). Content
+       sniffing gives up on `<svg` after the first 256 bytes, so a comment
+       between the XML declaration and the root tag pushes the only signature
+       an SVG has out of range: gdk-pixbuf then refuses the file outright, GTK
+       cannot load it as a themed icon, and every launcher that resolves icons
+       that way falls back to a generic one. Keep the root element near the top
+       of the file. scripts/check_linux_runner.py enforces the limit. -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#1C1730" />

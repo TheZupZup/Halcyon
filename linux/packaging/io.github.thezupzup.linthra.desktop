@@ -18,10 +18,14 @@
 # check_linux_runner.py holds that filename and this `Icon=` together, and its
 # absolute-path scan covers this file too.
 #
-# The window this launches identifies itself with the same id — the runner
-# calls `g_set_prgname(APPLICATION_ID)` and registers its GtkApplication under
-# it (linux/runner/my_application.cc) — so the running window associates with
-# this entry on both Wayland and X11 without a `StartupWMClass=` override.
+# The window this launches identifies itself with the same id. The runner
+# (linux/runner/my_application.cc) registers its GtkApplication under
+# APPLICATION_ID, calls `g_set_prgname(APPLICATION_ID)` so GTK 3 sends that id
+# as the Wayland `xdg_toplevel.set_app_id`, and calls
+# `gdk_set_program_class(APPLICATION_ID)` so both halves of X11's `WM_CLASS`
+# are the id too. `StartupWMClass=` below declares that X11 pair, so a shell
+# matches the window to this entry exactly instead of relying on its
+# lower-casing fallback (#554).
 #
 # Validate after editing:  desktop-file-validate linux/packaging/io.github.thezupzup.linthra.desktop
 [Desktop Entry]
@@ -40,3 +44,11 @@ Terminal=false
 Categories=AudioVideo;Audio;Player;Music;
 Keywords=music;audio;player;library;playlist;jellyfin;subsonic;navidrome;plex;
 StartupNotify=true
+# The X11 `WM_CLASS` the running window actually carries. GTK builds that pair
+# from `g_get_prgname()` and `gdk_get_program_class()`, and the runner sets both
+# to the application id, so this value is the id as well. It has to stay equal
+# to the filename's id: a stale value here is worse than none, because a shell
+# trusts an exact StartupWMClass match over every other heuristic and would map
+# Linthra's window to whatever entry claims it. Wayland ignores this key and
+# uses the app id directly. check_linux_runner.py holds the two together.
+StartupWMClass=io.github.thezupzup.linthra

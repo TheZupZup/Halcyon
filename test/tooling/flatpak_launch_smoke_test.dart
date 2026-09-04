@@ -30,6 +30,28 @@ void main() {
     expect(smoke, contains('dbus-run-session'));
   });
 
+  // #554. A window is not enough: it has to be a window the desktop recognises
+  // as Linthra. Under Xvfb the sandbox takes its --socket=fallback-x11 path, so
+  // both of these are readable as X properties on the packaged app.
+  test('launch smoke holds the packaged window to the application id', () {
+    expect(smoke, contains('xprop is not installed'));
+    expect(smoke, contains(r'xprop -id "$window_id" WM_CLASS'));
+    expect(
+      smoke,
+      contains(r'expected="WM_CLASS(STRING) = \"$APP_ID\", \"$APP_ID\""'),
+    );
+  });
+
+  test('launch smoke requires the packaged window to carry its icon', () {
+    expect(smoke, contains(r'xprop -id "$window_id" _NET_WM_ICON'));
+    expect(smoke, contains('carries no _NET_WM_ICON'));
+  });
+
+  test('launch smoke re-checks identity after a close and reopen', () {
+    expect(smoke, contains('launch_and_check "first launch"'));
+    expect(smoke, contains('launch_and_check "reopen after close"'));
+  });
+
   test('launch smoke cleans up app and temporary remote', () {
     expect(smoke, contains(r'flatpak kill "$APP_ID"'));
     expect(smoke, contains(r'flatpak --user uninstall -y "$APP_ID"'));
