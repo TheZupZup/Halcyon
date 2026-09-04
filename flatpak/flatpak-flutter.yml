@@ -194,6 +194,18 @@ modules:
   - name: libplacebo
     buildsystem: meson
     config-opts:
+      # Pin the install layout. flatpak-builder passes meson only --prefix=/app,
+      # and meson then resolves its *own* default libdir, which is `lib64`
+      # inside this SDK because the freedesktop base image carries a real
+      # /usr/lib64 directory. That puts libplacebo.so and libplacebo.pc in
+      # /app/lib64, which is on neither of the two paths that matter:
+      # flatpak-builder's PKG_CONFIG_PATH (so the mpv module below fails its
+      # `Dependency "libplacebo" not found` check) nor the sandbox's runtime
+      # library path. The autotools modules here already land in /app/lib
+      # because flatpak-builder passes them --libdir=/app/lib; this pins the
+      # meson ones to the same place, which is also what flatpak/README.md
+      # documents ("installed under /app/lib").
+      - -Dlibdir=lib
       - -Dvulkan=enabled
       - -Dshaderc=disabled
       - -Dglslang=disabled
@@ -233,6 +245,11 @@ modules:
   - name: mpv
     buildsystem: meson
     config-opts:
+      # Same meson libdir pin as libplacebo above, and it matters more here:
+      # media_kit/just_audio_media_kit dlopen this libmpv by soname at startup,
+      # so it has to sit on the sandbox's library path rather than in
+      # /app/lib64.
+      - -Dlibdir=lib
       # Only libmpv is needed; the mpv CLI player pulls in scripting, disc
       # and gamepad stacks Linthra never touches.
       - -Dcplayer=false
