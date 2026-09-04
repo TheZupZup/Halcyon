@@ -35,11 +35,26 @@ The application icon (#436) is that same silence one step further out. `Icon=`
 is an icon-theme *name*, not a path, so it only resolves if a file of exactly
 that basename lands in the icon theme; install it one directory too high, or
 rename either side, and every launcher quietly falls back to a generic icon
-with nothing logged anywhere. So the manifests are checked for the install step
+with nothing logged anywhere. The same silence swallows an SVG whose `<svg` root
+element starts more than 256 bytes in (#554): content sniffing never finds the
+one signature an SVG has, so gdk-pixbuf refuses the file and GTK cannot load it
+as an icon at all, however valid the XML is. So the manifests are checked for the install step
 that puts Linthra's canonical vector source into `hicolor/scalable/apps` under
 precisely the name `Icon=` asks for, and that source is itself checked for the
 two things that would make it unusable inside a sandbox: an absolute host path,
 or a reference to a file it does not carry.
+
+The *running window* (#554) is the last link in that chain, and the one a
+desktop actually looks at. Nothing installed above matters if the GTK window
+introduces itself under a different name, so the runner is checked for the calls
+that set it: `g_set_prgname()` for the Wayland `xdg_toplevel` app id,
+`gdk_set_program_class()` for the class half of X11's `WM_CLASS` (GDK's default
+is the program name with the first letter upper-cased, which is not the app id),
+`gtk_window_set_default_icon_name()` for the window's own icon, and
+`g_set_application_name()` for the human-readable name. Two of those are undone
+by `gtk_init()` if they run too early, so where they appear is checked as well
+as that they appear. The desktop entry's `StartupWMClass=` is held to the same
+value from the other side.
 
 It also checks the one runner<->Dart contract that is a pair of strings and
 nothing else: the folder-picker method channel (#438). The runner answers on
@@ -138,6 +153,17 @@ ICON_EXTENSION = ".svg"
 
 SVG_ROOT_TAG = "{http://www.w3.org/2000/svg}svg"
 
+# An SVG has no magic number, so content sniffing looks for the literal `<svg`
+# and gives up after this many bytes. An icon whose root element starts later is
+# simply not recognised as an image: gdk-pixbuf refuses to decode it, GTK cannot
+# load it as a themed icon, and every launcher that resolves icons through that
+# stack falls back to a generic one, with nothing logged. A licence header, a
+# DOCTYPE or (as in #554) a descriptive comment between the XML declaration and
+# the root tag is all it takes, and the file still parses, still validates and
+# still renders in a browser, which is why only a check like this catches it.
+# Comments belong inside the root element instead.
+SVG_SIGNATURE_WINDOW_BYTES = 256
+
 # An SVG that pulls in something it does not carry — an <image href=...>, an
 # external stylesheet or font, a `file://` or `https://` reference — renders
 # differently or not at all inside the sandbox, where none of that is
@@ -168,6 +194,75 @@ FOLDER_PICKER_NATIVE_CHANNEL = r'kChannelName\s*=\s*\n?\s*"([^"]+)"'
 FOLDER_PICKER_NATIVE_METHOD = r'kPickFolderMethod\s*=\s*"([^"]+)"'
 FOLDER_PICKER_DART_CHANNEL = r"String channelName\s*=\s*\n?\s*'([^']+)'"
 FOLDER_PICKER_DART_METHOD = r"String pickFolderMethod\s*=\s*'([^']+)'"
+
+# === Window identity (#554) ===
+#
+# The desktop entry, the icon, the AppStream component and the Flatpak are all
+# named for the application id. The *running window* only joins them if the
+# runner says so, and each backend reads a different thing:
+#
+#   Wayland  GTK 3 sends `xdg_toplevel.set_app_id()` straight from
+#            `g_get_prgname()`, so `g_set_prgname(APPLICATION_ID)` is the whole
+#            Wayland story. It has to run before `gtk_init()` reads the program
+#            name, which means inside `my_application_new()`.
+#   X11      GTK builds `WM_CLASS` from `g_get_prgname()` (the instance half)
+#            and `gdk_get_program_class()` (the class half) as each GtkWindow is
+#            constructed. GDK derives that class from the program name with the
+#            first letter upper-cased, which is not the application id, so it is
+#            set explicitly. `gtk_init()` resets the program class
+#            unconditionally, and `GtkApplication::startup` is what calls
+#            `gtk_init()`, so this one has to run *after* the startup chain-up.
+#   Icon     GTK sets no window icon of its own. Without a default icon name the
+#            window carries no `_NET_WM_ICON` and anything reading the window's
+#            icon rather than resolving a desktop entry shows a generic one.
+#
+# None of that fails to build, and none of it fails to launch. It just quietly
+# stops matching the launcher, which is exactly the class of drift this script
+# exists for. The argument is checked too: every one of these has to be the
+# APPLICATION_ID macro, so the id keeps coming from linux/CMakeLists.txt rather
+# than being pasted into the runner as a second copy.
+RUNNER_IDENTITY_NEW_FUNCTION = "MyApplication* my_application_new()"
+RUNNER_IDENTITY_STARTUP_FUNCTION = "static void my_application_startup("
+RUNNER_STARTUP_CHAIN_UP = (
+    "G_APPLICATION_CLASS(my_application_parent_class)->startup(application)"
+)
+APPLICATION_ID_MACRO = "APPLICATION_ID"
+APPLICATION_NAME_CONSTANT = "kApplicationName"
+
+# call -> (function it belongs in, argument it must be given, why)
+RUNNER_IDENTITY_CALLS = {
+    "g_set_prgname": (
+        RUNNER_IDENTITY_NEW_FUNCTION,
+        APPLICATION_ID_MACRO,
+        "GTK 3 sends the Wayland xdg_toplevel app id from g_get_prgname(), so "
+        "without this the window never groups with the installed launcher under "
+        "GNOME or KDE Plasma on Wayland",
+    ),
+    "gdk_set_program_class": (
+        RUNNER_IDENTITY_STARTUP_FUNCTION,
+        APPLICATION_ID_MACRO,
+        "otherwise X11's WM_CLASS class half is the program name with its first "
+        "letter upper-cased, which is not the id the desktop entry's "
+        "StartupWMClass declares",
+    ),
+    "gtk_window_set_default_icon_name": (
+        RUNNER_IDENTITY_STARTUP_FUNCTION,
+        APPLICATION_ID_MACRO,
+        "otherwise the window carries no _NET_WM_ICON and task switchers and "
+        "panels fall back to a generic icon",
+    ),
+    "g_set_application_name": (
+        RUNNER_IDENTITY_STARTUP_FUNCTION,
+        APPLICATION_NAME_CONSTANT,
+        "otherwise g_get_application_name() falls back to the program name and "
+        "GTK shows the reverse-DNS id where it means to show the product name",
+    ),
+}
+
+# The calls that gtk_init() would undo if they ran before the startup chain-up.
+RUNNER_IDENTITY_CALLS_AFTER_CHAIN_UP = frozenset(
+    {"gdk_set_program_class", "gtk_window_set_default_icon_name"}
+)
 
 SECURE_STORAGE_TARGET = "flutter_secure_storage_linux_plugin"
 SECURE_STORAGE_WARNING_EXCEPTION = "-Wno-error=deprecated-literal-operator"
@@ -346,6 +441,19 @@ def desktop_entry_problems(root: Path) -> list[str]:
         android_application_id(root),
         "android/app/build.gradle applicationId",
     )
+    # StartupWMClass is the X11 `WM_CLASS` the running window carries, which the
+    # runner sets to the application id on both halves
+    # (`g_set_prgname(APPLICATION_ID)` and
+    # `gdk_set_program_class(APPLICATION_ID)`, see runner_identity_problems).
+    # A shell trusts an exact StartupWMClass match ahead of every other
+    # heuristic, so a stale value here is worse than none: it points Linthra's
+    # window at whatever entry claims that class. Wayland ignores the key and
+    # matches on the app id directly.
+    require(
+        "StartupWMClass",
+        android_application_id(root),
+        "the WM_CLASS linux/runner/my_application.cc sets",
+    )
 
     categories = [item for item in entry.get("Categories", "").split(";") if item]
     missing = [name for name in REQUIRED_CATEGORIES if name not in categories]
@@ -511,7 +619,24 @@ def icon_source_problems(root: Path) -> list[str]:
             f"{ICON_SOURCE}: root element is {element.tag!r}, not an SVG in the "
             f"{SVG_ROOT_TAG} namespace"
         )
-    elif element.get("viewBox") is None:
+        return problems
+
+    # Where that root element starts, which is the only thing content sniffing
+    # has to go on. Checked on the bytes rather than the parse tree, because it
+    # is a property of the file, not of the document.
+    root_offset = path.read_bytes().find(b"<svg")
+    if root_offset == -1 or root_offset + len(b"<svg") > SVG_SIGNATURE_WINDOW_BYTES:
+        where = "nowhere" if root_offset == -1 else f"at byte {root_offset}"
+        problems.append(
+            f"{ICON_SOURCE}: the <svg> root element starts {where}, past the "
+            f"first {SVG_SIGNATURE_WINDOW_BYTES} bytes content sniffing reads, "
+            "so the file is not recognised as an image at all: GTK cannot load "
+            "it as a themed icon and launchers show a generic one. Move "
+            "whatever precedes it (a comment, a DOCTYPE) inside the root "
+            "element."
+        )
+
+    if element.get("viewBox") is None:
         # Without a viewBox the drawing has no coordinate system to scale, so
         # the file lands in `scalable/` without actually being scalable — it
         # renders at its intrinsic size and every launcher resamples it.
@@ -587,6 +712,142 @@ def folder_picker_problems(root: Path) -> list[str]:
     return problems
 
 
+def _blank(source: str, *, comments: bool = True, strings: bool = False) -> str:
+    """Return `source` with comments and/or string literals replaced by spaces.
+
+    Same length as the input, so an index into the result is an index into the
+    original. Blanking comments is what stops a call *described* in a comment
+    from counting as a call; blanking strings is what lets the brace matcher
+    below ignore a `"{"` inside a literal.
+    """
+    out = list(source)
+    index = 0
+    length = len(source)
+    while index < length:
+        char = source[index]
+        if char == '"' or char == "'":
+            end = index + 1
+            while end < length and source[end] != char:
+                end += 2 if source[end] == "\\" else 1
+            end = min(end + 1, length)
+            if strings:
+                for position in range(index, end):
+                    if out[position] != "\n":
+                        out[position] = " "
+            index = end
+        elif source.startswith("//", index):
+            end = source.find("\n", index)
+            end = length if end == -1 else end
+            if comments:
+                for position in range(index, end):
+                    out[position] = " "
+            index = end
+        elif source.startswith("/*", index):
+            end = source.find("*/", index + 2)
+            end = length if end == -1 else end + 2
+            if comments:
+                for position in range(index, end):
+                    if out[position] != "\n":
+                        out[position] = " "
+            index = end
+        else:
+            index += 1
+    return "".join(out)
+
+
+def _function_body(code: str, signature: str, where: Path) -> tuple[int, int]:
+    """The `[start, end)` span of the body of the function opened by `signature`.
+
+    `code` must already have comments and strings blanked, so brace counting is
+    reliable. Returns offsets into `code` rather than the text itself, because
+    callers need to compare positions (the chain-up has to come first).
+    """
+    start = code.find(signature)
+    if start == -1:
+        raise CheckError(f"{where}: could not find {signature}")
+    if code.find(signature, start + 1) != -1:
+        raise CheckError(f"{where}: found more than one {signature}, expected 1")
+    opening = code.find("{", start)
+    if opening == -1:
+        raise CheckError(f"{where}: {signature} has no body")
+    depth = 0
+    for index in range(opening, len(code)):
+        if code[index] == "{":
+            depth += 1
+        elif code[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return opening, index
+    raise CheckError(f"{where}: {signature} has an unterminated body")
+
+
+def runner_identity_problems(root: Path) -> list[str]:
+    """Identity calls the runner has to make, in the places they still work.
+
+    See the RUNNER_IDENTITY_CALLS comment above for why each one exists and why
+    two of them are order-dependent. Everything here builds and launches
+    perfectly when it is wrong; the only symptom is a window the desktop no
+    longer recognises as Linthra.
+    """
+    text = _read(root, MY_APPLICATION)
+    code = _blank(text, comments=True, strings=True)
+    problems: list[str] = []
+
+    bodies: dict[str, tuple[int, int]] = {}
+    for signature in (RUNNER_IDENTITY_NEW_FUNCTION, RUNNER_IDENTITY_STARTUP_FUNCTION):
+        bodies[signature] = _function_body(code, signature, MY_APPLICATION)
+
+    startup_start, startup_end = bodies[RUNNER_IDENTITY_STARTUP_FUNCTION]
+    chain_up = code.find(RUNNER_STARTUP_CHAIN_UP, startup_start, startup_end)
+    if chain_up == -1:
+        problems.append(
+            f"{MY_APPLICATION}: my_application_startup() never chains up to "
+            "GtkApplication::startup, so gtk_init() is never reached"
+        )
+
+    for call, (signature, argument, why) in RUNNER_IDENTITY_CALLS.items():
+        pattern = re.compile(rf"\b{re.escape(call)}\s*\(\s*{re.escape(argument)}\s*\)")
+        matches = list(pattern.finditer(code))
+        if not matches:
+            problems.append(f"{MY_APPLICATION}: no {call}({argument}) call: {why}")
+            continue
+        if len(matches) > 1:
+            problems.append(
+                f"{MY_APPLICATION}: {len(matches)} {call}({argument}) calls, expected 1"
+            )
+            continue
+        where = matches[0].start()
+        body_start, body_end = bodies[signature]
+        function = signature.split("(")[0].split()[-1]
+        if not body_start < where < body_end:
+            problems.append(
+                f"{MY_APPLICATION}: {call}({argument}) is not inside "
+                f"{function}(), which is the only place it takes effect"
+            )
+            continue
+        if (
+            call in RUNNER_IDENTITY_CALLS_AFTER_CHAIN_UP
+            and chain_up != -1
+            and where < chain_up
+        ):
+            problems.append(
+                f"{MY_APPLICATION}: {call}({argument}) runs before "
+                "my_application_startup() chains up, so gtk_init() overwrites it"
+            )
+
+    # The id itself stays in linux/CMakeLists.txt. A literal here would be a
+    # second copy that no longer moves when APPLICATION_ID does.
+    app_id = android_application_id(root)
+    if f'"{app_id}"' in _blank(text, comments=True, strings=False):
+        problems.append(
+            f"{MY_APPLICATION}: the application id is written out as a string "
+            f"literal; use the {APPLICATION_ID_MACRO} macro that "
+            f"{RUNNER_CMAKELISTS} defines so there is one copy of it"
+        )
+
+    return problems
+
+
 def absolute_paths_under_linux(root: Path) -> list[str]:
     """Absolute host paths hardcoded in the committed Linux build files.
 
@@ -652,6 +913,11 @@ def check(root: Path) -> list[str]:
     # The folder-picker channel (#438): two strings that have to agree, and a
     # source file that has to be compiled and registered.
     problems.extend(folder_picker_problems(root))
+
+    # The window identity (#554): the GTK/GDK calls that make the *running*
+    # window answer to the same id as everything installed above, in the places
+    # where they still take effect.
+    problems.extend(runner_identity_problems(root))
 
     # Window metrics: a minimum larger than the default would open the window
     # already clamped, which reads as the app ignoring its own default.

@@ -286,9 +286,14 @@ widget.
 
 * `scripts/check_linux_runner.py` — the committed runner still matches the app's
   identity (`APPLICATION_ID` = Android's `applicationId`, `BINARY_NAME` =
-  the package name, window title = `AppInfo.name`), the window metrics are
-  sane, the offline SQLite seam is wired, and nothing under `linux/` hardcodes
-  an absolute host path. Tests: `test/tooling/check_linux_runner_test.py`.
+  the package name, window title = `AppInfo.name`), it still makes the four
+  desktop-identity calls below in the places where GTK honours them, the window
+  metrics are sane, the offline SQLite seam is wired, and nothing under `linux/`
+  hardcodes an absolute host path.
+  Tests: `test/tooling/check_linux_runner_test.py`.
+* `scripts/flatpak_launch_smoke.sh` — launches the packaged Flatpak twice and
+  reads `WM_CLASS` and `_NET_WM_ICON` back off the real window each time, so a
+  window that stops answering to the application id fails CI.
 * `test/app/linux_startup_test.dart` — every provider `main()` reads before the
   first frame constructs on a Linux host, with no Android MethodChannel
   binding among them.
@@ -300,6 +305,40 @@ widget.
 `unmanaged_files` in `.metadata`, so `flutter migrate` leaves Linthra's edits
 alone. If someone re-runs `flutter create --platforms=linux .` anyway, the
 checker above is what catches the reverted title and the lost SQLite seam.
+
+## Desktop identity
+
+Everything Linthra installs on Linux is named `io.github.thezupzup.linthra`: the
+desktop entry, the icon, the AppStream component, the Flatpak. The *running
+window* only joins them if the runner says so, and each display server reads a
+different thing, so `linux/runner/my_application.cc` sets all of them from
+`APPLICATION_ID` (never from a literal):
+
+| Call | Where | What reads it |
+| --- | --- | --- |
+| `g_set_prgname(APPLICATION_ID)` | `my_application_new()`, before `gtk_init()` | GTK 3 sends this as the Wayland `xdg_toplevel` app id, and as the instance half of X11's `WM_CLASS` |
+| `gdk_set_program_class(APPLICATION_ID)` | `my_application_startup()`, **after** the chain-up | the class half of `WM_CLASS`. GDK's default is the program name with its first letter upper-cased, which is not the app id |
+| `gtk_window_set_default_icon_name(APPLICATION_ID)` | same | GTK attaches the themed icon as `_NET_WM_ICON`; without it the window has no icon of its own |
+| `g_set_application_name(AppInfo.name)` | same | `g_get_application_name()`, which GTK and portals show to the user |
+
+The two in `my_application_startup()` have to run after the chain-up to
+`GtkApplication::startup`: that is what calls `gtk_init()`, and `gtk_init()`
+resets GDK's program class unconditionally. Set earlier, they compile, run, and
+are thrown away.
+
+`linux/packaging/io.github.thezupzup.linthra.desktop` declares the same X11 pair
+as `StartupWMClass=`, so a shell matches the window to the entry exactly rather
+than falling back to lower-casing whatever class it finds.
+
+One more thing decides whether the icon appears at all: **the `<svg` root element
+has to start within the first 256 bytes of `tool/branding/linthra_icon.svg`**.
+An SVG has no magic number, so content sniffing looks for that literal string and
+gives up after 256 bytes. Push it past that (a licence header, a `DOCTYPE`, a
+descriptive comment between the XML declaration and the root tag) and gdk-pixbuf
+refuses the file outright: GTK cannot load it as a themed icon, and every
+launcher that resolves icons through that stack shows a generic one. The file
+still parses, still validates, and still renders in a browser, which is why the
+checker measures the offset. Put comments *inside* the root element.
 
 ## Suspend / resume (manual matrix)
 

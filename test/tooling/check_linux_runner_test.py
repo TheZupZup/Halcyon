@@ -11,6 +11,12 @@ caught", built on a synthetic checkout rather than the real one: a fixture that
 can be broken is the only way to prove the checker fails when it should, and it
 keeps these tests from depending on Linthra's current version or app id.
 
+The window identity calls (#554) are tested the same way as well: the runner is
+what tells Wayland and X11 which application the window belongs to, so each case
+takes a good runner and removes, duplicates, comments out, hardcodes or reorders
+exactly one of those calls. All of them still compile and still launch, which is
+why only a check like this notices.
+
 The desktop entry (#434) is tested the same way, and for the same reason: a
 `.desktop` file that names the wrong binary, the wrong icon or the wrong app id
 is still a perfectly valid desktop file, so only a comparison against the app's
@@ -76,6 +82,10 @@ if(TARGET flutter_secure_storage_linux_plugin AND
 endif()
 """
 
+# The runner, reduced to what the checker reads. The identity calls (#554) are
+# part of the fixture rather than an optional extra: they are what makes the
+# running window answer to the application id, and every WindowIdentityTest case
+# below is this same text with exactly one of them broken.
 MY_APPLICATION = """\
 #include "my_application.h"
 
@@ -89,6 +99,21 @@ static constexpr int kMinimumWindowHeight = 600;
 
 static void activate() {{
   self->folder_picker = folder_picker_channel_new(view, window);
+}}
+
+static void my_application_startup(GApplication* application) {{
+  G_APPLICATION_CLASS(my_application_parent_class)->startup(application);
+
+  g_set_application_name(kApplicationName);
+  gdk_set_program_class(APPLICATION_ID);
+  gtk_window_set_default_icon_name(APPLICATION_ID);
+}}
+
+MyApplication* my_application_new() {{
+  g_set_prgname(APPLICATION_ID);
+
+  return MY_APPLICATION(g_object_new(my_application_get_type(),
+                                     "application-id", APPLICATION_ID, nullptr));
 }}
 """
 
@@ -157,6 +182,7 @@ Icon={app_id}
 Terminal=false
 Categories=AudioVideo;Audio;Player;Music;
 StartupNotify=true
+StartupWMClass={app_id}
 """
 
 # A minimal but structurally real SVG: a self-contained mark whose only
@@ -406,6 +432,185 @@ class IdentityDriftTest(CheckoutCase):
         self.assertEqual(len(checker.check(self.root)), 3)
 
 
+class WindowIdentityTest(CheckoutCase):
+    """The calls that make the *running* window answer to the app id (#554).
+
+    Everything the other tests cover is installed metadata; this is the window
+    itself. Each case builds and launches perfectly, so the only symptom is a
+    desktop that stops recognising Linthra: a generic icon, or a window that
+    will not group with its own launcher.
+    """
+
+    def runner(self, *, replace: tuple[str, str] | None = None) -> str:
+        text = MY_APPLICATION.format(display_name=DISPLAY_NAME)
+        if replace is not None:
+            old, new = replace
+            assert old in text, old
+            text = text.replace(old, new)
+        return text
+
+    def only_problem(self, runner: str) -> str:
+        build_checkout(self.root, my_application=runner)
+        problems = checker.runner_identity_problems(self.root)
+        self.assertEqual(len(problems), 1, problems)
+        return problems[0]
+
+    def test_a_consistent_runner_has_no_identity_problems(self) -> None:
+        build_checkout(self.root)
+        self.assertEqual(checker.runner_identity_problems(self.root), [])
+
+    def test_losing_the_program_name_is_caught(self) -> None:
+        # The Wayland half: GTK 3 sends xdg_toplevel.set_app_id() from
+        # g_get_prgname(), so without this the app id GNOME and KDE match on is
+        # the binary name.
+        problem = self.only_problem(
+            self.runner(replace=("  g_set_prgname(APPLICATION_ID);\n", ""))
+        )
+        self.assertIn("g_set_prgname", problem)
+
+    def test_losing_the_program_class_is_caught(self) -> None:
+        # The X11 half: without it WM_CLASS's class is the program name with
+        # its first letter upper-cased, which no launcher indexes.
+        problem = self.only_problem(
+            self.runner(replace=("  gdk_set_program_class(APPLICATION_ID);\n", ""))
+        )
+        self.assertIn("gdk_set_program_class", problem)
+
+    def test_losing_the_default_icon_name_is_caught(self) -> None:
+        problem = self.only_problem(
+            self.runner(
+                replace=("  gtk_window_set_default_icon_name(APPLICATION_ID);\n", "")
+            )
+        )
+        self.assertIn("gtk_window_set_default_icon_name", problem)
+        self.assertIn("_NET_WM_ICON", problem)
+
+    def test_losing_the_human_readable_name_is_caught(self) -> None:
+        problem = self.only_problem(
+            self.runner(replace=("  g_set_application_name(kApplicationName);\n", ""))
+        )
+        self.assertIn("g_set_application_name", problem)
+
+    def test_the_program_class_may_not_run_before_the_chain_up(self) -> None:
+        # gtk_init() resets GDK's program class unconditionally, and
+        # GtkApplication::startup is what calls gtk_init(). Set before the chain
+        # up, this call compiles, runs, and is thrown away.
+        problem = self.only_problem(
+            self.runner(
+                replace=(
+                    "  G_APPLICATION_CLASS(my_application_parent_class)"
+                    "->startup(application);\n\n"
+                    "  g_set_application_name(kApplicationName);\n"
+                    "  gdk_set_program_class(APPLICATION_ID);\n",
+                    "  gdk_set_program_class(APPLICATION_ID);\n"
+                    "  G_APPLICATION_CLASS(my_application_parent_class)"
+                    "->startup(application);\n\n"
+                    "  g_set_application_name(kApplicationName);\n",
+                )
+            )
+        )
+        self.assertIn("gdk_set_program_class", problem)
+        self.assertIn("before", problem)
+
+    def test_the_icon_name_may_not_run_before_the_chain_up(self) -> None:
+        problem = self.only_problem(
+            self.runner(
+                replace=(
+                    "  G_APPLICATION_CLASS(my_application_parent_class)"
+                    "->startup(application);\n",
+                    "  gtk_window_set_default_icon_name(APPLICATION_ID);\n"
+                    "  G_APPLICATION_CLASS(my_application_parent_class)"
+                    "->startup(application);\n",
+                )
+            ).replace("  gtk_window_set_default_icon_name(APPLICATION_ID);\n}", "}")
+        )
+        self.assertIn("gtk_window_set_default_icon_name", problem)
+        self.assertIn("before", problem)
+
+    def test_the_program_name_must_be_set_before_gtk_init(self) -> None:
+        # Moved into startup(), where GDK has already read the program name.
+        problem = self.only_problem(
+            self.runner(
+                replace=("  g_set_prgname(APPLICATION_ID);\n\n  return", "\n  return")
+            ).replace(
+                "  g_set_application_name(kApplicationName);\n",
+                "  g_set_application_name(kApplicationName);\n"
+                "  g_set_prgname(APPLICATION_ID);\n",
+            )
+        )
+        self.assertIn("g_set_prgname", problem)
+        self.assertIn("my_application_new", problem)
+
+    def test_a_hardcoded_application_id_is_rejected(self) -> None:
+        # The id lives in linux/CMakeLists.txt and reaches the runner as the
+        # APPLICATION_ID macro. A literal is a second copy that stops moving.
+        build_checkout(
+            self.root,
+            my_application=self.runner(
+                replace=(
+                    "gdk_set_program_class(APPLICATION_ID)",
+                    f'gdk_set_program_class("{APP_ID}")',
+                )
+            ),
+        )
+        problems = checker.runner_identity_problems(self.root)
+        self.assertEqual(len(problems), 2, problems)
+        self.assertTrue(any("string literal" in problem for problem in problems))
+
+    def test_a_call_named_only_in_a_comment_does_not_count(self) -> None:
+        # A comment describing the call is not the call.
+        problem = self.only_problem(
+            self.runner(
+                replace=(
+                    "  gdk_set_program_class(APPLICATION_ID);\n",
+                    "  // gdk_set_program_class(APPLICATION_ID);\n",
+                )
+            )
+        )
+        self.assertIn("gdk_set_program_class", problem)
+
+    def test_a_duplicated_call_is_caught(self) -> None:
+        problem = self.only_problem(
+            self.runner(
+                replace=(
+                    "  gdk_set_program_class(APPLICATION_ID);\n",
+                    "  gdk_set_program_class(APPLICATION_ID);\n"
+                    "  gdk_set_program_class(APPLICATION_ID);\n",
+                )
+            )
+        )
+        self.assertIn("2 gdk_set_program_class", problem)
+
+    def test_never_chaining_up_is_caught(self) -> None:
+        # Without the chain up gtk_init() never runs at all, so the two
+        # order-dependent calls have nothing to be ordered against.
+        build_checkout(
+            self.root,
+            my_application=self.runner(
+                replace=(
+                    "  G_APPLICATION_CLASS(my_application_parent_class)"
+                    "->startup(application);\n",
+                    "",
+                )
+            ),
+        )
+        problems = checker.runner_identity_problems(self.root)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("chains up", problems[0])
+
+    def test_a_runner_without_the_startup_handler_is_an_error(self) -> None:
+        # A `flutter create` regeneration that drops the override entirely is a
+        # read failure, not a silent pass.
+        build_checkout(
+            self.root,
+            my_application=self.runner().replace(
+                "static void my_application_startup(", "static void unrelated_thing("
+            ),
+        )
+        with self.assertRaises(checker.CheckError):
+            checker.runner_identity_problems(self.root)
+
+
 class DesktopEntryTest(CheckoutCase):
     """The installed entry (#434) repeating the identity it launches.
 
@@ -456,6 +661,29 @@ class DesktopEntryTest(CheckoutCase):
         problems = checker.desktop_entry_problems(self.root)
         self.assertEqual(len(problems), 1)
         self.assertIn("Icon=", problems[0])
+
+    def test_the_startup_wm_class_must_be_the_app_id(self) -> None:
+        # A shell trusts an exact StartupWMClass match ahead of every other
+        # heuristic, so a value that is not the WM_CLASS the runner stamps sends
+        # the window to the wrong entry, or to none at all.
+        build_checkout(
+            self.root,
+            desktop_entry=self.entry().replace(
+                f"StartupWMClass={APP_ID}", "StartupWMClass=ExampleApp"
+            ),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("StartupWMClass=", problems[0])
+
+    def test_a_missing_startup_wm_class_is_reported(self) -> None:
+        build_checkout(
+            self.root,
+            desktop_entry=self.entry().replace(f"StartupWMClass={APP_ID}\n", ""),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("no StartupWMClass=", problems[0])
 
     def test_a_missing_key_is_reported(self) -> None:
         build_checkout(
@@ -795,6 +1023,29 @@ class IconSourceTest(CheckoutCase):
             all("references something outside itself" in p for p in problems)
         )
 
+    def test_a_root_element_pushed_out_of_the_sniff_window_is_caught(self) -> None:
+        # The regression #554 actually hit: a descriptive comment between the XML
+        # declaration and `<svg>`. The file still parses, still validates, still
+        # renders in a browser, and gdk-pixbuf still refuses it, so GTK cannot
+        # load it as a themed icon and every launcher shows a generic one.
+        header = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        body = ICON_SVG[len(header) :]
+        comment = "<!-- " + ("a note about the mark. " * 20) + "-->\n"
+        build_checkout(self.root, icon_svg=header + comment + body)
+        problems = checker.icon_source_problems(self.root)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("root element starts", problems[0])
+
+    def test_the_same_comment_inside_the_root_element_is_fine(self) -> None:
+        # The fix, and the reason the check measures the offset rather than
+        # banning comments: the note keeps its place in the file.
+        marker = 'viewBox="0 0 512 512">'
+        comment = "\n  <!-- " + ("a note about the mark. " * 20) + "-->"
+        icon = ICON_SVG.replace(marker, marker + comment)
+        self.assertIn("a note about the mark", icon)
+        build_checkout(self.root, icon_svg=icon)
+        self.assertEqual(checker.icon_source_problems(self.root), [])
+
     def test_a_malformed_svg_is_caught(self) -> None:
         # A broken SVG installs perfectly and then draws nothing.
         build_checkout(self.root, icon_svg=ICON_SVG.replace("</svg>", ""))
@@ -1047,6 +1298,27 @@ class RealRepositoryTest(unittest.TestCase):
             checker.application_id(ROOT), checker.android_application_id(ROOT)
         )
 
+    def test_the_running_window_carries_the_application_id(self) -> None:
+        # The committed runner really does make all four identity calls, in the
+        # places where GTK still honours them (#554).
+        self.assertEqual(checker.runner_identity_problems(ROOT), [])
+        runner = (ROOT / "linux" / "runner" / "my_application.cc").read_text(
+            encoding="utf-8"
+        )
+        for call in (
+            "g_set_prgname(APPLICATION_ID)",
+            "gdk_set_program_class(APPLICATION_ID)",
+            "gtk_window_set_default_icon_name(APPLICATION_ID)",
+        ):
+            self.assertIn(call, runner)
+
+    def test_the_desktop_entry_declares_the_runners_wm_class(self) -> None:
+        entry = checker.desktop_entry(ROOT)
+        self.assertEqual(
+            entry["StartupWMClass"], checker.android_application_id(ROOT)
+        )
+        self.assertEqual(entry["StartupWMClass"], entry["Icon"])
+
     def test_the_window_title_is_the_product_name(self) -> None:
         self.assertEqual(checker.window_title(ROOT), checker.app_display_name(ROOT))
 
@@ -1082,6 +1354,16 @@ class RealRepositoryTest(unittest.TestCase):
             checker.FLATPAK_DIR / f"{app_id}.yml",
         ):
             self.assertIn(installed, (ROOT / manifest).read_text(encoding="utf-8"))
+
+    def test_the_icon_source_is_recognisable_as_an_svg(self) -> None:
+        # Content sniffing is what stands between the installed file and a
+        # generic icon, and it only looks at the start of the file.
+        raw = (ROOT / "tool" / "branding" / "linthra_icon.svg").read_bytes()
+        offset = raw.find(b"<svg")
+        self.assertNotEqual(offset, -1)
+        self.assertLessEqual(
+            offset + len(b"<svg"), checker.SVG_SIGNATURE_WINDOW_BYTES
+        )
 
     def test_the_icon_source_is_the_canonical_brand_mark(self) -> None:
         # Not a copy and not a redraw: the file Linux packaging installs is the

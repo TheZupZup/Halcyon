@@ -34,6 +34,41 @@ void main() {
     },
   );
 
+  // The job installs its host tools with --no-install-recommends, so anything a
+  // dependency merely recommends has to be named explicitly. elfutils is the
+  // one that bit: flatpak-builder only recommends it, and without its `eu-strip`
+  // the build dies on the first native module, long before Linthra is reached.
+  test('Flatpak CI installs the host tools the build and smoke need', () {
+    for (final String package in <String>[
+      // appstreamcli, for the metainfo validation step.
+      'appstream',
+      // desktop-file-validate, for the desktop entry.
+      'desktop-file-utils',
+      // eu-strip / eu-elfcompress, which flatpak-builder uses to split debug
+      // symbols out of every module it builds.
+      'elfutils',
+      'flatpak-builder',
+      // The gdk-pixbuf SVG loader, without which the appstreamcli compose that
+      // flatpak-builder runs at finish time cannot read the scalable app icon.
+      'librsvg2-common',
+      // xwininfo and xprop, which the launch smoke reads window identity with.
+      'x11-utils',
+      // The headless display and session bus the smoke launches into.
+      'xvfb',
+      'dbus-x11',
+    ]) {
+      // Either a continuation line or the last entry of the list.
+      expect(
+        workflow,
+        anyOf(
+          contains('            $package \\\n'),
+          contains('            $package\n'),
+        ),
+        reason: 'Missing host package: $package',
+      );
+    }
+  });
+
   test('packaging-relevant changes trigger the workflow', () {
     for (final String path in <String>[
       "'flatpak/**'",
