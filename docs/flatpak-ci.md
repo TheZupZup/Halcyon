@@ -39,6 +39,13 @@ Install the host tooling first. On Fedora Atomic, the contributor setup in
 [`flatpak-development.md`](./flatpak-development.md) remains the recommended
 path. On a distribution with native `flatpak-builder`, the core CI sequence is:
 
+> `flatpak-builder` needs **elfutils** (`eu-strip`) to split debug symbols out
+> of each module it builds. Most distributions pull it in with
+> `flatpak-builder`; Debian and Ubuntu only *recommend* it, so a minimal install
+> leaves it out and the build fails on the first native module with
+> `Failed to execute child process "eu-strip"`. The CI job names it explicitly
+> for that reason.
+
 ```bash
 python3 scripts/check_linux_runner.py
 python3 test/tooling/check_linux_runner_test.py
@@ -74,8 +81,8 @@ flatpak build-update-repo repo-ci
 bash ../scripts/flatpak_launch_smoke.sh repo-ci
 ```
 
-The launch command requires `xvfb-run`, `xwininfo` and `dbus-run-session`, the
-same tools installed by the CI job. It intentionally refuses to run if Linthra
+The launch command requires `xvfb-run`, `xwininfo`, `xprop` and
+`dbus-run-session`, the same tools installed by the CI job. It intentionally refuses to run if Linthra
 is already installed for the current user or system-wide, so a local smoke can
 never launch or remove a contributor's existing installation. Use a clean test
 user/environment for this final step when Linthra is already installed.

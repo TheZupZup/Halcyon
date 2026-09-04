@@ -58,6 +58,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # --no-install-recommends is deliberate: it keeps the runner close to the
+      # set of tools this job actually needs, rather than whatever a package
+      # happens to suggest. The cost is that every tool has to be named here,
+      # including ones a dependency would otherwise have pulled in.
+      #
+      # elfutils is exactly that case. flatpak-builder only *recommends* it, so
+      # --no-install-recommends leaves the runner without `eu-strip` and
+      # `eu-elfcompress`, and flatpak-builder needs `eu-strip` to split debug
+      # symbols out of every module it builds. Without it the build dies on the
+      # first native module with
+      #   Error: module libplacebo: Failed to execute child process "eu-strip"
+      # long before the Linthra module is reached. Installing the package is the
+      # fix rather than passing --disable-debuginfo, which would silently change
+      # what the exported repository contains.
       - name: Install host validation and smoke tools
         run: |
           set -euo pipefail
@@ -66,6 +80,7 @@ jobs:
             appstream \
             dbus-x11 \
             desktop-file-utils \
+            elfutils \
             flatpak \
             flatpak-builder \
             x11-utils \
