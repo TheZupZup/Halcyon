@@ -23,12 +23,73 @@ void main() {
       expect(workflow, contains('linthra-release-signed-aab'));
     });
 
-    test('only considers successful tag-triggered upstream runs', () {
+    test('only considers successful upstream runs', () {
       expect(
         workflow,
         contains("github.event.workflow_run.conclusion == 'success'"),
       );
+    });
+
+    // The stable-release workflow starts the signed Android build with
+    // `gh workflow run`, so its upstream run reports `workflow_dispatch`.
+    // Accepting only `push` would skip every stable release.
+    test('accepts both pushed tags and dispatched release builds', () {
       expect(workflow, contains("github.event.workflow_run.event == 'push'"));
+      expect(
+        workflow,
+        contains("github.event.workflow_run.event == 'workflow_dispatch'"),
+      );
+    });
+
+    test('auto-publishes tagged releases only, never ad-hoc manual builds', () {
+      expect(workflow, contains('linthra-v*-release-signed.aab)'));
+      expect(workflow, contains('publish=false'));
+      expect(workflow, contains('publish=true'));
+      expect(
+        workflow,
+        contains("steps.bundle.outputs.publish == 'true'"),
+      );
+    });
+
+    // A manual dispatch can pass a `release_tag` that matches pubspec.yaml but
+    // was never actually tagged, which still produces a tag-shaped bundle
+    // name. The name alone is therefore not proof that a release exists.
+    test('confirms the tag named by the bundle actually exists', () {
+      // A tag ref specifically: the Commits API would also accept a branch
+      // named like a version, which would prove nothing about a tag.
+      expect(
+        workflow,
+        contains(r'gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/'),
+      );
+      expect(
+        workflow,
+        isNot(contains(r'gh api "repos/${GITHUB_REPOSITORY}/commits/')),
+      );
+      expect(workflow, contains('Refusing to publish an untagged build.'));
+    });
+
+    // The stable release workflow creates an annotated tag, whose ref points
+    // at a tag object rather than the commit it names.
+    test('dereferences annotated tags before comparing commits', () {
+      expect(workflow, contains(r'[ "$tag_object_type" = "tag" ]'));
+      expect(
+        workflow,
+        contains(r'gh api "repos/${GITHUB_REPOSITORY}/git/tags/'),
+      );
+    });
+
+    // Android Release Build checks out its dispatch ref, never the tag, so a
+    // build dispatched while the branch carried commits past the tag makes a
+    // tag-named bundle whose code the tag does not name. Existing is not
+    // enough; the tag has to point at the commit the build ran on.
+    test('binds the bundle to the commit the tag names', () {
+      expect(workflow,
+          contains(r'SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}'));
+      expect(workflow, contains(r'[ "$tag_sha" != "$SOURCE_SHA" ]'));
+      expect(
+        workflow,
+        contains('Refusing to publish code the tag does not name.'),
+      );
     });
 
     test('keeps repository permissions read-only', () {
@@ -66,12 +127,39 @@ void main() {
 
   group('Google Play publisher safety', () {
     test('never accepts production as an automatic target', () {
-      expect(workflow, contains(r'[ "$GOOGLE_PLAY_TRACK" = "production" ]'));
+      expect(workflow, contains(r'[ "$requested" = "production" ]'));
       expect(
         workflow,
         contains('Automatic production publishing is intentionally disabled.'),
       );
       expect(documentation, contains('Do **not** set it to `production`'));
+    });
+
+    // The pinned action's `tracks` input is plural, so a value like
+    // "internal,production" must not slip past an exact-string comparison.
+    test('rejects production inside a multi-track value', () {
+      expect(workflow, contains("IFS=',' read -ra requested_tracks"));
+      expect(
+        workflow,
+        contains(r'for requested in "${requested_tracks[@]}"'),
+      );
+      expect(
+        workflow,
+        isNot(contains(r'[ "$GOOGLE_PLAY_TRACK" = "production" ]')),
+      );
+    });
+
+    // `read` stops at the first newline, so a value carrying one could hide an
+    // entry behind it. The whole value is stripped of whitespace before being
+    // split, and the upload action receives that same normalized value.
+    test('strips whitespace before splitting, and ships what it checked', () {
+      expect(workflow, contains("tr -d '[:space:]'"));
+      expect(workflow, contains(r'<<< "$tracks"'));
+      expect(workflow, contains(r'tracks: ${{ steps.config.outputs.tracks }}'));
+      expect(
+        workflow,
+        isNot(contains(r'tracks: ${{ env.GOOGLE_PLAY_TRACK }}')),
+      );
     });
 
     test('requires the release-signed AAB artifact', () {

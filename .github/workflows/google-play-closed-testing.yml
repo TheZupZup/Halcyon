@@ -8,10 +8,15 @@ name: Google Play Closed Testing
 # notice. See docs/google-play-publishing.md for the one-time setup.
 #
 # Safety rules:
-#   * only successful tag-triggered Android Release Build runs are considered;
+#   * only successful Android Release Build runs for a tagged release are
+#     considered, whether the tag was pushed directly or the stable-release
+#     workflow dispatched the build for it;
 #   * only the release-signed AAB artifact is accepted;
-#   * manual release builds are never auto-published;
-#   * the production track is explicitly rejected.
+#   * ad-hoc manual builds are never auto-published;
+#   * the release tag named by the bundle must exist AND point at the commit
+#     the build actually ran on;
+#   * the production track is explicitly rejected, including as one entry of
+#     a multi-track value, whatever whitespace the value carries.
 
 on:
   workflow_run:
@@ -34,7 +39,8 @@ jobs:
     name: Publish signed AAB to Google Play testing
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push'
+      (github.event.workflow_run.event == 'push' ||
+      github.event.workflow_run.event == 'workflow_dispatch')
     runs-on: ubuntu-latest
 
     steps:
@@ -49,15 +55,33 @@ jobs:
             enabled=false
           fi
 
-          if [ -z "$GOOGLE_PLAY_TRACK" ]; then
+          # Strip every whitespace character from the whole value before
+          # looking at it. `read` stops at the first newline, so validating the
+          # raw variable would only ever see line one: a value like
+          # "internal,<newline>production" would pass the check below and still
+          # reach the upload action with production in it. Normalizing first
+          # also means the value shipped to the action is exactly the value
+          # that was validated.
+          tracks="$(printf '%s' "$GOOGLE_PLAY_TRACK" | tr -d '[:space:]')"
+
+          if [ -z "$tracks" ]; then
             echo "::notice::Google Play publishing is not connected yet: GOOGLE_PLAY_TRACK is missing."
             enabled=false
-          elif [ "$GOOGLE_PLAY_TRACK" = "production" ]; then
-            echo "::error::Automatic production publishing is intentionally disabled. Set GOOGLE_PLAY_TRACK to a testing track."
-            exit 1
+          else
+            # The upload action's `tracks` input is plural: a comma-separated
+            # list. Reject production as any entry, not just as the whole
+            # value, so "internal,production" cannot slip past the check.
+            IFS=',' read -ra requested_tracks <<< "$tracks"
+            for requested in "${requested_tracks[@]}"; do
+              if [ "$requested" = "production" ]; then
+                echo "::error::Automatic production publishing is intentionally disabled. Set GOOGLE_PLAY_TRACK to a testing track."
+                exit 1
+              fi
+            done
           fi
 
           echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+          echo "tracks=$tracks" >> "$GITHUB_OUTPUT"
 
           if [ "$enabled" != "true" ]; then
             echo "Google Play upload skipped. Complete docs/google-play-publishing.md to enable it." >> "$GITHUB_STEP_SUMMARY"
@@ -107,6 +131,9 @@ jobs:
         if: >-
           steps.config.outputs.enabled == 'true' &&
           steps.artifact.outputs.available == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
         shell: bash
         run: |
           mapfile -t bundles < <(find play-upload -type f -name '*.aab' -print)
@@ -116,12 +143,83 @@ jobs:
             exit 1
           fi
 
-          echo "path=${bundles[0]}" >> "$GITHUB_OUTPUT"
+          bundle="${bundles[0]}"
+          name="$(basename "$bundle")"
+
+          # Android Release Build names a tag build's asset
+          # `linthra-<tag>-release-signed.aab`, and an ad-hoc manual build's
+          # `linthra-release-signed.aab`. Both arrive here as the same artifact
+          # name, so the file name is what tells a real release apart from a
+          # maintainer's one-off signed build. Publishing only the tag form
+          # covers both release paths (a pushed `v*` tag, and the stable
+          # release workflow dispatching this build with `release_tag`) while
+          # still never auto-publishing a manual build.
+          case "$name" in
+            linthra-v*-release-signed.aab)
+              ;;
+            *)
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::'$name' is an ad-hoc manual build, not a tagged release. Google Play upload skipped."
+              echo "Google Play upload skipped because the source build was not a tagged release." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+              ;;
+          esac
+
+          # The file name only records what the upstream build was TOLD to
+          # target. A manual dispatch can pass a `release_tag` that matches
+          # pubspec.yaml but was never actually tagged: the upstream preflight
+          # still passes and its attach job treats the missing Release as a
+          # no-op success, so a run like that would reach here with a
+          # tag-shaped name. Confirm the tag really exists before anything
+          # reaches Play. The stable release workflow pushes the tag and
+          # creates the Release before dispatching the build, so a genuine
+          # release always passes this.
+          tag="${name#linthra-}"
+          tag="${tag%-release-signed.aab}"
+
+          # Look the name up as a tag ref specifically. The Commits API would
+          # also accept a branch or a raw SHA, so a branch named like a version
+          # would satisfy it with no such tag anywhere in the repository.
+          tag_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" --jq '.object.type + " " + .object.sha' 2>/dev/null)" || tag_ref=""
+
+          if [ -z "$tag_ref" ]; then
+            echo "::error::Bundle claims tag '${tag}', but no such tag exists in this repository. Refusing to publish an untagged build."
+            exit 1
+          fi
+
+          tag_object_type="${tag_ref%% *}"
+          tag_sha="${tag_ref##* }"
+
+          # The stable release workflow creates an annotated tag, whose ref
+          # points at a tag object rather than at the commit. Dereference one
+          # more hop so the comparison below is commit against commit.
+          if [ "$tag_object_type" = "tag" ]; then
+            tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" --jq .object.sha 2>/dev/null)" || tag_sha=""
+            if [ -z "$tag_sha" ]; then
+              echo "::error::Could not resolve annotated tag '${tag}' to a commit."
+              exit 1
+            fi
+          fi
+
+          # Existing is not the same as matching. Android Release Build checks
+          # out its dispatch ref, never the tag, and uses `release_tag` only for
+          # validation and naming. A build dispatched while the branch carried
+          # commits past the tag therefore produces a tag-named bundle whose
+          # code the tag does not name. Publish only when the run really did
+          # build the tagged commit.
+          if [ "$tag_sha" != "$SOURCE_SHA" ]; then
+            echo "::error::Bundle claims tag '${tag}' (${tag_sha}), but the build ran on ${SOURCE_SHA}. Refusing to publish code the tag does not name."
+            exit 1
+          fi
+
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "path=$bundle" >> "$GITHUB_OUTPUT"
 
       - name: Upload to Google Play testing
         if: >-
           steps.config.outputs.enabled == 'true' &&
-          steps.artifact.outputs.available == 'true'
+          steps.artifact.outputs.available == 'true' &&
+          steps.bundle.outputs.publish == 'true'
         # v1.1.5 — pinned so a third-party action update cannot silently change
         # the release pipeline. Update the SHA deliberately with its guardrail test.
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5
@@ -129,20 +227,23 @@ jobs:
           serviceAccountJsonPlainText: ${{ env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: ${{ env.GOOGLE_PLAY_PACKAGE_NAME }}
           releaseFiles: ${{ steps.bundle.outputs.path }}
-          tracks: ${{ env.GOOGLE_PLAY_TRACK }}
+          tracks: ${{ steps.config.outputs.tracks }}
           status: completed
 
       - name: Record publication summary
         if: >-
           steps.config.outputs.enabled == 'true' &&
-          steps.artifact.outputs.available == 'true'
+          steps.artifact.outputs.available == 'true' &&
+          steps.bundle.outputs.publish == 'true'
+        env:
+          PUBLISHED_TRACKS: ${{ steps.config.outputs.tracks }}
         shell: bash
         run: |
           {
             echo "### Google Play testing upload"
             echo ""
             echo "- Package: \`$GOOGLE_PLAY_PACKAGE_NAME\`"
-            echo "- Track: \`$GOOGLE_PLAY_TRACK\`"
+            echo "- Track: \`$PUBLISHED_TRACKS\`"
             echo "- Source run: \`${{ github.event.workflow_run.id }}\`"
             echo "- Source commit: \`${{ github.event.workflow_run.head_sha }}\`"
             echo "- Bundle: \`${{ steps.bundle.outputs.path }}\`"
