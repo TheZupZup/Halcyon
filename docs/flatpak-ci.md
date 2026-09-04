@@ -39,12 +39,19 @@ Install the host tooling first. On Fedora Atomic, the contributor setup in
 [`flatpak-development.md`](./flatpak-development.md) remains the recommended
 path. On a distribution with native `flatpak-builder`, the core CI sequence is:
 
-> `flatpak-builder` needs **elfutils** (`eu-strip`) to split debug symbols out
-> of each module it builds. Most distributions pull it in with
-> `flatpak-builder`; Debian and Ubuntu only *recommend* it, so a minimal install
-> leaves it out and the build fails on the first native module with
-> `Failed to execute child process "eu-strip"`. The CI job names it explicitly
-> for that reason.
+> Two host packages are easy to miss because nothing hard-depends on them, and
+> both fail late and confusingly:
+>
+> * **elfutils** (`eu-strip`), which `flatpak-builder` uses to split debug
+>   symbols out of each module. Debian and Ubuntu only *recommend* it, so a
+>   minimal install leaves it out and the build fails on the first native module
+>   with `Failed to execute child process "eu-strip"`.
+> * **librsvg2-common**, the gdk-pixbuf SVG loader. Without it the
+>   `appstreamcli compose` step at finish time cannot read Linthra's scalable
+>   icon and fails the build with `file-read-error` plus
+>   `filters-but-no-output`. Nothing in `appstream` depends on or recommends it.
+>
+> The CI job names both explicitly for that reason.
 
 ```bash
 python3 scripts/check_linux_runner.py

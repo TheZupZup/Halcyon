@@ -63,15 +63,25 @@ jobs:
       # happens to suggest. The cost is that every tool has to be named here,
       # including ones a dependency would otherwise have pulled in.
       #
-      # elfutils is exactly that case. flatpak-builder only *recommends* it, so
-      # --no-install-recommends leaves the runner without `eu-strip` and
-      # `eu-elfcompress`, and flatpak-builder needs `eu-strip` to split debug
-      # symbols out of every module it builds. Without it the build dies on the
-      # first native module with
+      # Two of these are here because of that, and both failed the same way:
+      # silently absent, then a build error nowhere near the real cause.
+      #
+      # elfutils: flatpak-builder only *recommends* it, so the runner had no
+      # `eu-strip`, which flatpak-builder needs to split debug symbols out of
+      # every module it builds. The build died on the first native module with
       #   Error: module libplacebo: Failed to execute child process "eu-strip"
-      # long before the Linthra module is reached. Installing the package is the
-      # fix rather than passing --disable-debuginfo, which would silently change
-      # what the exported repository contains.
+      # long before the Linthra module was reached. Installing the package is
+      # the fix rather than passing --disable-debuginfo, which would silently
+      # change what the exported repository contains.
+      #
+      # librsvg2-common: nothing in `appstream`/`appstream-compose` depends on
+      # or recommends it, and it is what gives gdk-pixbuf its SVG loader.
+      # Without it, the `appstreamcli compose` that flatpak-builder runs at
+      # finish time cannot read Linthra's scalable icon, drops the component,
+      # and fails the whole build with
+      #   io.github.thezupzup.linthra  E: file-read-error
+      #   general                      E: filters-but-no-output
+      # whose hint report names the icon and "Unrecognized image file format".
       - name: Install host validation and smoke tools
         run: |
           set -euo pipefail
@@ -83,6 +93,7 @@ jobs:
             elfutils \
             flatpak \
             flatpak-builder \
+            librsvg2-common \
             x11-utils \
             xvfb
 

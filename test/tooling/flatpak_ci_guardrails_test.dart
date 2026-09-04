@@ -48,6 +48,9 @@ void main() {
       // symbols out of every module it builds.
       'elfutils',
       'flatpak-builder',
+      // The gdk-pixbuf SVG loader, without which the appstreamcli compose that
+      // flatpak-builder runs at finish time cannot read the scalable app icon.
+      'librsvg2-common',
       // xwininfo and xprop, which the launch smoke reads window identity with.
       'x11-utils',
       // The headless display and session bus the smoke launches into.
