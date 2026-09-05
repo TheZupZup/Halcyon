@@ -76,7 +76,8 @@ Future<void> _pumpShell(
   addTearDown(() => debugDefaultTargetPlatformOverride = null);
 
   final GlobalKey<NavigatorState> rootKey = GlobalKey<NavigatorState>();
-  final List<GlobalKey<NavigatorState>> branchKeys = <GlobalKey<NavigatorState>>[
+  final List<GlobalKey<NavigatorState>> branchKeys =
+      <GlobalKey<NavigatorState>>[
     for (int i = 0; i < 4; i++) GlobalKey<NavigatorState>(),
   ];
 
@@ -113,7 +114,9 @@ void main() {
 
       expect(find.text('Playlists screen'), findsOneWidget);
       expect(
-        tester.widget<NavigationRail>(find.byType(NavigationRail)).selectedIndex,
+        tester
+            .widget<NavigationRail>(find.byType(NavigationRail))
+            .selectedIndex,
         1,
       );
     },
@@ -149,7 +152,9 @@ void main() {
       expect(find.byType(NavigationRail), findsOneWidget);
       expect(find.text('Playlists screen'), findsOneWidget);
       expect(
-        tester.widget<NavigationRail>(find.byType(NavigationRail)).selectedIndex,
+        tester
+            .widget<NavigationRail>(find.byType(NavigationRail))
+            .selectedIndex,
         1,
       );
     },
