@@ -7,6 +7,7 @@ import '../../app/routes.dart';
 import '../../core/catalog/library_grouping.dart';
 import '../../core/models/album.dart';
 import '../../core/models/track.dart';
+import '../../shared/layout/adaptive_layout.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../player/player_providers.dart';
 import '../player/widgets/album_artwork.dart';
@@ -34,6 +35,11 @@ class AlbumDetailScreen extends ConsumerStatefulWidget {
   @override
   ConsumerState<AlbumDetailScreen> createState() => _AlbumDetailScreenState();
 }
+
+/// Width of the album pane in the desktop two-pane layout: enough for a
+/// comfortable cover and both transport buttons, narrow enough to leave the
+/// track list the majority of the window.
+const double _detailPaneWidth = 320;
 
 class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
   final Set<String> _selectedUris = <String>{};
@@ -78,6 +84,9 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
       );
     }
 
+    // Bound after the null check so the layout closures below see a non-null
+    // album; a promoted local can't be captured by one.
+    final Album resolved = album;
     final List<Track> selected = <Track>[
       for (final Track track in tracks)
         if (_selectedUris.contains(track.uri)) track,
@@ -100,33 +109,24 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
                 ),
               ],
             ),
-      body: CustomScrollView(
-        slivers: <Widget>[
-          if (!_selecting)
-            SliverToBoxAdapter(
-              child: _AlbumHeader(
-                album: album,
-                trackCount: tracks.length,
-                onPlay: () => _play(context, tracks),
-                onShuffle: () => _shuffle(context, tracks),
-              ),
-            ),
-          SliverList.builder(
-            itemCount: tracks.length,
-            itemBuilder: (context, index) {
-              final Track track = tracks[index];
-              return TrackTile(
-                tracks: tracks,
-                index: index,
-                selectable: true,
-                selectionActive: _selecting,
-                selected: _selectedUris.contains(track.uri),
-                onSelectStart: () => _enterSelection(track),
-                onSelectToggle: () => _toggle(track),
-              );
-            },
-          ),
-        ],
+      body: AdaptiveLayoutBuilder(
+        builder: (
+          BuildContext context,
+          BoxConstraints constraints,
+          WindowSizeClass sizeClass,
+        ) {
+          // One album is exactly the shape a desktop window has room for: the
+          // cover and its actions stay put in a side pane while the track list
+          // scrolls beside them, instead of the cover scrolling away off the
+          // top of a very tall list. Selection mode drops back to the single
+          // column, where the whole width is the list being selected in.
+          if (!_selecting && sizeClass.isAtLeast(WindowSizeClass.expanded)) {
+            return _twoPaneBody(resolved, tracks);
+          }
+          return AdaptiveContentWidth(
+            child: _singleColumnBody(resolved, tracks),
+          );
+        },
       ),
     );
 
@@ -137,6 +137,80 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
         if (!didPop) _exitSelection();
       },
       child: scaffold,
+    );
+  }
+
+  /// Phones, and any window too narrow for a second pane: the header scrolls
+  /// with the tracks, exactly as it always has.
+  Widget _singleColumnBody(Album album, List<Track> tracks) {
+    return CustomScrollView(
+      slivers: <Widget>[
+        if (!_selecting)
+          SliverToBoxAdapter(
+            child: _AlbumHeader(
+              album: album,
+              trackCount: tracks.length,
+              onPlay: () => _play(context, tracks),
+              onShuffle: () => _shuffle(context, tracks),
+            ),
+          ),
+        SliverList.builder(
+          itemCount: tracks.length,
+          itemBuilder: (BuildContext context, int index) =>
+              _trackTile(tracks, index),
+        ),
+      ],
+    );
+  }
+
+  /// Desktop-width composition: a persistent album pane beside the scrolling
+  /// track list. Both read the same `tracks` list and the same selection set,
+  /// so nothing here duplicates state — it is the single-column body, laid out.
+  Widget _twoPaneBody(Album album, List<Track> tracks) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: maxPaneLayoutWidth),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            SizedBox(
+              width: _detailPaneWidth,
+              child: SingleChildScrollView(
+                child: _AlbumHeader(
+                  album: album,
+                  trackCount: tracks.length,
+                  stacked: true,
+                  onPlay: () => _play(context, tracks),
+                  onShuffle: () => _shuffle(context, tracks),
+                ),
+              ),
+            ),
+            const VerticalDivider(width: 1),
+            Expanded(
+              child: ListView.builder(
+                key: const Key('album_detail_tracks'),
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+                itemCount: tracks.length,
+                itemBuilder: (BuildContext context, int index) =>
+                    _trackTile(tracks, index),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _trackTile(List<Track> tracks, int index) {
+    final Track track = tracks[index];
+    return TrackTile(
+      tracks: tracks,
+      index: index,
+      selectable: true,
+      selectionActive: _selecting,
+      selected: _selectedUris.contains(track.uri),
+      onSelectStart: () => _enterSelection(track),
+      onSelectToggle: () => _toggle(track),
     );
   }
 
@@ -203,6 +277,7 @@ class _AlbumHeader extends StatelessWidget {
     required this.trackCount,
     required this.onPlay,
     required this.onShuffle,
+    this.stacked = false,
   });
 
   final Album album;
@@ -210,60 +285,38 @@ class _AlbumHeader extends StatelessWidget {
   final VoidCallback onPlay;
   final VoidCallback onShuffle;
 
+  /// Cover above the text rather than beside it. Used by the desktop pane,
+  /// which is tall and narrow — the reverse of the phone header's proportions
+  /// — so the cover gets the pane's full width instead of a 120 px thumbnail.
+  final bool stacked;
+
   @override
   Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final Color onSurface = theme.colorScheme.onSurface;
     final String count = trackCount == 1 ? '1 song' : '$trackCount songs';
     return Padding(
       padding: const EdgeInsets.all(AppSpacing.md),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              SizedBox.square(
-                dimension: 120,
-                child: AlbumArtwork(artworkUri: album.artworkUri),
-              ),
-              const SizedBox(width: AppSpacing.md),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      album.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    if (album.artistName != null &&
-                        album.artistName!.isNotEmpty) ...<Widget>[
-                      const SizedBox(height: AppSpacing.xs),
-                      Text(
-                        album.artistName!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodyLarge?.copyWith(
-                          color: onSurface.withValues(alpha: 0.7),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: AppSpacing.xs),
-                    Text(
-                      count,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: onSurface.withValues(alpha: 0.6),
-                      ),
-                    ),
-                  ],
+          if (stacked) ...<Widget>[
+            AspectRatio(
+              aspectRatio: 1,
+              child: AlbumArtwork(artworkUri: album.artworkUri),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            _AlbumTitleBlock(album: album, count: count),
+          ] else
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                SizedBox.square(
+                  dimension: 120,
+                  child: AlbumArtwork(artworkUri: album.artworkUri),
                 ),
-              ),
-            ],
-          ),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(child: _AlbumTitleBlock(album: album, count: count)),
+              ],
+            ),
           const SizedBox(height: AppSpacing.md),
           Row(
             children: <Widget>[
@@ -286,6 +339,53 @@ class _AlbumHeader extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Title, artist and song count. Identical in both header layouts, so the only
+/// thing [_AlbumHeader.stacked] changes is where the cover sits.
+class _AlbumTitleBlock extends StatelessWidget {
+  const _AlbumTitleBlock({required this.album, required this.count});
+
+  final Album album;
+  final String count;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final Color onSurface = theme.colorScheme.onSurface;
+    final String? artist = album.artistName;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          album.title,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.titleLarge?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        if (artist != null && artist.isNotEmpty) ...<Widget>[
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            artist,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodyLarge?.copyWith(
+              color: onSurface.withValues(alpha: 0.7),
+            ),
+          ),
+        ],
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          count,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: onSurface.withValues(alpha: 0.6),
+          ),
+        ),
+      ],
     );
   }
 }

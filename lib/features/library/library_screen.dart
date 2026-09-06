@@ -12,6 +12,7 @@ import '../../core/models/artist.dart';
 import '../../core/models/track.dart';
 import '../../core/services/bulk_track_actions.dart';
 import '../../core/sources/local/folder_location.dart';
+import '../../shared/layout/adaptive_layout.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../playlists/widgets/add_to_playlist_sheet.dart';
 import 'folder_browser_providers.dart';
@@ -25,7 +26,7 @@ import 'song_actions.dart';
 import 'unified_library_providers.dart';
 import 'widgets/album_grid.dart';
 import 'widgets/alphabet_track_list.dart';
-import 'widgets/artist_tile.dart';
+import 'widgets/artist_grid.dart';
 import 'widgets/folder_browser_tab.dart';
 import 'widgets/library_search_field.dart';
 
@@ -49,6 +50,9 @@ class LibraryScreen extends ConsumerStatefulWidget {
 
 class _LibraryScreenState extends ConsumerState<LibraryScreen>
     with SingleTickerProviderStateMixin {
+  /// Widest the search box gets on a desktop window.
+  static const double _searchFieldMaxWidth = 520;
+
   final Set<String> _selectedUris = <String>{};
   bool _selecting = false;
 
@@ -231,10 +235,19 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     return Column(
       children: <Widget>[
         if (!foldersTab)
-          LibrarySearchField(
-            controller: _searchController,
-            onChanged: _onQueryChanged,
-            onClear: _clearSearch,
+          // The box is a text input, not content: on a wide window it stops
+          // growing and stays left-aligned under the tabs rather than running
+          // the width of a monitor.
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: _searchFieldMaxWidth),
+              child: LibrarySearchField(
+                controller: _searchController,
+                onChanged: _onQueryChanged,
+                onClear: _clearSearch,
+              ),
+            ),
           ),
         Expanded(
           child: TabBarView(
@@ -298,29 +311,28 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         message: 'You can still browse the connected server from Folders.',
       );
     }
-    return ListView.builder(
-      key: const Key('library_artist_list'),
-      itemCount: filtered.length,
-      itemBuilder: (context, index) {
-        final Artist artist = filtered[index];
-        return ArtistTile(
-          artist: artist,
-          onTap: () => context.push(AppRoutes.artistDetailPath(artist.id)),
-        );
-      },
+    return ArtistGrid(
+      artists: filtered,
+      onOpen: (Artist artist) =>
+          context.push(AppRoutes.artistDetailPath(artist.id)),
     );
   }
 
   List<Track> _filteredSongs(List<Track> songs) => filterTracks(songs, _query);
 
   Widget _songsList(List<Track> tracks) {
-    return AlphabetTrackList(
-      tracks: tracks,
-      selectable: true,
-      selectionActive: _selecting,
-      selectedUris: _selectedUris,
-      onSelectStart: _enterSelection,
-      onSelectToggle: _toggle,
+    // Song rows are a single column of text: past [maxContentWidth] the title
+    // and the trailing menu end up a screen apart, so the column stops growing
+    // and centres instead of stretching across a desktop monitor.
+    return AdaptiveContentWidth(
+      child: AlphabetTrackList(
+        tracks: tracks,
+        selectable: true,
+        selectionActive: _selecting,
+        selectedUris: _selectedUris,
+        onSelectStart: _enterSelection,
+        onSelectToggle: _toggle,
+      ),
     );
   }
 

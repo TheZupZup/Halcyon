@@ -9,6 +9,7 @@ import '../../core/repositories/download_repository.dart';
 import '../../core/repositories/download_store.dart';
 import '../../core/services/offline_cache_manager.dart';
 import '../../data/repositories/download_repository_provider.dart';
+import '../../shared/layout/adaptive_layout.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../player/now_playing.dart';
 import '../player/widgets/track_artwork.dart';
@@ -28,13 +29,17 @@ class DownloadsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       appBar: AppBar(title: const Text('Downloads')),
-      body: const Column(
-        children: [
-          _CacheUsageHeader(),
-          MobileDataDownloadsTile(),
-          Divider(height: 1),
-          Expanded(child: _DownloadsBody()),
-        ],
+      // One download per row: capped and centred on a wide window rather than
+      // stretched edge to edge.
+      body: const AdaptiveContentWidth(
+        child: Column(
+          children: [
+            _CacheUsageHeader(),
+            MobileDataDownloadsTile(),
+            Divider(height: 1),
+            Expanded(child: _DownloadsBody()),
+          ],
+        ),
       ),
     );
   }

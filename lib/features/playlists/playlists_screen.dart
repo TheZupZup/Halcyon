@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../app/routes.dart';
 import '../../core/models/playlist.dart';
 import '../../data/repositories/playlist_repository_provider.dart';
+import '../../shared/layout/adaptive_layout.dart';
 import '../../shared/widgets/confirm_dialog.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../library/remote_library_refresher.dart';
@@ -52,45 +53,49 @@ class _PlaylistsScreenState extends ConsumerState<PlaylistsScreen> {
         icon: const Icon(Icons.add),
         label: const Text('New playlist'),
       ),
-      body: Column(
-        children: <Widget>[
-          ListTile(
-            leading: CircleAvatar(
-              backgroundColor: accent.withValues(alpha: 0.12),
-              child: Icon(Icons.favorite, color: accent),
+      // Rows of one playlist each: capped and centred on a wide window rather
+      // than stretched edge to edge.
+      body: AdaptiveContentWidth(
+        child: Column(
+          children: <Widget>[
+            ListTile(
+              leading: CircleAvatar(
+                backgroundColor: accent.withValues(alpha: 0.12),
+                child: Icon(Icons.favorite, color: accent),
+              ),
+              title: const Text('Favorites'),
+              subtitle: const Text('Tracks you’ve liked'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push(AppRoutes.favorites),
             ),
-            title: const Text('Favorites'),
-            subtitle: const Text('Tracks you’ve liked'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.push(AppRoutes.favorites),
-          ),
-          const Divider(height: 0),
-          ListTile(
-            leading: CircleAvatar(
-              backgroundColor: accent.withValues(alpha: 0.12),
-              child: Icon(Icons.auto_awesome, color: accent),
+            const Divider(height: 0),
+            ListTile(
+              leading: CircleAvatar(
+                backgroundColor: accent.withValues(alpha: 0.12),
+                child: Icon(Icons.auto_awesome, color: accent),
+              ),
+              title: const Text('Smart mixes'),
+              subtitle: const Text('Made by Linthra'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push(AppRoutes.smartMixes),
             ),
-            title: const Text('Smart mixes'),
-            subtitle: const Text('Made by Linthra'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.push(AppRoutes.smartMixes),
-          ),
-          const Divider(height: 0),
-          Expanded(
-            child: playlists.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (_, __) => const _PlaylistsError(),
-              data: (List<Playlist> items) => items.isEmpty
-                  ? _PlaylistsEmpty(serverConnected: serverConnected)
-                  : ListView.builder(
-                      padding: const EdgeInsets.only(bottom: 88),
-                      itemCount: items.length,
-                      itemBuilder: (context, index) =>
-                          _PlaylistTile(playlist: items[index]),
-                    ),
+            const Divider(height: 0),
+            Expanded(
+              child: playlists.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (_, __) => const _PlaylistsError(),
+                data: (List<Playlist> items) => items.isEmpty
+                    ? _PlaylistsEmpty(serverConnected: serverConnected)
+                    : ListView.builder(
+                        padding: const EdgeInsets.only(bottom: 88),
+                        itemCount: items.length,
+                        itemBuilder: (context, index) =>
+                            _PlaylistTile(playlist: items[index]),
+                      ),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

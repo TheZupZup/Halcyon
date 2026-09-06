@@ -282,6 +282,50 @@ The seams that branch on it:
 Adding a platform-specific behaviour means adding a row here, not a check in a
 widget.
 
+## How the desktop layout adapts
+
+Presentation is the one thing that does *not* branch on `HostPlatform`. Layout
+adapts on the **width a widget is actually given**, so the same window is laid
+out the same way wherever it runs, and a Linux window narrowed to 600 px gets
+the phone layout rather than a cramped desktop one.
+
+`lib/shared/layout/adaptive_layout.dart` holds the whole vocabulary:
+
+| Piece | What it does |
+| --- | --- |
+| `WindowSizeClass` | `compact` (< 600), `medium` (< 1000), `expanded` (< 1600), `large` — Material's window size classes, with the phone thresholds left where Android already behaves |
+| `windowSizeClassFor(width)` | the pure breakpoint function, so the thresholds are unit-testable |
+| `AdaptiveLayoutBuilder` | resolves the class from the widget's own `BoxConstraints` — inside the desktop shell a screen is narrower than the window by the navigation rail, and a pane is narrower still |
+| `AdaptiveContentWidth` | caps and centres a single column (`maxContentWidth`, or `maxFormWidth` for settings), a no-op below the cap |
+
+What it buys, per surface:
+
+* **Album grid** — cards stay between 200 and 260 logical px and the grid adds
+  columns instead of inflating covers: 5 across at 1280, 7 at 1920, 10 at 2560,
+  where before every desktop width got the same six mobile-sized cards.
+* **Artists** — the same rows flow into 2–5 columns rather than one row per
+  monitor width.
+* **Songs, playlists, downloads, settings** — one column, capped and centred,
+  so a title and its trailing action never end up a screen apart.
+* **Album and artist detail** — at `expanded` and up, a persistent left pane
+  (cover/portrait, counts, Play and Shuffle) beside the scrolling track list.
+  Selection mode falls back to the single column.
+* **Now Playing** — at `expanded` and up, the cover sits beside the metadata
+  and transport, and lyrics open *next to* the cover instead of replacing it.
+  Same `_showLyrics` state and same playback state as the stacked layout.
+
+Both breakpoints in the app agree by construction: the shell swaps its bottom
+bar for the navigation rail at 900 px of window, and a feature screen inside it
+only reaches `expanded` once the space left over is 1000 px wide.
+
+Tests: `test/shared/layout/adaptive_layout_test.dart`,
+`test/features/library/album_grid_test.dart`,
+`test/features/library/artist_grid_test.dart`,
+`test/features/library/detail_desktop_layout_test.dart`,
+`test/features/player/player_desktop_layout_test.dart` — each covers the phone
+width alongside 1280, 1920, 2560 and ultrawide, so a change that only looks
+right on one monitor fails.
+
 ## Guardrails
 
 * `scripts/check_linux_runner.py` — the committed runner still matches the app's

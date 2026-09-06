@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/dimens.dart';
 import '../../core/models/playback_state.dart';
 import '../../core/models/track.dart';
+import '../../shared/layout/adaptive_layout.dart';
 import '../../shared/widgets/empty_state.dart';
 import 'cast/cast_button.dart';
 import 'cast/cast_providers.dart';
@@ -139,52 +140,124 @@ class _NowPlayingState extends State<_NowPlaying> {
 
   @override
   Widget build(BuildContext context) {
-    final Track track = widget.track;
-    // A tighter side margin lets the artwork breathe wider and gives the
-    // transport controls more room to spread, while the generous gaps below
-    // group the screen into three calm bands: stage · metadata · controls.
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        AppSpacing.md,
-        AppSpacing.sm,
-        AppSpacing.md,
-        AppSpacing.lg,
-      ),
-      child: Column(
-        children: [
-          Expanded(child: _Stage(track: track, showLyrics: _showLyrics)),
-          // Lyrics need the height more than the gap does; the artwork keeps
-          // its generous breathing room.
-          SizedBox(height: _showLyrics ? AppSpacing.md : AppSpacing.xl),
-          // In lyrics mode the three-line metadata block collapses to a single
-          // quiet line, handing the difference to the lyrics above without
-          // losing track of what is playing.
-          if (_showLyrics)
-            _CompactTrackLine(
-              title: track.title,
-              artistName: track.artistName,
-            )
-          else
-            TrackMetadata(
-              title: track.title,
-              artistName: track.artistName,
-              albumName: track.albumName,
-            ),
-          SizedBox(height: _showLyrics ? AppSpacing.md : AppSpacing.lg),
-          // The only part of the screen that follows the live, high-frequency
-          // playback state — kept separate so the stage, metadata, and the
-          // blurred background above never rebuild on a position tick. It stays
-          // exactly where it is in both modes, so play/pause, skip, and seek are
-          // never further away for reading lyrics.
-          const _LiveControls(),
-          const SizedBox(height: AppSpacing.md),
-          NowPlayingActions(
-            track: track,
-            lyricsVisible: _showLyrics,
-            onToggleLyrics: () => setState(() => _showLyrics = !_showLyrics),
+    return AdaptiveLayoutBuilder(
+      builder: (
+        BuildContext context,
+        BoxConstraints constraints,
+        WindowSizeClass sizeClass,
+      ) {
+        // Width alone decides, so the same window is laid out the same way on
+        // any platform — and the side-by-side layout is the *more* forgiving of
+        // the two vertically, since the cover shrinks beside the controls
+        // instead of stacking on top of them.
+        final bool wide = sizeClass.isAtLeast(WindowSizeClass.expanded);
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.md,
+            AppSpacing.sm,
+            AppSpacing.md,
+            AppSpacing.lg,
           ),
-        ],
+          child: wide ? _wideLayout() : _stackedLayout(),
+        );
+      },
+    );
+  }
+
+  /// Desktop-width Now Playing: the cover holds one side while metadata,
+  /// transport and actions sit on the other — and lyrics open *beside* the
+  /// cover instead of replacing it, which is the whole point of the extra
+  /// width. Same widgets, same `_showLyrics`, same playback state as the
+  /// stacked layout; only the arrangement differs.
+  Widget _wideLayout() {
+    final Track track = widget.track;
+    return Center(
+      child: ConstrainedBox(
+        // Ultrawide windows stop stretching the two columns apart here.
+        constraints: const BoxConstraints(maxWidth: maxPaneLayoutWidth),
+        child: Row(
+          children: <Widget>[
+            Expanded(
+              flex: 5,
+              child: Center(child: _ArtworkHero(artworkUri: track.artworkUri)),
+            ),
+            const SizedBox(width: AppSpacing.xl),
+            Expanded(
+              flex: 4,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: <Widget>[
+                  if (_showLyrics) ...<Widget>[
+                    const Expanded(
+                      child: LyricsBackdrop(child: LyricsView()),
+                    ),
+                    const SizedBox(height: AppSpacing.lg),
+                  ],
+                  TrackMetadata(
+                    title: track.title,
+                    artistName: track.artistName,
+                    albumName: track.albumName,
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  const _LiveControls(),
+                  const SizedBox(height: AppSpacing.md),
+                  NowPlayingActions(
+                    track: track,
+                    lyricsVisible: _showLyrics,
+                    onToggleLyrics: _toggleLyrics,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
+    );
+  }
+
+  void _toggleLyrics() => setState(() => _showLyrics = !_showLyrics);
+
+  /// Phones, and any window without the width (or height) for two columns.
+  ///
+  /// A tighter side margin lets the artwork breathe wider and gives the
+  /// transport controls more room to spread, while the generous gaps below
+  /// group the screen into three calm bands: stage · metadata · controls.
+  Widget _stackedLayout() {
+    final Track track = widget.track;
+    return Column(
+      children: [
+        Expanded(child: _Stage(track: track, showLyrics: _showLyrics)),
+        // Lyrics need the height more than the gap does; the artwork keeps
+        // its generous breathing room.
+        SizedBox(height: _showLyrics ? AppSpacing.md : AppSpacing.xl),
+        // In lyrics mode the three-line metadata block collapses to a single
+        // quiet line, handing the difference to the lyrics above without
+        // losing track of what is playing.
+        if (_showLyrics)
+          _CompactTrackLine(
+            title: track.title,
+            artistName: track.artistName,
+          )
+        else
+          TrackMetadata(
+            title: track.title,
+            artistName: track.artistName,
+            albumName: track.albumName,
+          ),
+        SizedBox(height: _showLyrics ? AppSpacing.md : AppSpacing.lg),
+        // The only part of the screen that follows the live, high-frequency
+        // playback state — kept separate so the stage, metadata, and the
+        // blurred background above never rebuild on a position tick. It stays
+        // exactly where it is in both modes, so play/pause, skip, and seek are
+        // never further away for reading lyrics.
+        const _LiveControls(),
+        const SizedBox(height: AppSpacing.md),
+        NowPlayingActions(
+          track: track,
+          lyricsVisible: _showLyrics,
+          onToggleLyrics: _toggleLyrics,
+        ),
+      ],
     );
   }
 }
