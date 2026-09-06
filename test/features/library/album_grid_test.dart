@@ -134,8 +134,36 @@ void main() {
       expect(albumGridColumnCount(800), 4);
     });
 
-    test('columns are capped so covers never shrink to thumbnails', () {
-      expect(albumGridColumnCount(4000), 6);
+    test('desktop widths add columns instead of inflating covers', () {
+      // Content widths for the common Linux windows, minus the navigation rail
+      // and the grid's own padding. Each keeps cards in the 200–260 band rather
+      // than stretching six mobile-sized cards across the monitor.
+      expect(albumGridColumnCount(1168), 5); // 1280x720
+      expect(albumGridColumnCount(1808), 7); // 1920x1080
+      expect(albumGridColumnCount(2448), 10); // 2560x1440
+      expect(albumGridColumnCount(3120), 12); // ultrawide
+    });
+
+    test('a card is never squeezed below its minimum to add a column', () {
+      for (final double width in <double>[
+        328,
+        560,
+        900,
+        1168,
+        1808,
+        2448,
+        3120,
+      ]) {
+        expect(
+          width / albumGridColumnCount(width),
+          greaterThanOrEqualTo(160),
+          reason: 'cards stay readable at $width',
+        );
+      }
+    });
+
+    test('columns stop climbing at an absurd width', () {
+      expect(albumGridColumnCount(40000), 12);
     });
 
     test('a degenerate width still renders two columns', () {
@@ -193,6 +221,47 @@ void main() {
       );
 
       expect(_firstRow(tester).length, greaterThan(2));
+    });
+
+    testWidgets('a desktop window keeps covers card-sized, not inflated',
+        (tester) async {
+      await _pumpAlbums(
+        tester,
+        tracks: _manyAlbums(),
+        size: const Size(1920, 1080),
+      );
+
+      final List<Rect> row = _firstRow(tester);
+      // Six albums across a 1920 window: all on one row, none of them the
+      // ~400 px slab a capped mobile grid produced here.
+      expect(row.length, 6);
+      for (final Rect card in row) {
+        expect(card.width, lessThan(300));
+        expect(card.width, greaterThan(180));
+      }
+      expect(row.last.right, lessThanOrEqualTo(1920));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('resizing from phone to desktop reflows without overflow',
+        (tester) async {
+      await _pumpAlbums(tester, tracks: _manyAlbums());
+      expect(_firstRow(tester).length, 2);
+
+      for (final Size size in <Size>[
+        const Size(800, 720),
+        const Size(1280, 720),
+        const Size(2560, 1440),
+        const Size(3440, 1440),
+        const Size(390, 844),
+      ]) {
+        tester.view.physicalSize = size;
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull, reason: 'at $size');
+        final List<Rect> row = _firstRow(tester);
+        expect(row.last.right, lessThanOrEqualTo(size.width),
+            reason: 'at $size');
+      }
     });
 
     testWidgets('tapping a card opens that album', (tester) async {

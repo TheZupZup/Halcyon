@@ -8,6 +8,7 @@ import '../../core/catalog/library_grouping.dart';
 import '../../core/models/album.dart';
 import '../../core/models/artist.dart';
 import '../../core/models/track.dart';
+import '../../shared/layout/adaptive_layout.dart';
 import '../../shared/widgets/artwork_image.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../player/player_providers.dart';
@@ -36,6 +37,10 @@ class ArtistDetailScreen extends ConsumerStatefulWidget {
   @override
   ConsumerState<ArtistDetailScreen> createState() => _ArtistDetailScreenState();
 }
+
+/// Width of the artist pane in the desktop two-pane layout. Matches the album
+/// screen's pane, so moving between the two doesn't shift the list.
+const double _detailPaneWidth = 320;
 
 class _ArtistDetailScreenState extends ConsumerState<ArtistDetailScreen> {
   final Set<String> _selectedUris = <String>{};
@@ -77,6 +82,9 @@ class _ArtistDetailScreenState extends ConsumerState<ArtistDetailScreen> {
       );
     }
 
+    // Bound after the null check: the layout closures below can't capture a
+    // promoted local.
+    final Artist resolved = artist;
     final List<Album> albums = albumsForArtist(songs, widget.artistId);
     final List<Track> selected = <Track>[
       for (final Track track in tracks)
@@ -100,49 +108,46 @@ class _ArtistDetailScreenState extends ConsumerState<ArtistDetailScreen> {
                 ),
               ],
             ),
-      body: CustomScrollView(
-        slivers: <Widget>[
-          if (!_selecting) ...<Widget>[
-            SliverToBoxAdapter(
-              child: _ArtistHeader(
-                artist: artist,
-                albumCount: albums.length,
-                trackCount: tracks.length,
-                onPlay: () => _play(context, tracks),
-                onShuffle: () => _shuffle(context, tracks),
+      body: AdaptiveLayoutBuilder(
+        builder: (
+          BuildContext context,
+          BoxConstraints constraints,
+          WindowSizeClass sizeClass,
+        ) {
+          // Wide enough for two panes: the artist stays visible in a side pane
+          // while their albums and songs scroll beside it. Selection mode uses
+          // the single column, where the width belongs to the list.
+          if (!_selecting && sizeClass.isAtLeast(WindowSizeClass.expanded)) {
+            return Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: maxPaneLayoutWidth),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    SizedBox(
+                      width: _detailPaneWidth,
+                      child: SingleChildScrollView(
+                        child: _ArtistHeader(
+                          artist: resolved,
+                          albumCount: albums.length,
+                          trackCount: tracks.length,
+                          stacked: true,
+                          onPlay: () => _play(context, tracks),
+                          onShuffle: () => _shuffle(context, tracks),
+                        ),
+                      ),
+                    ),
+                    const VerticalDivider(width: 1),
+                    Expanded(child: _catalogList(albums, tracks)),
+                  ],
+                ),
               ),
-            ),
-            if (albums.length > 1) ...<Widget>[
-              const SliverToBoxAdapter(child: _SectionHeader(label: 'Albums')),
-              SliverList.builder(
-                itemCount: albums.length,
-                itemBuilder: (context, index) {
-                  final Album album = albums[index];
-                  return AlbumTile(
-                    album: album,
-                    onTap: () => _openAlbum(context, album.id),
-                  );
-                },
-              ),
-            ],
-            const SliverToBoxAdapter(child: _SectionHeader(label: 'Songs')),
-          ],
-          SliverList.builder(
-            itemCount: tracks.length,
-            itemBuilder: (context, index) {
-              final Track track = tracks[index];
-              return TrackTile(
-                tracks: tracks,
-                index: index,
-                selectable: true,
-                selectionActive: _selecting,
-                selected: _selectedUris.contains(track.uri),
-                onSelectStart: () => _enterSelection(track),
-                onSelectToggle: () => _toggle(track),
-              );
-            },
-          ),
-        ],
+            );
+          }
+          return AdaptiveContentWidth(
+            child: _singleColumnBody(resolved, albums, tracks),
+          );
+        },
       ),
     );
 
@@ -154,6 +159,74 @@ class _ArtistDetailScreenState extends ConsumerState<ArtistDetailScreen> {
       },
       child: scaffold,
     );
+  }
+
+  /// Phones and narrow windows: header, albums and songs in one column.
+  Widget _singleColumnBody(
+    Artist artist,
+    List<Album> albums,
+    List<Track> tracks,
+  ) {
+    return CustomScrollView(
+      slivers: <Widget>[
+        if (!_selecting)
+          SliverToBoxAdapter(
+            child: _ArtistHeader(
+              artist: artist,
+              albumCount: albums.length,
+              trackCount: tracks.length,
+              onPlay: () => _play(context, tracks),
+              onShuffle: () => _shuffle(context, tracks),
+            ),
+          ),
+        ..._catalogSlivers(albums, tracks),
+      ],
+    );
+  }
+
+  /// The albums + songs half of the screen, without the header: what the
+  /// desktop layout puts beside the artist pane.
+  Widget _catalogList(List<Album> albums, List<Track> tracks) {
+    return CustomScrollView(
+      key: const Key('artist_detail_catalog'),
+      slivers: _catalogSlivers(albums, tracks),
+    );
+  }
+
+  List<Widget> _catalogSlivers(List<Album> albums, List<Track> tracks) {
+    return <Widget>[
+      if (!_selecting) ...<Widget>[
+        if (albums.length > 1) ...<Widget>[
+          const SliverToBoxAdapter(child: _SectionHeader(label: 'Albums')),
+          SliverList.builder(
+            itemCount: albums.length,
+            itemBuilder: (BuildContext context, int index) {
+              final Album album = albums[index];
+              return AlbumTile(
+                album: album,
+                onTap: () => _openAlbum(context, album.id),
+              );
+            },
+          ),
+        ],
+        const SliverToBoxAdapter(child: _SectionHeader(label: 'Songs')),
+      ],
+      SliverList.builder(
+        itemCount: tracks.length,
+        itemBuilder: (BuildContext context, int index) {
+          final Track track = tracks[index];
+          return TrackTile(
+            tracks: tracks,
+            index: index,
+            selectable: true,
+            selectionActive: _selecting,
+            selected: _selectedUris.contains(track.uri),
+            onSelectStart: () => _enterSelection(track),
+            onSelectToggle: () => _toggle(track),
+          );
+        },
+      ),
+    ];
   }
 
   PreferredSizeWidget _selectionAppBar(List<Track> selected) {
@@ -224,6 +297,7 @@ class _ArtistHeader extends StatelessWidget {
     required this.trackCount,
     required this.onPlay,
     required this.onShuffle,
+    this.stacked = false,
   });
 
   final Artist artist;
@@ -232,10 +306,16 @@ class _ArtistHeader extends StatelessWidget {
   final VoidCallback onPlay;
   final VoidCallback onShuffle;
 
+  /// Portrait above the name rather than beside it, for the tall, narrow
+  /// desktop pane.
+  final bool stacked;
+
+  /// A bigger portrait for the desktop pane, where it has the pane's width to
+  /// itself rather than sharing a row with the name.
+  static const double _stackedPortraitRadius = 72;
+
   @override
   Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final Color onSurface = theme.colorScheme.onSurface;
     final String songs = trackCount == 1 ? '1 song' : '$trackCount songs';
     final String summary = albumCount > 0
         ? '${albumCount == 1 ? '1 album' : '$albumCount albums'} • $songs'
@@ -245,47 +325,27 @@ class _ArtistHeader extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              CircleAvatar(
-                radius: 36,
-                backgroundColor: theme.colorScheme.surfaceContainerHighest,
-                backgroundImage: artist.artworkUri == null
-                    ? null
-                    : artworkImageProvider(artist.artworkUri!),
-                child: artist.artworkUri == null
-                    ? Icon(
-                        Icons.person,
-                        size: 36,
-                        color: onSurface.withValues(alpha: 0.35),
-                      )
-                    : null,
-              ),
-              const SizedBox(width: AppSpacing.md),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      artist.name,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: AppSpacing.xs),
-                    Text(
-                      summary,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: onSurface.withValues(alpha: 0.6),
-                      ),
-                    ),
-                  ],
+          if (stacked) ...<Widget>[
+            _ArtistPortrait(artist: artist, radius: _stackedPortraitRadius),
+            const SizedBox(height: AppSpacing.md),
+            _ArtistTitleBlock(
+              name: artist.name,
+              summary: summary,
+              center: true,
+            ),
+          ] else
+            Row(
+              children: <Widget>[
+                _ArtistPortrait(artist: artist, radius: 36),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: _ArtistTitleBlock(
+                    name: artist.name,
+                    summary: summary,
+                  ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
           const SizedBox(height: AppSpacing.md),
           Row(
             children: <Widget>[
@@ -308,6 +368,79 @@ class _ArtistHeader extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The artist's circular portrait, or a tinted glyph when there is no artwork.
+class _ArtistPortrait extends StatelessWidget {
+  const _ArtistPortrait({required this.artist, required this.radius});
+
+  final Artist artist;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final Uri? uri = artist.artworkUri;
+    // Centred rather than left-aligned: in the stacked pane the column
+    // stretches its children, and a stretched avatar is not a circle.
+    return Center(
+      child: CircleAvatar(
+        radius: radius,
+        backgroundColor: theme.colorScheme.surfaceContainerHighest,
+        backgroundImage: uri == null ? null : artworkImageProvider(uri),
+        child: uri == null
+            ? Icon(
+                Icons.person,
+                size: radius,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
+              )
+            : null,
+      ),
+    );
+  }
+}
+
+/// Name and the "3 albums • 41 songs" summary, shared by both header layouts.
+class _ArtistTitleBlock extends StatelessWidget {
+  const _ArtistTitleBlock({
+    required this.name,
+    required this.summary,
+    this.center = false,
+  });
+
+  final String name;
+  final String summary;
+  final bool center;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final Color onSurface = theme.colorScheme.onSurface;
+    final TextAlign align = center ? TextAlign.center : TextAlign.start;
+    return Column(
+      crossAxisAlignment:
+          center ? CrossAxisAlignment.center : CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          name,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          textAlign: align,
+          style: theme.textTheme.titleLarge?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          summary,
+          textAlign: align,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: onSurface.withValues(alpha: 0.6),
+          ),
+        ),
+      ],
     );
   }
 }

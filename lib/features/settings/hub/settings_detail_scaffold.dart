@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../app/dimens.dart';
+import '../../../shared/layout/adaptive_layout.dart';
 
 /// The shared frame for a Settings category page (the screen a hub row opens).
 ///
@@ -25,9 +26,14 @@ class SettingsDetailScaffold extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(title)),
-      body: ListView(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        children: children,
+      // Same cap as the hub, so a category page doesn't jump to a different
+      // column width when it opens on a desktop window.
+      body: AdaptiveContentWidth(
+        maxWidth: maxFormWidth,
+        child: ListView(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          children: children,
+        ),
       ),
     );
   }
