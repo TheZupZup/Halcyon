@@ -153,8 +153,7 @@ void main() {
         3700,
       ]) {
         final int columns = albumGridColumnCount(width);
-        final double cardWidth =
-            (width - gutter * (columns - 1)) / columns;
+        final double cardWidth = (width - gutter * (columns - 1)) / columns;
         expect(
           cardWidth,
           greaterThanOrEqualTo(200),
