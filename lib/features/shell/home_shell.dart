@@ -107,39 +107,64 @@ class HomeShell extends StatelessWidget {
   }
 
   Widget _buildDesktopShell() {
+    // Keyboard order is set explicitly here rather than left to the default
+    // reading-order traversal. Side by side, that policy sorts the rail and the
+    // page together by geometry and splits the rail around the content: the
+    // first destination lands before the page and the rest after it, so Tab
+    // reaches Library last. Two groups in a numbered ring keep the rail whole
+    // and keep the frame reading the way the bottom bar already does — the
+    // active tab first, then playback, then the persistent destinations — so
+    // crossing the breakpoint changes where the destinations are, not the order
+    // a keyboard walks them in. Pinned by home_shell_focus_order_test.dart on
+    // both sides of the breakpoint.
     return Scaffold(
-      body: Row(
-        children: [
-          SafeArea(
-            right: false,
-            child: NavigationRail(
-              selectedIndex: navigationShell.currentIndex,
-              onDestinationSelected: _onDestinationSelected,
-              labelType: NavigationRailLabelType.all,
-              groupAlignment: -1,
-              destinations: [
-                for (final NavigationDestination destination in _destinations)
-                  NavigationRailDestination(
-                    icon: destination.icon,
-                    selectedIcon: destination.selectedIcon,
-                    label: Text(destination.label),
+      body: FocusTraversalGroup(
+        policy: OrderedTraversalPolicy(),
+        child: Row(
+          children: [
+            FocusTraversalOrder(
+              order: const NumericFocusOrder(2),
+              child: FocusTraversalGroup(
+                child: SafeArea(
+                  right: false,
+                  child: NavigationRail(
+                    selectedIndex: navigationShell.currentIndex,
+                    onDestinationSelected: _onDestinationSelected,
+                    labelType: NavigationRailLabelType.all,
+                    groupAlignment: -1,
+                    destinations: [
+                      for (final NavigationDestination destination
+                          in _destinations)
+                        NavigationRailDestination(
+                          icon: destination.icon,
+                          selectedIcon: destination.selectedIcon,
+                          label: Text(destination.label),
+                        ),
+                    ],
                   ),
-              ],
+                ),
+              ),
             ),
-          ),
-          const VerticalDivider(width: 1),
-          Expanded(
-            child: Column(
-              children: [
-                Expanded(child: navigationShell),
-                // Keep playback global to the shell, but out of the navigation
-                // rail. Resizing between desktop and mobile presentation never
-                // recreates the router or playback state.
-                const MiniPlayer(),
-              ],
+            const VerticalDivider(width: 1),
+            Expanded(
+              child: FocusTraversalOrder(
+                order: const NumericFocusOrder(1),
+                child: FocusTraversalGroup(
+                  child: Column(
+                    children: [
+                      Expanded(child: navigationShell),
+                      // Keep playback global to the shell, but out of the
+                      // navigation rail. Resizing between desktop and mobile
+                      // presentation never recreates the router or playback
+                      // state.
+                      const MiniPlayer(),
+                    ],
+                  ),
+                ),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

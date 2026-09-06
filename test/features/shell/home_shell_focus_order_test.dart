@@ -20,6 +20,13 @@ import '../player/fake_playback_controller.dart';
 /// the two — the failure a keyboard user notices immediately and a mouse user
 /// never sees. The two-pane tab below stands in for the wide desktop window,
 /// where the order matters most.
+///
+/// The wide Linux window has to read the same way, and does not get there on
+/// its own: with the rail beside the page rather than under it, the default
+/// reading-order policy sorts both by geometry and splits the rail around the
+/// content, leaving the first destination before the page and the rest after
+/// it. HomeShell orders the two groups explicitly instead, so crossing the
+/// breakpoint moves the destinations without reordering them.
 
 /// A stand-in tab laid out as two side-by-side panes, the shape a desktop
 /// window puts content in.
@@ -211,5 +218,60 @@ void main() {
       Tristate.isFalse,
     );
     handle.dispose();
+  });
+
+  testWidgets('the desktop rail is walked whole, after the tab',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1280, 720);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+
+    final GlobalKey<NavigatorState> rootKey = GlobalKey<NavigatorState>();
+    final List<GlobalKey<NavigatorState>> branchKeys =
+        <GlobalKey<NavigatorState>>[
+      for (int i = 0; i < 4; i++) GlobalKey<NavigatorState>(),
+    ];
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: <Override>[
+          playbackControllerProvider
+              .overrideWithValue(FakePlaybackController()),
+        ],
+        child: MaterialApp.router(
+          theme: ThemeData(platform: TargetPlatform.linux),
+          routerConfig: _router(rootKey, branchKeys),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The layout under test: the rail beside the page, not the bar under it.
+    expect(find.byType(NavigationRail), findsOneWidget);
+    expect(find.byType(NavigationBar), findsNothing);
+
+    Focus.of(tester.element(find.text('left top'))).requestFocus();
+    await tester.pump();
+
+    final List<String?> order = <String?>[_focusedLabel(tester)];
+    for (int i = 0; i < 7; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      order.add(_focusedLabel(tester));
+    }
+
+    // Exactly the bottom-bar order: the tab's four controls in visual order,
+    // then the four destinations in rail order. Without the explicit grouping
+    // the rail splits and Library lands last, after Settings.
+    expect(
+      order.take(4),
+      <String>['left top', 'left bottom', 'right top', 'right bottom'],
+    );
+    expect(order.skip(4), <String>[
+      'Library',
+      'Playlists',
+      'Downloads',
+      'Settings',
+    ]);
   });
 }
