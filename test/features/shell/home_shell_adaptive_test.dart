@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -70,10 +69,8 @@ Future<void> _pumpShell(
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = size;
-  debugDefaultTargetPlatformOverride = platform;
   addTearDown(tester.view.resetDevicePixelRatio);
   addTearDown(tester.view.resetPhysicalSize);
-  addTearDown(() => debugDefaultTargetPlatformOverride = null);
 
   final GlobalKey<NavigatorState> rootKey = GlobalKey<NavigatorState>();
   final List<GlobalKey<NavigatorState>> branchKeys =
