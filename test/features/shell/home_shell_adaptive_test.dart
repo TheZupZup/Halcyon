@@ -8,13 +8,27 @@ import 'package:linthra/features/shell/home_shell.dart';
 import '../player/fake_playback_controller.dart';
 
 class _BranchScreen extends StatelessWidget {
-  const _BranchScreen(this.label);
+  const _BranchScreen(this.label, this.path);
 
   final String label;
+  final String path;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(body: Center(child: Text('$label screen')));
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Text('$label screen'),
+            TextButton(
+              onPressed: () => context.push('$path/detail'),
+              child: Text('Open $label detail'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -52,7 +66,15 @@ GoRouter _router(
               routes: <RouteBase>[
                 GoRoute(
                   path: paths[i],
-                  builder: (_, __) => _BranchScreen(labels[i]),
+                  builder: (_, __) => _BranchScreen(labels[i], paths[i]),
+                  routes: <RouteBase>[
+                    GoRoute(
+                      path: 'detail',
+                      builder: (_, __) => Scaffold(
+                        body: Center(child: Text('${labels[i]} detail')),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -154,6 +176,43 @@ void main() {
             .selectedIndex,
         1,
       );
+    },
+  );
+
+  testWidgets(
+    'resize preserves the inactive branch stack, not only its selected index',
+    (WidgetTester tester) async {
+      await _pumpShell(
+        tester,
+        platform: TargetPlatform.linux,
+        size: const Size(1280, 720),
+      );
+
+      await tester.tap(find.text('Playlists'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Open Playlists detail'));
+      await tester.pumpAndSettle();
+      expect(find.text('Playlists detail'), findsOneWidget);
+
+      await tester.tap(find.text('Library'));
+      await tester.pumpAndSettle();
+      expect(find.text('Library screen'), findsOneWidget);
+
+      tester.view.physicalSize = const Size(700, 720);
+      await tester.pumpAndSettle();
+      expect(find.byType(NavigationBar), findsOneWidget);
+
+      await tester.tap(find.text('Playlists'));
+      await tester.pumpAndSettle();
+
+      // Re-entering the inactive branch after crossing the breakpoint must
+      // restore its detail route, not silently reset it to the branch root.
+      expect(find.text('Playlists detail'), findsOneWidget);
+
+      tester.view.physicalSize = const Size(1280, 720);
+      await tester.pumpAndSettle();
+      expect(find.byType(NavigationRail), findsOneWidget);
+      expect(find.text('Playlists detail'), findsOneWidget);
     },
   );
 
