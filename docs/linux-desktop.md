@@ -426,9 +426,10 @@ workflow for building, installing and debugging it on Fedora Atomic is
 [flatpak-development.md](./flatpak-development.md). It builds, installs and
 launches with working audio, and installs the desktop entry
 (`linux/packaging/io.github.thezupzup.linthra.desktop`, shared with any future
-native package rather than Flatpak-only) together with Linthra's scalable icon
-under `share/icons/hicolor/scalable/apps/io.github.thezupzup.linthra.svg` and
-AppStream metainfo under
+native package rather than Flatpak-only) together with Linthra's icon under
+`share/icons/hicolor/` (the scalable SVG launchers resolve, plus the fixed-size
+PNGs GTK needs for the window's own `_NET_WM_ICON`) and AppStream metainfo
+under
 `linux/packaging/io.github.thezupzup.linthra.metainfo.xml`; networking is
 granted with one narrow permission, secure storage needs none (it goes through
 the desktop's Secret portal), and the remaining filesystem-permission audit is

@@ -118,6 +118,26 @@ FASTLANE_IMAGES = REPO_ROOT / "fastlane/metadata/android/en-US/images"
 # Play high-res icon, which is uploaded by hand in Play Console).
 BRAND_DIR = REPO_ROOT / "assets/brand"
 
+# Linux packaging: the raster half of the hicolor icon set the Flatpak installs
+# (flatpak/flatpak-flutter.yml and the generated manifest beside it, both
+# checked by scripts/check_linux_runner.py). linthra_icon.svg is still what a
+# launcher resolves at any size it likes, but a *window* icon has to be pixels:
+# GTK builds _NET_WM_ICON by asking gdk-pixbuf to decode whatever the icon theme
+# hands it, and gdk-pixbuf no longer carries an SVG loader of its own — librsvg's
+# pixbuf module is obsolete and its replacement (glycin) is not wired into the
+# GTK 3 icon-theme path in org.gnome.Platform. A scalable-only icon therefore
+# resolves to nothing there, GTK sets no icon list, and the window ships without
+# _NET_WM_ICON. PNG is decoded by a loader built into gdk-pixbuf itself, so these
+# always resolve. GTK prefers an exact fixed-size match over a scalable one, so
+# installing them alongside the SVG changes nothing about launcher rendering.
+LINUX_ICON_DIR = REPO_ROOT / "linux/packaging/icons/hicolor"
+# The icon-theme name, which is the application id (linux/CMakeLists.txt's
+# APPLICATION_ID and the desktop entry's Icon=).
+LINUX_ICON_NAME = "io.github.thezupzup.linthra"
+# The sizes a panel, task switcher or window list actually asks for. Anything
+# larger is the SVG's job.
+LINUX_ICON_SIZES = (48, 64, 128, 256)
+
 # Legacy square launcher icon, per density (dp size 48 * density).
 LEGACY_SIZES = {
     "mdpi": 48,
@@ -517,6 +537,17 @@ def main() -> None:
     # Console (Play applies its own corner mask, so no squircle here).
     store = _render(512, 512, ss=3, mode="store")
     _write_png(BRAND_DIR / "linthra-play-store-icon-512.png", 512, 512, store)
+
+    # Linux window icons: the same squircle tile as the F-Droid icon, at the
+    # fixed sizes hicolor names, so GTK has something gdk-pixbuf can decode.
+    for size in LINUX_ICON_SIZES:
+        rgba = _render(size, size, ss=3, mode="tile")
+        _write_png(
+            LINUX_ICON_DIR / f"{size}x{size}/apps/{LINUX_ICON_NAME}.png",
+            size,
+            size,
+            rgba,
+        )
 
     # Optional launcher-icon variants: a legacy tile + adaptive foreground per
     # density, plus the adaptive XML, named ic_launcher_<id>[_foreground]. Each

@@ -145,11 +145,25 @@ ICON_SOURCE = Path("tool") / "branding" / "linthra_icon.svg"
 
 # `hicolor` is the fallback theme every icon theme inherits from, and
 # `scalable/apps` is where an application's own resolution-independent icon
-# belongs — one SVG covers every launcher size and every HiDPI scale, so no
-# raster fallbacks are installed. The basename, minus the extension, is the
-# icon-theme name the desktop entry's `Icon=` looks up.
+# belongs. The basename, minus the extension, is the icon-theme name the desktop
+# entry's `Icon=` looks up.
 ICON_INSTALL_DIR = "/app/share/icons/hicolor/scalable/apps"
 ICON_EXTENSION = ".svg"
+
+# The raster half of the same icon set. A launcher can resolve the SVG at any
+# size, but a *window* icon cannot: GTK builds X11's `_NET_WM_ICON` by asking
+# gdk-pixbuf to decode whatever the icon theme hands it, and gdk-pixbuf carries
+# no SVG loader — librsvg's pixbuf module is obsolete and glycin, its
+# replacement, is not wired into GTK 3's icon-theme path in org.gnome.Platform.
+# A scalable-only install therefore resolves to nothing, GTK sets no icon list,
+# and the packaged window ships with no `_NET_WM_ICON` at all — the failure
+# scripts/flatpak_launch_smoke.sh checks for on every launch. These PNGs are
+# rasterised from the same source design by tool/branding/generate_icons.py, so
+# they are a second encoding of the one brand mark rather than a second mark.
+RASTER_ICON_SIZES = (48, 64, 128, 256)
+RASTER_ICON_SOURCE_DIR = Path("linux") / "packaging" / "icons" / "hicolor"
+RASTER_ICON_INSTALL_DIR = "/app/share/icons/hicolor"
+RASTER_ICON_EXTENSION = ".png"
 
 SVG_ROOT_TAG = "{http://www.w3.org/2000/svg}svg"
 
@@ -583,13 +597,38 @@ def icon_install_problems(root: Path) -> list[str]:
         )
 
     app_id = android_application_id(root)
-    for manifest in (FLATPAK_TEMPLATE, FLATPAK_DIR / f"{app_id}.yml"):
+    manifests = (FLATPAK_TEMPLATE, FLATPAK_DIR / f"{app_id}.yml")
+    for manifest in manifests:
         if install.search(_read(root, manifest)) is None:
             problems.append(
                 f"{manifest} does not install {ICON_SOURCE} to {destination}, so "
                 f"{desktop_entry_file(root)}'s Icon={icon_name} resolves to "
                 "nothing and launchers fall back to a generic icon"
             )
+
+    # The rasters carry the window icon, and only exist as a set: a size that is
+    # generated but never installed (or the reverse) leaves the diff looking
+    # complete while the packaged window falls back to no icon.
+    for size in RASTER_ICON_SIZES:
+        leaf = f"{size}x{size}/apps/{icon_name}{RASTER_ICON_EXTENSION}"
+        source = RASTER_ICON_SOURCE_DIR / leaf
+        if not (root / source).is_file():
+            problems.append(
+                f"{source} is missing — regenerate the icon set with "
+                "`python3 tool/branding/generate_icons.py`"
+            )
+        raster_install = re.compile(
+            rf"install\s+-Dm644\s+{re.escape(str(source))}\s+"
+            rf"{re.escape(f'{RASTER_ICON_INSTALL_DIR}/{leaf}')}"
+        )
+        for manifest in manifests:
+            if raster_install.search(_read(root, manifest)) is None:
+                problems.append(
+                    f"{manifest} does not install {source} to "
+                    f"{RASTER_ICON_INSTALL_DIR}/{leaf}, so GTK has no icon "
+                    "gdk-pixbuf can decode and the packaged window carries no "
+                    "_NET_WM_ICON"
+                )
     return problems
 
 
