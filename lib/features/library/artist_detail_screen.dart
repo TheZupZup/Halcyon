@@ -22,13 +22,6 @@ import 'widgets/track_tile.dart';
 
 /// One artist's catalog: their albums (each opening its album detail) and all
 /// their tracks, with Play all / Shuffle all.
-///
-/// Reads the same derived grouping the Artists tab uses. Playing from here
-/// queues only this artist's tracks; tapping a single track queues the artist's
-/// tracks from that point. Reuses [TrackTile] and [AlbumTile] so rows match the
-/// rest of the library. Long-pressing one of the album rows opens the shared
-/// bulk playlist flow for that album. Long-pressing a track starts multi-select
-/// so any subset of the artist's songs can be added together.
 class ArtistDetailScreen extends ConsumerStatefulWidget {
   const ArtistDetailScreen({required this.artistId, super.key});
 
@@ -38,8 +31,6 @@ class ArtistDetailScreen extends ConsumerStatefulWidget {
   ConsumerState<ArtistDetailScreen> createState() => _ArtistDetailScreenState();
 }
 
-/// Width of the artist pane in the desktop two-pane layout. Matches the album
-/// screen's pane, so moving between the two doesn't shift the list.
 const double _detailPaneWidth = 320;
 
 class _ArtistDetailScreenState extends ConsumerState<ArtistDetailScreen> {
@@ -58,10 +49,6 @@ class _ArtistDetailScreenState extends ConsumerState<ArtistDetailScreen> {
       );
     }
 
-    // Reuse the artist grouping the Artists tab already memoized, rather than
-    // re-grouping the whole catalog on every build (the freeze on large
-    // libraries). The per-artist track and album lists below are bounded
-    // filters over the catalog, not another full grouping of it.
     Artist? artist;
     for (final Artist candidate in ref.watch(libraryArtistsProvider)) {
       if (candidate.id == widget.artistId) {
@@ -82,8 +69,6 @@ class _ArtistDetailScreenState extends ConsumerState<ArtistDetailScreen> {
       );
     }
 
-    // Bound after the null check: the layout closures below can't capture a
-    // promoted local.
     final Artist resolved = artist;
     final List<Album> albums = albumsForArtist(songs, widget.artistId);
     final List<Track> selected = <Track>[
@@ -114,9 +99,6 @@ class _ArtistDetailScreenState extends ConsumerState<ArtistDetailScreen> {
           BoxConstraints constraints,
           WindowSizeClass sizeClass,
         ) {
-          // Wide enough for two panes: the artist stays visible in a side pane
-          // while their albums and songs scroll beside it. Selection mode uses
-          // the single column, where the width belongs to the list.
           if (!_selecting && sizeClass.isAtLeast(WindowSizeClass.expanded)) {
             return Center(
               child: ConstrainedBox(
@@ -161,7 +143,6 @@ class _ArtistDetailScreenState extends ConsumerState<ArtistDetailScreen> {
     );
   }
 
-  /// Phones and narrow windows: header, albums and songs in one column.
   Widget _singleColumnBody(
     Artist artist,
     List<Album> albums,
@@ -184,8 +165,6 @@ class _ArtistDetailScreenState extends ConsumerState<ArtistDetailScreen> {
     );
   }
 
-  /// The albums + songs half of the screen, without the header: what the
-  /// desktop layout puts beside the artist pane.
   Widget _catalogList(List<Album> albums, List<Track> tracks) {
     return CustomScrollView(
       key: const Key('artist_detail_catalog'),
@@ -305,13 +284,8 @@ class _ArtistHeader extends StatelessWidget {
   final int trackCount;
   final VoidCallback onPlay;
   final VoidCallback onShuffle;
-
-  /// Portrait above the name rather than beside it, for the tall, narrow
-  /// desktop pane.
   final bool stacked;
 
-  /// A bigger portrait for the desktop pane, where it has the pane's width to
-  /// itself rather than sharing a row with the name.
   static const double _stackedPortraitRadius = 72;
 
   @override
@@ -347,32 +321,44 @@ class _ArtistHeader extends StatelessWidget {
               ],
             ),
           const SizedBox(height: AppSpacing.md),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: onPlay,
-                  icon: const Icon(Icons.play_arrow),
-                  label: const Text('Play all'),
+          if (stacked) ...<Widget>[
+            FilledButton.icon(
+              onPressed: onPlay,
+              icon: const Icon(Icons.play_arrow),
+              label: const Text('Play all'),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            FilledButton.tonalIcon(
+              onPressed: onShuffle,
+              icon: const Icon(Icons.shuffle),
+              label: const Text('Shuffle all'),
+            ),
+          ] else
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: onPlay,
+                    icon: const Icon(Icons.play_arrow),
+                    label: const Text('Play all'),
+                  ),
                 ),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: FilledButton.tonalIcon(
-                  onPressed: onShuffle,
-                  icon: const Icon(Icons.shuffle),
-                  label: const Text('Shuffle all'),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: FilledButton.tonalIcon(
+                    onPressed: onShuffle,
+                    icon: const Icon(Icons.shuffle),
+                    label: const Text('Shuffle all'),
+                  ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
         ],
       ),
     );
   }
 }
 
-/// The artist's circular portrait, or a tinted glyph when there is no artwork.
 class _ArtistPortrait extends StatelessWidget {
   const _ArtistPortrait({required this.artist, required this.radius});
 
@@ -383,8 +369,6 @@ class _ArtistPortrait extends StatelessWidget {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final Uri? uri = artist.artworkUri;
-    // Centred rather than left-aligned: in the stacked pane the column
-    // stretches its children, and a stretched avatar is not a circle.
     return Center(
       child: CircleAvatar(
         radius: radius,
@@ -402,7 +386,6 @@ class _ArtistPortrait extends StatelessWidget {
   }
 }
 
-/// Name and the "3 albums • 41 songs" summary, shared by both header layouts.
 class _ArtistTitleBlock extends StatelessWidget {
   const _ArtistTitleBlock({
     required this.name,
