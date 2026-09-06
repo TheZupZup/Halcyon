@@ -23,17 +23,55 @@ class TrackMetadata extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final ThemeData theme = Theme.of(context);
+    final TextScaler scaler = MediaQuery.textScalerOf(context);
+    final bool shortLargeText = MediaQuery.sizeOf(context).height <= 640 &&
+        scaler.scale(1) >= 1.5;
+    final Color muted =
+        theme.colorScheme.onSurface.withValues(alpha: 0.75);
+    final Color fainter =
+        theme.colorScheme.onSurface.withValues(alpha: 0.5);
+    final bool hasArtist = artistName != null && artistName!.isNotEmpty;
+    final bool hasAlbum = albumName != null && albumName!.isNotEmpty;
+
+    // A short desktop window with accessibility text scaling has horizontal
+    // room but very little vertical room. Keeping the normal two-line title +
+    // artist + album can consume the space the flexible lyrics pane needs.
+    // Collapse only in that constrained case: title and artist remain visible,
+    // the album is the least important line and yields its height.
+    if (shortLargeText) {
+      return Column(
+        key: const Key('track_metadata_compact_height'),
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text(
+            title,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          if (hasArtist) ...<Widget>[
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              artistName!,
+              style: theme.textTheme.bodyMedium?.copyWith(color: muted),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ],
+      );
+    }
+
     // A deliberate three-step hierarchy: the title carries full weight, the
     // artist is a clear secondary line, and the album recedes to a quiet tag.
-    final muted = theme.colorScheme.onSurface.withValues(alpha: 0.75);
-    final fainter = theme.colorScheme.onSurface.withValues(alpha: 0.5);
-    final hasArtist = artistName != null && artistName!.isNotEmpty;
-    final hasAlbum = albumName != null && albumName!.isNotEmpty;
-
     return Column(
       mainAxisSize: MainAxisSize.min,
-      children: [
+      children: <Widget>[
         Text(
           title,
           style: theme.textTheme.headlineSmall?.copyWith(
@@ -45,7 +83,7 @@ class TrackMetadata extends StatelessWidget {
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
-        if (hasArtist) ...[
+        if (hasArtist) ...<Widget>[
           const SizedBox(height: AppSpacing.sm),
           Text(
             artistName!,
@@ -58,7 +96,7 @@ class TrackMetadata extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
         ],
-        if (hasAlbum) ...[
+        if (hasAlbum) ...<Widget>[
           const SizedBox(height: AppSpacing.xs),
           Text(
             albumName!,
@@ -79,16 +117,6 @@ class TrackMetadata extends StatelessWidget {
 /// A quiet inline label stating where the audio is *actually* coming from, e.g.
 /// "Playing from Navidrome", "Playing from Jellyfin", "Playing from Local music",
 /// or "Playing from Cache".
-///
-/// Rendered as a calm icon-and-caption pair (no boxed chip) so it reads as a
-/// whisper under the metadata rather than a competing badge, matching the
-/// buffering/casting indicators on the same line.
-///
-/// Because a logical track can have several source candidates, the indicator
-/// reflects the resolved copy — the owning provider derived from [trackUri] plus
-/// the [source] the resolver reported — not the active/default provider. Only
-/// safe display names are shown (see [PlaybackSourceLabel]); no server URL,
-/// username, token, or path is ever exposed.
 class PlaybackSourceChip extends StatelessWidget {
   const PlaybackSourceChip({
     required this.source,
@@ -97,19 +125,16 @@ class PlaybackSourceChip extends StatelessWidget {
   });
 
   final PlaybackSource source;
-
-  /// The resolved track's opaque URI, used only to name the owning server
-  /// safely (`jellyfin:` → Jellyfin, `subsonic:` → Navidrome).
   final String? trackUri;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final color = theme.colorScheme.onSurfaceVariant;
+    final ThemeData theme = Theme.of(context);
+    final Color color = theme.colorScheme.onSurfaceVariant;
     return Row(
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
-      children: [
+      children: <Widget>[
         Icon(_iconFor(source), size: 15, color: color),
         const SizedBox(width: AppSpacing.xs + 2),
         Flexible(
