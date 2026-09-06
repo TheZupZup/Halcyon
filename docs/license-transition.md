@@ -137,10 +137,11 @@ The transition was made in one reviewable change. The surfaces updated:
 - `lib/features/settings/hub/about_screen.dart` and
   `test/features/settings/hub/about_screen_test.dart` — the in-app License row.
 - `fastlane/metadata/android/en-US/full_description.txt` — the user-facing store text.
-- `metadata/io.github.thezupzup.linthra.yml` deliberately remains
-  `License: MPL-2.0` while its `Builds` and `CurrentVersion` still identify
-  releases from before the transition. It switches to AGPL-3.0-or-later in the
-  first post-transition F-Droid release update.
+- `metadata/io.github.thezupzup.linthra.yml` — `License: AGPL-3.0-or-later`
+  since the v0.2.5 release update, which advanced `CurrentVersion` to the first
+  release cut from a post-transition source commit. Its `Builds` entries still
+  name the pre-transition versions F-Droid actually built and are not
+  relabelled.
 
 **Documentation**
 
@@ -203,16 +204,23 @@ AGPL-3.0-or-later is a free-software license suitable for F-Droid metadata. The 
 change does not require changing Linthra's application ID or signing model.
 
 The important migration detail is version history: old Linthra source tags and old
-F-Droid builds remain MPL-2.0. The checked-in F-Droid metadata therefore **stays at
-`License: MPL-2.0` for the moment**, because every `Builds` entry and its
-`CurrentVersion` still point at pre-transition source commits. Changing only the global
-`License:` field would misdescribe those historical builds.
+F-Droid builds remain MPL-2.0. While every `Builds` entry and the `CurrentVersion`
+still pointed at pre-transition source commits, the checked-in F-Droid metadata stayed
+at `License: MPL-2.0`, because changing only the global `License:` field would have
+misdescribed those historical builds.
 
-The first release cut from a post-transition source commit is the cutover point. That
-release update must change the F-Droid `License:` field to `AGPL-3.0-or-later` **in the
-same change that adds/advances the first AGPL build/current version**. After that, the
-corresponding metadata in the external `fdroiddata` repository must be updated to the
-same value. No old build commit, tag, release note, or artifact should be relabelled.
+The first release cut from a post-transition source commit is the cutover point, and
+that release update must change the F-Droid `License:` field to `AGPL-3.0-or-later`
+**in the same change that adds/advances the first AGPL build/current version**.
+
+**That cutover happened in the v0.2.5 release update**, which advanced `CurrentVersion`
+to `0.2.5` and set `License: AGPL-3.0-or-later` in the same change. The `Builds` entries
+were left alone: they record the versions F-Droid actually built, all of them
+pre-transition, and no old build commit, tag, release note, or artifact is relabelled.
+
+The corresponding metadata in the external `fdroiddata` repository still has to be
+updated to the same value, along with the submission text — see
+[fdroid-submission.md](./fdroid-submission.md) §9.
 
 Do not retroactively edit old release notes to say AGPL when those releases shipped
 under MPL.
