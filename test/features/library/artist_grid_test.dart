@@ -16,8 +16,6 @@ import 'package:linthra/features/player/player_providers.dart';
 import '../player/fake_playback_controller.dart';
 import 'fake_music_library_repository.dart';
 
-/// Six artists, enough rows to tell one column from two or three. No artwork
-/// anywhere, so the tests never reach for the network.
 List<Track> _artists() => <Track>[
       for (int i = 0; i < 6; i++)
         Track(
@@ -75,7 +73,6 @@ Future<void> _pumpArtists(
   await tester.pumpAndSettle();
 }
 
-/// The artist rows sharing the topmost row of the grid, left to right.
 List<Rect> _firstRow(WidgetTester tester) {
   final List<Rect> rects = tester.elementList(find.byType(ArtistTile)).map(
     (Element e) {
@@ -100,9 +97,10 @@ void main() {
       expect(artistGridColumnCount(430), 1);
     });
 
-    test('a second column only lands once a row still reads', () {
-      expect(artistGridColumnCount(600), 1);
-      expect(artistGridColumnCount(700), 2);
+    test('a second column waits for padding and its inter-column gutter', () {
+      expect(artistGridColumnCount(680), 1);
+      expect(artistGridColumnCount(703), 1);
+      expect(artistGridColumnCount(704), 2);
       expect(artistGridColumnCount(1040), 2);
     });
 
@@ -112,19 +110,35 @@ void main() {
       expect(artistGridColumnCount(2448), 5); // 2560x1440
     });
 
-    test('a row is never squeezed below its minimum to add a column', () {
+    test('common 4K width grows beyond the old six-column cap', () {
+      expect(artistGridColumnCount(3700), 7);
+      expect(artistGridColumnCount(3700), greaterThan(6));
+    });
+
+    test('multi-column rows honor the declared 340-520 width band', () {
+      const double horizontalPadding = 16;
+      const double gutter = 8;
       for (final double width in <double>[
-        360,
-        700,
+        704,
+        1040,
         1168,
         1808,
         2448,
         3300,
+        3700,
       ]) {
+        final int columns = artistGridColumnCount(width);
+        final double rowWidth =
+            (width - horizontalPadding - gutter * (columns - 1)) / columns;
         expect(
-          width / artistGridColumnCount(width),
-          greaterThanOrEqualTo(300),
-          reason: 'rows stay readable at $width',
+          rowWidth,
+          greaterThanOrEqualTo(340),
+          reason: 'minimum at $width with $columns columns',
+        );
+        expect(
+          rowWidth,
+          lessThanOrEqualTo(520),
+          reason: 'maximum at $width with $columns columns',
         );
       }
     });
@@ -151,7 +165,6 @@ void main() {
 
       final List<Rect> row = _firstRow(tester);
       expect(row.length, greaterThan(2));
-      // No row stretches across the monitor, and none runs off it.
       for (final Rect tile in row) {
         expect(tile.width, lessThan(600));
       }
@@ -199,6 +212,7 @@ void main() {
         const Size(1280, 720),
         const Size(2560, 1440),
         const Size(3440, 1440),
+        const Size(3840, 2160),
         const Size(390, 844),
       ]) {
         tester.view.physicalSize = size;

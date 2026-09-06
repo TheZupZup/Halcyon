@@ -48,23 +48,12 @@ class HomeShell extends StatelessWidget {
   ];
 
   void _onDestinationSelected(int index) {
-    // `initialLocation: true` re-pops a tab to its root when re-tapped.
     navigationShell.goBranch(
       index,
       initialLocation: index == navigationShell.currentIndex,
     );
   }
 
-  /// Gives every real navigation layer a chance before Android is allowed to
-  /// close the app:
-  ///
-  /// 1. a root-level route such as the full player or a dialog;
-  /// 2. the active tab's detail stack;
-  /// 3. an internal BackButtonListener such as folder browsing or selection;
-  /// 4. finally, a secondary primary-navigation destination returns to Library.
-  ///
-  /// Only the root of Library returns `false` all the way to Android, which is
-  /// the one place where closing Linthra is the expected Back action.
   Future<bool> _handleSystemBack() async {
     if (rootNavigatorKey.currentState?.canPop() ?? false) return false;
 
@@ -86,86 +75,36 @@ class HomeShell extends StatelessWidget {
         constraints.maxWidth >= desktopNavigationBreakpoint;
   }
 
-  Widget _buildMobileShell() {
-    return Scaffold(
-      body: navigationShell,
-      // The mini-player rides just above the navigation bar so it stays visible
-      // on every tab (and collapses to nothing when no track is loaded). The
-      // full PlayerScreen is pushed above this shell, so the two never overlap.
-      bottomNavigationBar: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const MiniPlayer(),
-          NavigationBar(
+  Widget _buildNavigationRail() {
+    return FocusTraversalOrder(
+      order: const NumericFocusOrder(2),
+      child: FocusTraversalGroup(
+        child: SafeArea(
+          right: false,
+          child: NavigationRail(
             selectedIndex: navigationShell.currentIndex,
             onDestinationSelected: _onDestinationSelected,
-            destinations: _destinations,
+            labelType: NavigationRailLabelType.all,
+            groupAlignment: -1,
+            destinations: [
+              for (final NavigationDestination destination in _destinations)
+                NavigationRailDestination(
+                  icon: destination.icon,
+                  selectedIcon: destination.selectedIcon,
+                  label: Text(destination.label),
+                ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildDesktopShell() {
-    // Keyboard order is set explicitly here rather than left to the default
-    // reading-order traversal. Side by side, that policy sorts the rail and the
-    // page together by geometry and splits the rail around the content: the
-    // first destination lands before the page and the rest after it, so Tab
-    // reaches Library last. Two groups in a numbered ring keep the rail whole
-    // and keep the frame reading the way the bottom bar already does — the
-    // active tab first, then playback, then the persistent destinations — so
-    // crossing the breakpoint changes where the destinations are, not the order
-    // a keyboard walks them in. Pinned by home_shell_focus_order_test.dart on
-    // both sides of the breakpoint.
-    return Scaffold(
-      body: FocusTraversalGroup(
-        policy: OrderedTraversalPolicy(),
-        child: Row(
-          children: [
-            FocusTraversalOrder(
-              order: const NumericFocusOrder(2),
-              child: FocusTraversalGroup(
-                child: SafeArea(
-                  right: false,
-                  child: NavigationRail(
-                    selectedIndex: navigationShell.currentIndex,
-                    onDestinationSelected: _onDestinationSelected,
-                    labelType: NavigationRailLabelType.all,
-                    groupAlignment: -1,
-                    destinations: [
-                      for (final NavigationDestination destination
-                          in _destinations)
-                        NavigationRailDestination(
-                          icon: destination.icon,
-                          selectedIcon: destination.selectedIcon,
-                          label: Text(destination.label),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            const VerticalDivider(width: 1),
-            Expanded(
-              child: FocusTraversalOrder(
-                order: const NumericFocusOrder(1),
-                child: FocusTraversalGroup(
-                  child: Column(
-                    children: [
-                      Expanded(child: navigationShell),
-                      // Keep playback global to the shell, but out of the
-                      // navigation rail. Resizing between desktop and mobile
-                      // presentation never recreates the router or playback
-                      // state.
-                      const MiniPlayer(),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+  NavigationBar _buildNavigationBar() {
+    return NavigationBar(
+      selectedIndex: navigationShell.currentIndex,
+      onDestinationSelected: _onDestinationSelected,
+      destinations: _destinations,
     );
   }
 
@@ -175,10 +114,43 @@ class HomeShell extends StatelessWidget {
       onBackButtonPressed: _handleSystemBack,
       child: LayoutBuilder(
         builder: (BuildContext context, BoxConstraints constraints) {
-          if (_usesDesktopNavigation(context, constraints)) {
-            return _buildDesktopShell();
-          }
-          return _buildMobileShell();
+          final bool desktop = _usesDesktopNavigation(context, constraints);
+
+          // Keep StatefulNavigationShell at the same element position across
+          // the 900 px breakpoint. Only the two chrome slots before it change
+          // between real desktop widgets and zero-sized placeholders, so an
+          // inactive branch's Navigator stack and scroll state survive resize.
+          return Scaffold(
+            body: FocusTraversalGroup(
+              policy: OrderedTraversalPolicy(),
+              child: Row(
+                children: <Widget>[
+                  if (desktop)
+                    _buildNavigationRail()
+                  else
+                    const SizedBox.shrink(),
+                  if (desktop)
+                    const VerticalDivider(width: 1)
+                  else
+                    const SizedBox.shrink(),
+                  Expanded(
+                    child: FocusTraversalOrder(
+                      order: const NumericFocusOrder(1),
+                      child: FocusTraversalGroup(
+                        child: Column(
+                          children: <Widget>[
+                            Expanded(child: navigationShell),
+                            const MiniPlayer(),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            bottomNavigationBar: desktop ? null : _buildNavigationBar(),
+          );
         },
       ),
     );

@@ -15,7 +15,6 @@ import 'package:linthra/features/player/widgets/track_metadata.dart';
 
 import 'fake_playback_controller.dart';
 
-/// A lyrics backend returning one canned set for the test track.
 class _FakeLyricsService implements LyricsService {
   _FakeLyricsService(this._lyrics);
 
@@ -25,8 +24,6 @@ class _FakeLyricsService implements LyricsService {
   Future<Lyrics?> lyricsFor(Track track) async => _lyrics;
 }
 
-/// No artwork, so the cover falls back to its placeholder and nothing here
-/// reaches for the network.
 const Track _track = Track(
   id: '1',
   title: 'Song One',
@@ -119,7 +116,6 @@ void main() {
       final Rect artwork = _artworkRect(tester);
       final Rect controls = _controlsRect(tester);
       expect(artwork.right, lessThanOrEqualTo(controls.left));
-      // The cover is a square cover, not a stretched panel.
       expect(artwork.width, closeTo(artwork.height, 1));
       expect(find.text('Song One'), findsOneWidget);
       expect(find.text('Artist A'), findsOneWidget);
@@ -138,21 +134,17 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(LyricsView), findsOneWidget);
-      // The whole point of the extra width: the cover stays.
       expect(find.byType(AlbumArtwork), findsWidgets);
       expect(
         _artworkRect(tester).right,
         lessThanOrEqualTo(tester.getRect(find.byType(LyricsView)).left),
       );
-      // Transport stays where it was, under the lyrics rather than behind them.
       expect(find.byTooltip('Pause'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
     testWidgets('the smallest wide window shrinks the cover, not the transport',
         (tester) async {
-      // 1280 wide at Linthra's minimum window height: the cover gives up the
-      // height, the controls keep theirs, and nothing overflows.
       await _pumpPlayer(tester, size: const Size(1280, 600));
 
       final Rect artwork = _artworkRect(tester);
@@ -172,6 +164,28 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.text('Song One'), findsOneWidget);
       expect(find.byTooltip('Pause'), findsOneWidget);
+    });
+
+    testWidgets('short wide lyrics keep usable height at 2x text scale',
+        (tester) async {
+      await _pumpPlayer(
+        tester,
+        size: const Size(1280, 600),
+        lyrics: _lyrics,
+        textScaler: const TextScaler.linear(2.0),
+      );
+
+      await tester.tap(find.byTooltip('Lyrics'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('track_metadata_compact_height')),
+        findsOneWidget,
+      );
+      expect(find.byType(LyricsView), findsOneWidget);
+      expect(tester.getRect(find.byType(LyricsView)).height, greaterThan(80));
+      expect(find.byTooltip('Pause'), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('resizing keeps playback and the lyrics toggle',
@@ -194,8 +208,6 @@ void main() {
         tester.view.physicalSize = size;
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull, reason: 'at $size');
-        // Same state either side of the breakpoint: still on lyrics, still
-        // playing the same track.
         expect(find.byType(LyricsView), findsOneWidget, reason: 'at $size');
         expect(find.byTooltip('Pause'), findsOneWidget, reason: 'at $size');
       }
@@ -207,8 +219,6 @@ void main() {
 
       final Rect artwork = _artworkRect(tester);
       final Rect controls = _controlsRect(tester);
-      // Both columns stay in the middle of the monitor rather than being
-      // pushed to opposite edges.
       expect(artwork.left, greaterThan(400));
       expect(controls.right, lessThan(3040));
       expect(tester.takeException(), isNull);

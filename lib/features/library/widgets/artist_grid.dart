@@ -13,23 +13,29 @@ const double _minRowWidth = 340;
 /// the chevron a screen apart.
 const double _maxRowWidth = 520;
 
-/// One column on a phone; the upper bound is a sanity stop for absurd widths,
-/// not a design limit.
 const int _minColumns = 1;
-const int _maxColumns = 6;
+const double _gridPadding = AppSpacing.sm;
+const double _gridGutter = AppSpacing.sm;
 
-/// Columns for [width] logical pixels of available width.
+/// Columns for [width] logical pixels of available viewport width.
 ///
-/// One on a phone (identical to the single-column list this replaces), and a
-/// column added as soon as another row fits at [_minRowWidth] or rows would
-/// otherwise stretch past [_maxRowWidth]. Pure so the breakpoints can be
-/// asserted without pumping a widget.
+/// One on a phone, and a new column only once the grid's own horizontal padding
+/// plus every inter-column gutter leaves at least [_minRowWidth] for each row.
+/// Columns continue to grow with the viewport instead of stopping at an
+/// arbitrary desktop cap, so common 4K windows keep rows under
+/// [_maxRowWidth].
 int artistGridColumnCount(double width) {
   if (!width.isFinite || width <= 0) return _minColumns;
-  final int fits = (width / _minRowWidth).floor();
-  final int dense = (width / _maxRowWidth).ceil();
+
+  final double innerWidth = width - _gridPadding * 2;
+  if (innerWidth <= 0) return _minColumns;
+
+  final int fits =
+      ((innerWidth + _gridGutter) / (_minRowWidth + _gridGutter)).floor();
+  final int dense =
+      ((innerWidth + _gridGutter) / (_maxRowWidth + _gridGutter)).ceil();
   final int columns = dense < fits ? dense : fits;
-  return columns.clamp(_minColumns, _maxColumns);
+  return columns < _minColumns ? _minColumns : columns;
 }
 
 /// The Artists tab body: [ArtistTile] rows that flow into columns as the window
@@ -76,12 +82,12 @@ class ArtistGrid extends StatelessWidget {
           padding: single
               ? EdgeInsets.zero
               : const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.sm,
-                  vertical: AppSpacing.sm,
+                  horizontal: _gridPadding,
+                  vertical: _gridPadding,
                 ),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: columns,
-            crossAxisSpacing: single ? 0 : AppSpacing.sm,
+            crossAxisSpacing: single ? 0 : _gridGutter,
             mainAxisSpacing: 0,
             mainAxisExtent: extent,
           ),

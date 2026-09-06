@@ -17,9 +17,6 @@ import 'package:linthra/features/player/player_screen.dart';
 import '../player/fake_playback_controller.dart';
 import 'fake_music_library_repository.dart';
 
-/// One artist with two albums, so both detail screens have a header, an album
-/// section and a song list to lay out. No artwork anywhere, so these widget
-/// tests never reach for the network.
 final List<Track> _tracks = <Track>[
   for (int i = 0; i < 4; i++)
     Track(
@@ -55,7 +52,11 @@ GoRouter _router() {
   );
 }
 
-Future<void> _pumpLibrary(WidgetTester tester, Size size) async {
+Future<void> _pumpLibrary(
+  WidgetTester tester,
+  Size size, {
+  TextScaler textScaler = TextScaler.noScaling,
+}) async {
   tester.view.devicePixelRatio = 1.0;
   tester.view.physicalSize = size;
   addTearDown(tester.view.reset);
@@ -69,30 +70,42 @@ Future<void> _pumpLibrary(WidgetTester tester, Size size) async {
         playlistStoreProvider.overrideWithValue(InMemoryPlaylistStore()),
         playbackControllerProvider.overrideWithValue(FakePlaybackController()),
       ],
-      child: MaterialApp.router(routerConfig: _router()),
+      child: MaterialApp.router(
+        builder: (BuildContext context, Widget? child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(textScaler: textScaler),
+          child: child!,
+        ),
+        routerConfig: _router(),
+      ),
     ),
   );
   await tester.pumpAndSettle();
 }
 
-Future<void> _openAlbum(WidgetTester tester, Size size) async {
-  await _pumpLibrary(tester, size);
+Future<void> _openAlbum(
+  WidgetTester tester,
+  Size size, {
+  TextScaler textScaler = TextScaler.noScaling,
+}) async {
+  await _pumpLibrary(tester, size, textScaler: textScaler);
   await tester.tap(find.text('Albums'));
   await tester.pumpAndSettle();
   await tester.tap(find.text('Discovery').first);
   await tester.pumpAndSettle();
 }
 
-Future<void> _openArtist(WidgetTester tester, Size size) async {
-  await _pumpLibrary(tester, size);
+Future<void> _openArtist(
+  WidgetTester tester,
+  Size size, {
+  TextScaler textScaler = TextScaler.noScaling,
+}) async {
+  await _pumpLibrary(tester, size, textScaler: textScaler);
   await tester.tap(find.text('Artists'));
   await tester.pumpAndSettle();
   await tester.tap(find.text('Daft Punk').first);
   await tester.pumpAndSettle();
 }
 
-/// Rect of the Play (or Play all) button, which lives in the header on both
-/// screens — a reliable stand-in for "where the header is".
 Rect _headerRect(WidgetTester tester, String playLabel) =>
     tester.getRect(find.widgetWithText(FilledButton, playLabel));
 
@@ -116,8 +129,6 @@ void main() {
 
       final Rect header = _headerRect(tester, 'Play');
       final Rect track = _firstTrackRect(tester);
-      // Side by side: the album pane ends before the track list begins, and
-      // both are visible at once rather than one scrolling the other away.
       expect(header.right, lessThanOrEqualTo(track.left));
       expect(track.width, greaterThan(header.width));
       expect(tester.takeException(), isNull);
@@ -196,9 +207,23 @@ void main() {
 
       final Rect header = _headerRect(tester, 'Play all');
       expect(header.right, lessThanOrEqualTo(_firstTrackRect(tester).left));
-      // The albums section still lists both albums beside the artist pane.
       expect(find.text('Discovery'), findsOneWidget);
       expect(find.text('Homework'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('desktop artist actions stack safely at 2x text scale',
+        (tester) async {
+      await _openArtist(
+        tester,
+        const Size(1280, 600),
+        textScaler: const TextScaler.linear(2.0),
+      );
+
+      final Rect play = _headerRect(tester, 'Play all');
+      final Rect shuffle =
+          tester.getRect(find.widgetWithText(FilledButton, 'Shuffle all'));
+      expect(play.bottom, lessThanOrEqualTo(shuffle.top));
       expect(tester.takeException(), isNull);
     });
 
