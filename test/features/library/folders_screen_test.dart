@@ -1,0 +1,190 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+import 'package:linthra/core/models/music_folder.dart';
+import 'package:linthra/core/models/track.dart';
+import 'package:linthra/core/services/folder_browsable_music_source.dart';
+import 'package:linthra/features/library/folder_browser_providers.dart';
+import 'package:linthra/features/library/folders_screen.dart';
+import 'package:linthra/features/player/player_providers.dart';
+
+import '../player/fake_playback_controller.dart';
+
+/// Folders is a top-level destination rather than a Library tab, so it has to
+/// stand on its own: it carries its own app bar, it explains itself when no
+/// folder-capable server is connected instead of looking broken, and it still
+/// walks the hierarchy one level at a time.
+class _FakeFolderSource implements FolderBrowsableMusicSource {
+  _FakeFolderSource({
+    required this.id,
+    required this.displayName,
+    required this.roots,
+    this.children = const <String, MusicFolderListing>{},
+  });
+
+  @override
+  final String id;
+
+  @override
+  final String displayName;
+
+  final List<MusicFolder> roots;
+  final Map<String, MusicFolderListing> children;
+
+  @override
+  Future<List<MusicFolder>> fetchRootFolders() async => roots;
+
+  @override
+  Future<MusicFolderListing> fetchFolder(String folderId) async =>
+      children[folderId] ?? MusicFolderListing.empty;
+}
+
+/// The screen registers a [BackButtonListener] while it is inside a folder, so
+/// it has to be hosted under a Router the way the app's shell hosts it.
+GoRouter _router() {
+  return GoRouter(
+    routes: <RouteBase>[
+      GoRoute(path: '/', builder: (_, __) => const FoldersScreen()),
+    ],
+  );
+}
+
+Future<void> _pump(
+  WidgetTester tester, {
+  List<FolderBrowsableMusicSource> sources =
+      const <FolderBrowsableMusicSource>[],
+}) async {
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: <Override>[
+        folderBrowsableSourcesProvider.overrideWithValue(sources),
+        playbackControllerProvider.overrideWithValue(FakePlaybackController()),
+      ],
+      child: MaterialApp.router(routerConfig: _router()),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
+void main() {
+  group('FoldersScreen', () {
+    testWidgets('with nothing connected it says so and names its own bar',
+        (tester) async {
+      await _pump(tester);
+
+      expect(find.widgetWithText(AppBar, 'Folders'), findsOneWidget);
+      expect(find.text('No server folders available'), findsOneWidget);
+      expect(
+        find.textContaining('Connect Jellyfin or Navidrome'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('lists a connected source\'s roots under its name',
+        (tester) async {
+      await _pump(
+        tester,
+        sources: <FolderBrowsableMusicSource>[
+          _FakeFolderSource(
+            id: 'subsonic',
+            displayName: 'Navidrome',
+            roots: const <MusicFolder>[MusicFolder(id: 'r1', name: 'Music')],
+          ),
+        ],
+      );
+
+      expect(find.text('Navidrome'), findsOneWidget);
+      expect(find.text('Music'), findsOneWidget);
+    });
+
+    testWidgets('opening a folder walks into it and Back walks out again',
+        (tester) async {
+      await _pump(
+        tester,
+        sources: <FolderBrowsableMusicSource>[
+          _FakeFolderSource(
+            id: 'subsonic',
+            displayName: 'Navidrome',
+            roots: const <MusicFolder>[MusicFolder(id: 'r1', name: 'Music')],
+            children: const <String, MusicFolderListing>{
+              'r1': MusicFolderListing(
+                folders: <MusicFolder>[
+                  MusicFolder(id: 'c1', name: 'Live Sets')
+                ],
+                tracks: <Track>[
+                  Track(id: 't1', title: 'Opener', uri: 'subsonic:t1'),
+                ],
+              ),
+            },
+          ),
+        ],
+      );
+
+      await tester.tap(find.text('Music'));
+      await tester.pumpAndSettle();
+
+      // One level down: the child folder and the tracks beside it, with the
+      // trail's own header naming where we are and which server it came from.
+      expect(find.text('Live Sets'), findsOneWidget);
+      expect(find.text('Opener'), findsOneWidget);
+      expect(find.byKey(const Key('folder_browser_header')), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Back to previous folder'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Music'), findsOneWidget);
+      expect(find.byKey(const Key('folder_browser_header')), findsNothing);
+    });
+
+    testWidgets('signing the source out returns to the roots', (tester) async {
+      final _FakeFolderSource source = _FakeFolderSource(
+        id: 'subsonic',
+        displayName: 'Navidrome',
+        roots: const <MusicFolder>[MusicFolder(id: 'r1', name: 'Music')],
+        children: const <String, MusicFolderListing>{
+          'r1': MusicFolderListing(
+            folders: <MusicFolder>[MusicFolder(id: 'c1', name: 'Live Sets')],
+          ),
+        },
+      );
+      final ProviderContainer container = ProviderContainer(
+        overrides: <Override>[
+          folderBrowsableSourcesProvider
+              .overrideWith((ref) => ref.watch(_sourcesProvider)),
+          playbackControllerProvider
+              .overrideWithValue(FakePlaybackController()),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(_sourcesProvider.notifier).state =
+          <FolderBrowsableMusicSource>[source];
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp.router(routerConfig: _router()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Music'));
+      await tester.pumpAndSettle();
+      expect(find.text('Live Sets'), findsOneWidget);
+
+      // The session goes away while the screen is deep in the trail: it must
+      // fall back to the roots rather than keep fetching with a dead session.
+      container.read(_sourcesProvider.notifier).state =
+          <FolderBrowsableMusicSource>[];
+      await tester.pumpAndSettle();
+
+      expect(find.text('No server folders available'), findsOneWidget);
+    });
+  });
+}
+
+/// Stands in for the connected-sources list so a test can sign a server out
+/// mid-flight.
+final _sourcesProvider = StateProvider<List<FolderBrowsableMusicSource>>((ref) {
+  return const <FolderBrowsableMusicSource>[];
+});

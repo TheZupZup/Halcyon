@@ -10,29 +10,50 @@ import '../../core/models/playback_source.dart';
 import '../../core/models/playback_state.dart';
 import '../../core/models/track.dart';
 import '../../core/services/playback_source_label.dart';
+import '../../data/repositories/favorites_repository_provider.dart';
 import '../../shared/widgets/wavy_progress_indicator.dart';
 import 'cast/cast_providers.dart';
+import 'favorites_providers.dart';
 import 'player_providers.dart';
 import 'widgets/album_artwork.dart';
+import 'widgets/queue_sheet.dart';
 
 /// A compact, persistent now-playing bar shown above the bottom navigation on
-/// every main screen (Library / Playlists / Downloads / Settings).
+/// every main screen (Library / Folders / Playlists / Downloads / Settings).
 ///
 /// It renders from [playbackStateProvider] — the same single
 /// [PlaybackController] the full [PlayerScreen] and the media session use — so
 /// it never owns playback state of its own and never disappears when switching
 /// tabs. When nothing is loaded it collapses to zero height. Tapping it opens
-/// the full now-playing screen; the play/pause button delegates straight to the
+/// the full now-playing screen; the transport buttons delegate straight to the
 /// controller. A thin accent progress line rides its top edge, doubling as the
 /// separator from the content above.
+///
+/// How much transport the bar carries depends on how much room it has. A phone
+/// in portrait gets play/pause alone, as it always has; a desktop window gets
+/// the full row — favorite · previous · play/pause · next — centred between the
+/// metadata and the queue button, so skipping a track or liking one never means
+/// opening the full player first.
 class MiniPlayer extends ConsumerWidget {
   const MiniPlayer({super.key});
+
+  // Both thresholds are measured against the bar's content width (the row
+  // inside its horizontal padding), not the window, so they hold wherever the
+  // bar is hosted.
+
+  /// Below this the bar has room for play/pause and nothing else, so it looks
+  /// and behaves exactly as it did before the transport row existed.
+  static const double _favoriteBreakpoint = 360;
+
+  /// At this width — a tablet in landscape, any desktop window — the metadata
+  /// can give up the space the previous/next buttons and the queue button need.
+  static const double _transportBreakpoint = 600;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Watch only the current track (id-distinct) and its resolved source, so the
-    // ~5 Hz position ticks rebuild just the thin progress line and the play/pause
-    // button below — not the whole bar (artwork, text) on every screen, every
+    // ~5 Hz position ticks rebuild just the thin progress line and the transport
+    // buttons below — not the whole bar (artwork, text) on every screen, every
     // tick. The source changes only when the track does, so including it adds no
     // tick rebuilds. Falls back to the controller's latest state until the first
     // stream event arrives.
@@ -82,62 +103,51 @@ class MiniPlayer extends ConsumerWidget {
                   padding: const EdgeInsets.symmetric(
                     horizontal: AppSpacing.md,
                   ),
-                  child: Row(
-                    children: [
-                      // The cover carries no information the lines beside it
-                      // don't already say, so it stays out of the reading
-                      // order rather than announcing an image before them.
-                      ExcludeSemantics(
-                        child: SizedBox.square(
-                          dimension: 44,
-                          child: AlbumArtwork(
-                            artworkUri: track.artworkUri,
-                            borderRadius: BorderRadius.circular(AppRadii.sm),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: AppSpacing.md),
-                      Expanded(
-                        // One node for the whole metadata block, so the bar
-                        // announces "<title>, <artist> • <source>" once
-                        // instead of three fragments in a row. The play/pause
-                        // button stays outside it and keeps its own node.
-                        child: MergeSemantics(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                track.title,
-                                style: theme.textTheme.titleSmall?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                  child: LayoutBuilder(
+                    builder:
+                        (BuildContext context, BoxConstraints constraints) {
+                      final Widget metadata = _NowPlayingMetadata(
+                        track: track,
+                        subtitle: subtitle,
+                        sourceName: sourceName,
+                        isCasting: isCasting,
+                      );
+
+                      if (constraints.maxWidth >= _transportBreakpoint) {
+                        // Two equally weighted side columns, so the transport
+                        // sits on the window's centre line rather than
+                        // drifting with the length of the track title.
+                        return Row(
+                          children: <Widget>[
+                            Expanded(child: metadata),
+                            _Transport(
+                              track: track,
+                              showFavorite: true,
+                              showSkip: true,
+                            ),
+                            const Expanded(
+                              child: Align(
+                                alignment: AlignmentDirectional.centerEnd,
+                                child: _QueueButton(),
                               ),
-                              if (subtitle != null || sourceName != null)
-                                _MiniSubtitle(
-                                  subtitle: subtitle,
-                                  sourceName: sourceName,
-                                ),
-                            ],
+                            ),
+                          ],
+                        );
+                      }
+
+                      return Row(
+                        children: <Widget>[
+                          Expanded(child: metadata),
+                          const SizedBox(width: AppSpacing.sm),
+                          _Transport(
+                            track: track,
+                            showFavorite:
+                                constraints.maxWidth >= _favoriteBreakpoint,
+                            showSkip: false,
                           ),
-                        ),
-                      ),
-                      if (isCasting) ...[
-                        // Icon-only, and the only thing on the bar that says
-                        // the audio is going somewhere else — so it is named.
-                        Icon(
-                          Icons.cast_connected,
-                          size: 18,
-                          color: theme.colorScheme.primary,
-                          semanticLabel: 'Casting',
-                        ),
-                        const SizedBox(width: AppSpacing.sm),
-                      ],
-                      const SizedBox(width: AppSpacing.sm),
-                      const _PlayPauseButton(),
-                    ],
+                        ],
+                      );
+                    },
                   ),
                 ),
               ),
@@ -153,6 +163,105 @@ class MiniPlayer extends ConsumerWidget {
   static String? _subtitle(Track track) {
     final String label = track.artistAlbumLabel;
     return label.isEmpty ? null : label;
+  }
+}
+
+/// The bar's left column: cover, title, subtitle, and the cast indicator.
+class _NowPlayingMetadata extends StatelessWidget {
+  const _NowPlayingMetadata({
+    required this.track,
+    required this.subtitle,
+    required this.sourceName,
+    required this.isCasting,
+  });
+
+  final Track track;
+  final String? subtitle;
+  final String? sourceName;
+  final bool isCasting;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: <Widget>[
+        // The cover carries no information the lines beside it don't already
+        // say, so it stays out of the reading order rather than announcing an
+        // image before them.
+        ExcludeSemantics(
+          child: SizedBox.square(
+            dimension: 44,
+            child: AlbumArtwork(
+              artworkUri: track.artworkUri,
+              borderRadius: BorderRadius.circular(AppRadii.sm),
+            ),
+          ),
+        ),
+        const SizedBox(width: AppSpacing.md),
+        Expanded(
+          // One node for the whole metadata block, so the bar announces
+          // "<title>, <artist> • <source>" once instead of three fragments in
+          // a row. The transport buttons stay outside it and keep their own.
+          child: MergeSemantics(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  track.title,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (subtitle != null || sourceName != null)
+                  _MiniSubtitle(subtitle: subtitle, sourceName: sourceName),
+              ],
+            ),
+          ),
+        ),
+        if (isCasting) ...<Widget>[
+          const SizedBox(width: AppSpacing.sm),
+          // Icon-only, and the only thing on the bar that says the audio is
+          // going somewhere else — so it is named.
+          Icon(
+            Icons.cast_connected,
+            size: 18,
+            color: theme.colorScheme.primary,
+            semanticLabel: 'Casting',
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// The bar's transport cluster, sized to the room available:
+/// favorite · previous · play/pause · next when the window allows it, and
+/// play/pause alone on a narrow phone.
+class _Transport extends StatelessWidget {
+  const _Transport({
+    required this.track,
+    required this.showFavorite,
+    required this.showSkip,
+  });
+
+  final Track track;
+  final bool showFavorite;
+  final bool showSkip;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        if (showFavorite) _FavoriteButton(track: track),
+        if (showSkip) const _SkipButton(previous: true),
+        const _PlayPauseButton(),
+        if (showSkip) const _SkipButton(previous: false),
+      ],
+    );
   }
 }
 
@@ -248,8 +357,94 @@ class _MiniProgressBar extends ConsumerWidget {
   }
 }
 
-/// The mini-player's transport control: a spinner while a track loads, then a
-/// play/pause toggle (tinted with the warm accent) that forwards to the
+/// Likes or un-likes whatever is playing, without a trip through the full
+/// player.
+///
+/// The track handed here is the one the controller is actually playing, so it
+/// is already the provider-specific copy a favourite write has to target — no
+/// resolution step is needed the way it is on the now-playing screen, where the
+/// displayed track can come from the unified library instead.
+class _FavoriteButton extends ConsumerWidget {
+  const _FavoriteButton({required this.track});
+
+  final Track track;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    // Keyed by the provider-namespaced uri, so `jellyfin:101` and
+    // `subsonic:101` each reflect their own heart.
+    final bool isFavorite = ref.watch(isFavoriteProvider(track.uri));
+    return IconButton(
+      onPressed: () =>
+          ref.read(favoritesRepositoryProvider).setFavorite(track, !isFavorite),
+      icon: Icon(isFavorite ? Icons.favorite : Icons.favorite_border),
+      iconSize: 22,
+      // The same violet the now-playing screen's heart uses, so a liked track
+      // reads the same on both surfaces.
+      color: isFavorite
+          ? theme.colorScheme.primary
+          : theme.colorScheme.onSurface.withValues(alpha: 0.7),
+      isSelected: isFavorite,
+      tooltip: isFavorite ? 'Remove from favorites' : 'Favorite',
+    );
+  }
+}
+
+/// Previous / next, mirroring the full player's transport: they follow the live
+/// queue and grey out at its ends rather than disappearing, so the bar's layout
+/// doesn't shift as a queue plays out.
+class _SkipButton extends ConsumerWidget {
+  const _SkipButton({required this.previous});
+
+  final bool previous;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final controller = ref.watch(playbackControllerProvider);
+    // Only the one flag this button cares about, so a position tick (or the
+    // other end of the queue changing) doesn't rebuild it.
+    final bool enabled = ref.watch(
+          playbackStateProvider.select(
+            (s) => switch (s.valueOrNull) {
+              null => null,
+              final PlaybackState state =>
+                previous ? state.hasPrevious : state.hasNext,
+            },
+          ),
+        ) ??
+        (previous ? controller.state.hasPrevious : controller.state.hasNext);
+
+    return IconButton(
+      onPressed: enabled
+          ? (previous ? controller.skipToPrevious : controller.skipToNext)
+          : null,
+      icon: Icon(previous ? Icons.skip_previous : Icons.skip_next),
+      iconSize: 26,
+      tooltip: previous ? 'Previous' : 'Next',
+    );
+  }
+}
+
+/// Opens the up-next list. Desktop windows only: it is the one control here
+/// that has somewhere better to live on a phone (the full player's action row).
+class _QueueButton extends StatelessWidget {
+  const _QueueButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      onPressed: () => showQueueSheet(context),
+      icon: const Icon(Icons.queue_music_outlined),
+      iconSize: 22,
+      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
+      tooltip: 'Queue',
+    );
+  }
+}
+
+/// The mini-player's central transport control: a spinner while a track loads,
+/// then a play/pause toggle (tinted with the warm accent) that forwards to the
 /// controller. Watches the playback status itself so it stays live even though
 /// the bar around it only rebuilds when the track changes.
 class _PlayPauseButton extends ConsumerWidget {

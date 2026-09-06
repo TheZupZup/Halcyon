@@ -82,6 +82,7 @@ GoRouter _router(GlobalKey<NavigatorState> rootKey,
             '/two',
             '/three',
             '/four',
+            '/five',
           ].indexed)
             StatefulShellBranch(
               navigatorKey: branchKeys[i],
@@ -118,7 +119,7 @@ void main() {
     final GlobalKey<NavigatorState> rootKey = GlobalKey<NavigatorState>();
     final List<GlobalKey<NavigatorState>> branchKeys =
         <GlobalKey<NavigatorState>>[
-      for (int i = 0; i < 4; i++) GlobalKey<NavigatorState>(),
+      for (int i = 0; i < 5; i++) GlobalKey<NavigatorState>(),
     ];
     await tester.pumpWidget(
       ProviderScope(
@@ -137,7 +138,7 @@ void main() {
     await tester.pump();
 
     final List<String?> order = <String?>[_focusedLabel(tester)];
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < 8; i++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.tab);
       await tester.pump();
       order.add(_focusedLabel(tester));
@@ -151,6 +152,7 @@ void main() {
     );
     expect(order.skip(4), <String>[
       'Library',
+      'Folders',
       'Playlists',
       'Downloads',
       'Settings',
@@ -161,7 +163,7 @@ void main() {
     final GlobalKey<NavigatorState> rootKey = GlobalKey<NavigatorState>();
     final List<GlobalKey<NavigatorState>> branchKeys =
         <GlobalKey<NavigatorState>>[
-      for (int i = 0; i < 4; i++) GlobalKey<NavigatorState>(),
+      for (int i = 0; i < 5; i++) GlobalKey<NavigatorState>(),
     ];
     await tester.pumpWidget(
       ProviderScope(
@@ -193,7 +195,7 @@ void main() {
     final GlobalKey<NavigatorState> rootKey = GlobalKey<NavigatorState>();
     final List<GlobalKey<NavigatorState>> branchKeys =
         <GlobalKey<NavigatorState>>[
-      for (int i = 0; i < 4; i++) GlobalKey<NavigatorState>(),
+      for (int i = 0; i < 5; i++) GlobalKey<NavigatorState>(),
     ];
     await tester.pumpWidget(
       ProviderScope(
@@ -230,7 +232,7 @@ void main() {
     final GlobalKey<NavigatorState> rootKey = GlobalKey<NavigatorState>();
     final List<GlobalKey<NavigatorState>> branchKeys =
         <GlobalKey<NavigatorState>>[
-      for (int i = 0; i < 4; i++) GlobalKey<NavigatorState>(),
+      for (int i = 0; i < 5; i++) GlobalKey<NavigatorState>(),
     ];
     await tester.pumpWidget(
       ProviderScope(
@@ -254,7 +256,7 @@ void main() {
     await tester.pump();
 
     final List<String?> order = <String?>[_focusedLabel(tester)];
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < 8; i++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.tab);
       await tester.pump();
       order.add(_focusedLabel(tester));
@@ -269,6 +271,7 @@ void main() {
     );
     expect(order.skip(4), <String>[
       'Library',
+      'Folders',
       'Playlists',
       'Downloads',
       'Settings',

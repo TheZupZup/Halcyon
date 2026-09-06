@@ -7,6 +7,7 @@ import '../features/downloads/downloads_screen.dart';
 import '../features/favorites/favorites_screen.dart';
 import '../features/library/album_detail_screen.dart';
 import '../features/library/artist_detail_screen.dart';
+import '../features/library/folders_screen.dart';
 import '../features/library/library_screen.dart';
 import '../features/onboarding/onboarding_controller.dart';
 import '../features/onboarding/onboarding_screen.dart';
@@ -35,6 +36,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   final List<GlobalKey<NavigatorState>> branchNavigatorKeys =
       <GlobalKey<NavigatorState>>[
     GlobalKey<NavigatorState>(debugLabel: 'libraryBranch'),
+    GlobalKey<NavigatorState>(debugLabel: 'foldersBranch'),
     GlobalKey<NavigatorState>(debugLabel: 'playlistsBranch'),
     GlobalKey<NavigatorState>(debugLabel: 'downloadsBranch'),
     GlobalKey<NavigatorState>(debugLabel: 'settingsBranch'),
@@ -91,6 +93,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             navigatorKey: branchNavigatorKeys[1],
             routes: [
               GoRoute(
+                path: AppRoutes.folders,
+                builder: (context, state) => const FoldersScreen(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            navigatorKey: branchNavigatorKeys[2],
+            routes: [
+              GoRoute(
                 path: AppRoutes.playlists,
                 builder: (context, state) => const PlaylistsScreen(),
                 routes: [
@@ -121,7 +132,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ],
           ),
           StatefulShellBranch(
-            navigatorKey: branchNavigatorKeys[2],
+            navigatorKey: branchNavigatorKeys[3],
             routes: [
               GoRoute(
                 path: AppRoutes.downloads,
@@ -130,7 +141,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ],
           ),
           StatefulShellBranch(
-            navigatorKey: branchNavigatorKeys[3],
+            navigatorKey: branchNavigatorKeys[4],
             routes: [
               GoRoute(
                 path: AppRoutes.settings,
