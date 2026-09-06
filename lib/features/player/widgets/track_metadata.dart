@@ -25,12 +25,10 @@ class TrackMetadata extends StatelessWidget {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final TextScaler scaler = MediaQuery.textScalerOf(context);
-    final bool shortLargeText = MediaQuery.sizeOf(context).height <= 640 &&
-        scaler.scale(1) >= 1.5;
-    final Color muted =
-        theme.colorScheme.onSurface.withValues(alpha: 0.75);
-    final Color fainter =
-        theme.colorScheme.onSurface.withValues(alpha: 0.5);
+    final bool shortLargeText =
+        MediaQuery.sizeOf(context).height <= 640 && scaler.scale(1) >= 1.5;
+    final Color muted = theme.colorScheme.onSurface.withValues(alpha: 0.75);
+    final Color fainter = theme.colorScheme.onSurface.withValues(alpha: 0.5);
     final bool hasArtist = artistName != null && artistName!.isNotEmpty;
     final bool hasAlbum = albumName != null && albumName!.isNotEmpty;
 
