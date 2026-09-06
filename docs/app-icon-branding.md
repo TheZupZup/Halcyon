@@ -236,17 +236,25 @@ byte-for-byte identical (verify with `sha256sum`); only the
 
 ### Linux / Flatpak icon
 
-Linux packaging does not rasterise anything. The Flatpak installs the
-**canonical vector source itself** —
+The Flatpak installs the **canonical vector source itself** —
 [`tool/branding/linthra_icon.svg`](../tool/branding/linthra_icon.svg), the
 classic mark that `generate_icons.py` renders the Android assets from — as
 `share/icons/hicolor/scalable/apps/io.github.thezupzup.linthra.svg`, the
 icon-theme name the desktop entry's `Icon=` looks up
 (see [`flatpak/README.md`](../flatpak/README.md) §"Application icon").
 
+Alongside it, `generate_icons.py` also renders that same mark into
+`linux/packaging/icons/hicolor/<size>x<size>/apps/io.github.thezupzup.linthra.png`
+for 48, 64, 128 and 256. Launchers resolve the SVG; the *window* icon cannot,
+because GTK builds X11's `_NET_WM_ICON` through gdk-pixbuf, which no longer
+carries an SVG loader. Those PNGs are what the packaged window's icon actually
+comes from.
+
 So there is one brand mark and no packaging-only copy: keep the SVG and the
 `generate_icons.py` constants in step, as the file's own header already says,
-and Linux follows Android automatically. The variant switching above is
+and Linux follows Android automatically. Regenerate the whole set
+(`python3 tool/branding/generate_icons.py`) whenever the mark changes;
+`scripts/check_linux_runner.py` fails if a size is missing or uninstalled. The variant switching above is
 **Android-only** — the desktop icon is always Classic, matching the desktop's
 "one icon per installed app" model, and nothing on this page changes when the
 Linux icon does.

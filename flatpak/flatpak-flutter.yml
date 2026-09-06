@@ -342,18 +342,36 @@ modules:
       # is no packaging-only duplicate to drift, exactly like the desktop entry
       # above.
       #
-      # One scalable SVG and nothing else. `hicolor` is the fallback theme every
-      # icon theme inherits from, `scalable/apps` is where an app's own
-      # resolution-independent icon belongs, and the basename *is* the icon-theme
-      # name the entry's `Icon=` looks up. A vector is sharp at every launcher
-      # size and every HiDPI scale factor by construction, so raster fallbacks
-      # would be dozens of files that can only be worse. scripts/check_linux_runner.py
-      # asserts this path, this basename and `Icon=` agree, in both manifests.
+      # `hicolor` is the fallback theme every icon theme inherits from,
+      # `scalable/apps` is where an app's own resolution-independent icon
+      # belongs, and the basename *is* the icon-theme name the entry's `Icon=`
+      # looks up. scripts/check_linux_runner.py asserts these paths, this
+      # basename and `Icon=` agree, in both manifests.
       #
       # flatpak-builder exports `/app/share/icons/hicolor/**` whose basename
       # starts with the app id at `finish` time, the same rule as the desktop
       # entry — so this needs no `rename-icon` either.
       - install -Dm644 tool/branding/linthra_icon.svg /app/share/icons/hicolor/scalable/apps/io.github.thezupzup.linthra.svg
+      # The raster half of the same icon (#436). A launcher resolves the SVG
+      # above at whatever size it likes, but the *window* icon cannot: GTK
+      # builds X11's `_NET_WM_ICON` by asking gdk-pixbuf to decode what the
+      # icon theme hands it, and gdk-pixbuf has no SVG loader of its own —
+      # librsvg's pixbuf module is obsolete and its replacement (glycin) is not
+      # wired into GTK 3's icon-theme path in org.gnome.Platform. With only a
+      # scalable icon installed the lookup produces nothing, GTK sets no icon
+      # list at all, and the window ships with no `_NET_WM_ICON` for panels,
+      # task switchers and window lists to read — which is exactly what
+      # scripts/flatpak_launch_smoke.sh caught. PNG is decoded by a loader built
+      # into gdk-pixbuf itself, so these always resolve, and GTK prefers an
+      # exact fixed-size match over a scalable one, so nothing else changes.
+      #
+      # Rasterised from the same source design by tool/branding/generate_icons.py
+      # (`python3 tool/branding/generate_icons.py`), like the Android launcher
+      # mipmaps — still no second brand mark, just a second encoding of the one.
+      - install -Dm644 linux/packaging/icons/hicolor/48x48/apps/io.github.thezupzup.linthra.png /app/share/icons/hicolor/48x48/apps/io.github.thezupzup.linthra.png
+      - install -Dm644 linux/packaging/icons/hicolor/64x64/apps/io.github.thezupzup.linthra.png /app/share/icons/hicolor/64x64/apps/io.github.thezupzup.linthra.png
+      - install -Dm644 linux/packaging/icons/hicolor/128x128/apps/io.github.thezupzup.linthra.png /app/share/icons/hicolor/128x128/apps/io.github.thezupzup.linthra.png
+      - install -Dm644 linux/packaging/icons/hicolor/256x256/apps/io.github.thezupzup.linthra.png /app/share/icons/hicolor/256x256/apps/io.github.thezupzup.linthra.png
       # AppStream metainfo (#435). Software centres and later Flathub read
       # `/app/share/metainfo/<app-id>.metainfo.xml`; flatpak-builder exports
       # that directory at `finish` time under the same app-id-prefix rule as

@@ -118,6 +118,10 @@ modules:
       - ln -s ../lib/linthra/linthra /app/bin/linthra
       - install -Dm644 linux/packaging/io.github.thezupzup.linthra.desktop /app/share/applications/io.github.thezupzup.linthra.desktop
       - install -Dm644 tool/branding/linthra_icon.svg /app/share/icons/hicolor/scalable/apps/io.github.thezupzup.linthra.svg
+      - install -Dm644 linux/packaging/icons/hicolor/48x48/apps/io.github.thezupzup.linthra.png /app/share/icons/hicolor/48x48/apps/io.github.thezupzup.linthra.png
+      - install -Dm644 linux/packaging/icons/hicolor/64x64/apps/io.github.thezupzup.linthra.png /app/share/icons/hicolor/64x64/apps/io.github.thezupzup.linthra.png
+      - install -Dm644 linux/packaging/icons/hicolor/128x128/apps/io.github.thezupzup.linthra.png /app/share/icons/hicolor/128x128/apps/io.github.thezupzup.linthra.png
+      - install -Dm644 linux/packaging/icons/hicolor/256x256/apps/io.github.thezupzup.linthra.png /app/share/icons/hicolor/256x256/apps/io.github.thezupzup.linthra.png
       - install -Dm644 linux/packaging/io.github.thezupzup.linthra.metainfo.xml /app/share/metainfo/io.github.thezupzup.linthra.metainfo.xml
     sources:
       - type: dir

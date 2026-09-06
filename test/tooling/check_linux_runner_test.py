@@ -32,6 +32,7 @@ Everything is offline. No network, no git, no repository writes.
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import sys
 import tempfile
@@ -222,6 +223,10 @@ modules:
       - install -d /app/bin
       - install -Dm644 linux/packaging/{app_id}.desktop /app/share/applications/{app_id}.desktop
       - install -Dm644 tool/branding/linthra_icon.svg /app/share/icons/hicolor/scalable/apps/{app_id}.svg
+      - install -Dm644 linux/packaging/icons/hicolor/48x48/apps/{app_id}.png /app/share/icons/hicolor/48x48/apps/{app_id}.png
+      - install -Dm644 linux/packaging/icons/hicolor/64x64/apps/{app_id}.png /app/share/icons/hicolor/64x64/apps/{app_id}.png
+      - install -Dm644 linux/packaging/icons/hicolor/128x128/apps/{app_id}.png /app/share/icons/hicolor/128x128/apps/{app_id}.png
+      - install -Dm644 linux/packaging/icons/hicolor/256x256/apps/{app_id}.png /app/share/icons/hicolor/256x256/apps/{app_id}.png
       - install -Dm644 linux/packaging/{app_id}.metainfo.xml /app/share/metainfo/{app_id}.metainfo.xml
 """
 
@@ -230,6 +235,21 @@ modules:
 ICON_INSTALL_LINE = (
     "      - install -Dm644 tool/branding/linthra_icon.svg "
     "/app/share/icons/hicolor/scalable/apps/{app_id}.svg\n"
+)
+
+# The raster sizes the checker requires alongside the scalable icon, and the
+# install step for one of them — the window icon's half of the same set.
+RASTER_ICON_SIZES = (48, 64, 128, 256)
+RASTER_ICON_INSTALL_LINE = (
+    "      - install -Dm644 linux/packaging/icons/hicolor/{size}x{size}/apps/{app_id}.png "
+    "/app/share/icons/hicolor/{size}x{size}/apps/{app_id}.png\n"
+)
+
+# A one-pixel PNG: the checker only asks whether each raster exists, so the
+# fixture writes the smallest real file rather than rendering the brand mark.
+ONE_PIXEL_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmM"
+    "IQAAAABJRU5ErkJggg=="
 )
 
 METAINFO_XML = """\
@@ -267,6 +287,7 @@ def build_checkout(
     flatpak_manifest: str | None = None,
     icon_svg: str | None = None,
     write_icon: bool = True,
+    write_raster_icons: bool = True,
     runner_cmakelists: str | None = None,
     folder_picker_channel: str | None = None,
     folder_picker_dart: str | None = None,
@@ -357,6 +378,20 @@ def build_checkout(
         (directory / "tool" / "branding" / "linthra_icon.svg").write_text(
             icon_svg if icon_svg is not None else ICON_SVG, encoding="utf-8"
         )
+    if write_raster_icons:
+        for size in RASTER_ICON_SIZES:
+            raster = (
+                directory
+                / "linux"
+                / "packaging"
+                / "icons"
+                / "hicolor"
+                / f"{size}x{size}"
+                / "apps"
+                / f"{APP_ID}.png"
+            )
+            raster.parent.mkdir(parents=True, exist_ok=True)
+            raster.write_bytes(ONE_PIXEL_PNG)
     (packaging / f"{APP_ID}.metainfo.xml").write_text(
         METAINFO_XML.format(app_id=APP_ID, display_name=DISPLAY_NAME),
         encoding="utf-8",
@@ -947,9 +982,11 @@ class IconInstallTest(CheckoutCase):
         self.assertIn(f"Icon={APP_ID}", problems[0])
 
     def test_renaming_the_entrys_icon_is_caught_on_both_sides(self) -> None:
-        # The mirror image: `Icon=` changes and the install step does not. The
-        # entry check reports the identity break, the icon check reports that
-        # nothing installs a file answering to the new name.
+        # The mirror image: `Icon=` changes and the install steps do not. The
+        # entry check reports the identity break, and the icon check reports
+        # that nothing installs a file answering to the new name — for the
+        # scalable icon in both manifests, and for every raster size, which is
+        # neither generated nor installed under the new name either.
         build_checkout(
             self.root,
             desktop_entry=DESKTOP_ENTRY.format(
@@ -957,12 +994,46 @@ class IconInstallTest(CheckoutCase):
             ).replace(f"Icon={APP_ID}", "Icon=exampleapp"),
         )
         problems = checker.check(self.root)
-        self.assertEqual(len(problems), 3)
         self.assertTrue(any("Icon=" in problem for problem in problems))
         self.assertEqual(
             2,
             sum("apps/exampleapp.svg" in problem for problem in problems),
         )
+        for size in RASTER_ICON_SIZES:
+            # One missing source, plus one uninstalled step per manifest.
+            self.assertEqual(
+                3,
+                sum(
+                    f"{size}x{size}/apps/exampleapp.png" in problem
+                    for problem in problems
+                ),
+                f"{size}x{size} raster not reported",
+            )
+
+    def test_a_missing_raster_icon_is_caught(self) -> None:
+        # The rasters are what GTK actually decodes into _NET_WM_ICON, so a
+        # brand change that regenerates the SVG but not the PNG set has to be
+        # caught here rather than in a Flatpak smoke run.
+        build_checkout(self.root, write_raster_icons=False)
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), len(RASTER_ICON_SIZES))
+        for problem in problems:
+            self.assertIn("generate_icons.py", problem)
+
+    def test_a_generated_manifest_that_lost_a_raster_is_caught(self) -> None:
+        # The same regenerate-and-forget drift as the desktop entry and the
+        # scalable icon, one size at a time.
+        build_checkout(
+            self.root,
+            flatpak_manifest=FLATPAK_MANIFEST.format(
+                app_id=APP_ID, binary=BINARY
+            ).replace(RASTER_ICON_INSTALL_LINE.format(size=128, app_id=APP_ID), ""),
+        )
+        problems = checker.check(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn(f"flatpak/{APP_ID}.yml", problems[0])
+        self.assertIn("128x128", problems[0])
+        self.assertIn("_NET_WM_ICON", problems[0])
 
     def test_installing_outside_the_icon_theme_is_caught(self) -> None:
         # /app/share/icons/<app-id>.svg is not in any theme, so no launcher
