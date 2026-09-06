@@ -653,5 +653,5 @@ VercodeOperation:
   - "%c*10 + 3"
 UpdateCheckData: pubspec.yaml|version:\s*[^+]+\+(\d+)|.|version:\s*([^\+]+)\+
 
-CurrentVersion: 0.1.10
-CurrentVersionCode: 1109993
+CurrentVersion: 0.2.5
+CurrentVersionCode: 2059993
