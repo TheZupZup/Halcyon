@@ -81,6 +81,9 @@ name into the icon theme:
 ```
 install -Dm644 tool/branding/linthra_icon.svg \
   /app/share/icons/hicolor/scalable/apps/io.github.thezupzup.linthra.svg
+install -Dm644 linux/packaging/icons/hicolor/48x48/apps/io.github.thezupzup.linthra.png \
+  /app/share/icons/hicolor/48x48/apps/io.github.thezupzup.linthra.png
+# ... and the same for 64, 128 and 256.
 ```
 
 Three decisions worth stating:
@@ -92,10 +95,21 @@ Three decisions worth stating:
   violet→orange gradient. Nothing here redraws or re-exports it, so there is no
   packaging-only copy that can drift from the brand, exactly as with the
   desktop entry above. Android's icon pipeline is untouched by this.
-* **One scalable SVG and no rasters.** A vector is sharp at every launcher size
-  and every HiDPI scale factor by construction, so a set of PNG fallbacks could
-  only be larger and worse. `hicolor` is the theme every icon theme inherits
-  from, and `scalable/apps` is where an application's own icon belongs.
+* **A scalable SVG for launchers, PNGs for the window icon.** `hicolor` is the
+  theme every icon theme inherits from, `scalable/apps` is where an
+  application's own resolution-independent icon belongs, and a vector is sharp
+  at every launcher size and HiDPI scale by construction. The window icon is a
+  different story: GTK builds X11's `_NET_WM_ICON` by asking gdk-pixbuf to
+  decode whatever the icon theme hands it, and gdk-pixbuf has no SVG loader —
+  librsvg's pixbuf module is obsolete and glycin, its replacement, is not wired
+  into GTK 3's icon-theme path in `org.gnome.Platform`. With only the SVG
+  installed the lookup produced nothing, GTK set no icon list, and the packaged
+  window carried no `_NET_WM_ICON` for panels and task switchers to read (caught
+  by `scripts/flatpak_launch_smoke.sh`). The PNGs in
+  `linux/packaging/icons/hicolor/` fix that: `generate_icons.py` rasterises them
+  from the same source design, gdk-pixbuf's built-in PNG loader always decodes
+  them, and GTK prefers an exact fixed-size match over a scalable one, so
+  launcher rendering is unchanged.
 * **No `rename-icon`.** flatpak-builder exports `/app/share/icons/hicolor/**`
   by the same rule it exports desktop files — the basename must start with the
   app id — and this basename *is* the app id.
