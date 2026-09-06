@@ -1,9 +1,6 @@
 Linthra 0.2.5
 
-- Adds a persistent desktop navigation shell on Linux, so the sidebar stays put on wide windows.
-- Adapts album, artist, and Now Playing layouts to large screens, with denser grids and side-by-side detail views.
-- Puts playback controls on the now-playing bar and promotes Folders to a top-level destination.
-- Fixes the Linux window identity and app icon so launchers and task switchers show Linthra correctly.
-- Shows device-wide music access on Android as an explicit, separate choice from picking a folder.
+- Using your whole device music library is now an explicit choice, separate from picking a folder.
 - Fixes Android Auto stalling on the Songs list with large libraries.
 - Reports Jellyfin as unavailable when the server cannot be reached, instead of always connected.
+- Adds a persistent desktop navigation shell on Linux, with layouts that adapt to large windows.
