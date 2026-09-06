@@ -35,7 +35,7 @@ void main() {
   // both of these are readable as X properties on the packaged app.
   test('launch smoke holds the packaged window to the application id', () {
     expect(smoke, contains('xprop is not installed'));
-    expect(smoke, contains(r'xprop -id "$window_id" WM_CLASS'));
+    expect(smoke, contains(r'wait_for_property "$window_id" WM_CLASS'));
     expect(
       smoke,
       contains(r'expected="WM_CLASS(STRING) = \"$APP_ID\", \"$APP_ID\""'),
@@ -43,8 +43,20 @@ void main() {
   });
 
   test('launch smoke requires the packaged window to carry its icon', () {
-    expect(smoke, contains(r'xprop -id "$window_id" _NET_WM_ICON'));
+    expect(smoke, contains(r'wait_for_property "$window_id" _NET_WM_ICON'));
     expect(smoke, contains('carries no _NET_WM_ICON'));
+  });
+
+  // The window enters the X tree before GTK has finished realizing it: the
+  // title and WM_CLASS come from gdk_window_new(), while the icon is set at the
+  // end of gtk_window_realize() after the icon-theme lookup. Reading a property
+  // once raced that gap and failed the Flatpak build on main, so every property
+  // read has to poll to the same deadline as the window itself.
+  test('launch smoke waits for window properties instead of sampling once', () {
+    expect(smoke, contains('wait_for_property()'));
+    expect(smoke, contains(r'xprop -id "$1" "$2"'));
+    expect(smoke, contains(r'local deadline=$((SECONDS + TIMEOUT_SECONDS))'));
+    expect(smoke, contains(r'(( SECONDS < deadline )) || break'));
   });
 
   test('launch smoke re-checks identity after a close and reopen', () {
