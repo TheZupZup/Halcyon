@@ -6,12 +6,14 @@ import 'package:path/path.dart' as p;
 /// Guards Linthra's active/current license declarations against metadata drift.
 ///
 /// Historical releases and docs/licenses/MPL-2.0.txt intentionally remain MPL.
-/// F-Droid metadata is also intentionally still MPL until the first
-/// post-transition release is added there, because its current Builds entries
-/// all point at pre-transition source commits.
+/// F-Droid metadata was intentionally still MPL until the first post-transition
+/// release was added there. v0.2.5 is that release: its CurrentVersion is cut
+/// from an AGPL source commit, so per docs/license-transition.md the `License:`
+/// field moved to AGPL-3.0-or-later in the same change. The historical `Builds`
+/// entries still name their pre-transition versions and are not relabelled.
 void main() {
   const String current = 'AGPL-3.0-or-later';
-  const String fdroidHistorical = 'MPL-2.0';
+  const String previous = 'MPL-2.0';
   const String agpl = 'GNU AFFERO GENERAL PUBLIC LICENSE';
   const String mpl = 'Mozilla Public License Version 2.0';
   const String storeLicense = 'GNU Affero General Public License v3.0 or later';
@@ -39,8 +41,17 @@ void main() {
     historical = _read(root, 'docs/licenses/MPL-2.0.txt');
   });
 
-  test('F-Droid metadata stays MPL while it points at MPL release commits', () {
-    expect(_hasLine(fdroid, 'License: $fdroidHistorical'), isTrue);
+  test(
+      'F-Droid metadata names the current license once it points at an '
+      'AGPL release', () {
+    expect(_hasLine(fdroid, 'License: $current'), isTrue);
+    expect(_hasLine(fdroid, 'License: $previous'), isFalse);
+  });
+
+  test('F-Droid metadata does not relabel its historical Builds entries', () {
+    // The Builds block records the versions F-Droid actually built, all of
+    // them pre-transition. Advancing CurrentVersion must not rewrite them.
+    expect(fdroid, contains('versionName: 0.1.0-alpha.40'));
   });
 
   test('Rust metadata keeps the current license', () {

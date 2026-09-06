@@ -1,7 +1,7 @@
 Categories:
   - Local Media Player
   - Online Media Player
-License: MPL-2.0
+License: AGPL-3.0-or-later
 AuthorName: TheZupZup
 SourceCode: https://github.com/TheZupZup/Linthra
 IssueTracker: https://github.com/TheZupZup/Linthra/issues
@@ -653,5 +653,5 @@ VercodeOperation:
   - "%c*10 + 3"
 UpdateCheckData: pubspec.yaml|version:\s*[^+]+\+(\d+)|.|version:\s*([^\+]+)\+
 
-CurrentVersion: 0.1.10
-CurrentVersionCode: 1109993
+CurrentVersion: 0.2.5
+CurrentVersionCode: 2059993

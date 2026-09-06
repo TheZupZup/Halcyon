@@ -1,0 +1,6 @@
+Linthra 0.2.5
+
+- Using your whole device music library is now an explicit choice, separate from picking a folder.
+- Fixes Android Auto stalling on the Songs list with large libraries.
+- Reports Jellyfin as unavailable when the server cannot be reached, instead of always connected.
+- Adds a persistent desktop navigation shell on Linux, with layouts that adapt to large windows.

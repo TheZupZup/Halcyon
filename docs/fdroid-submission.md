@@ -271,10 +271,15 @@ the maintainer asked for.
 
 > **License note.** Linthra's current source is AGPL-3.0-or-later, but this
 > historical submission template targets `v0.1.0-alpha.30`, which was published
-> under MPL-2.0. The template below therefore intentionally says MPL-2.0. The
-> first F-Droid update that points at a post-`v0.2.4` release must switch the
-> recipe/metadata `License:` field and this submission text to AGPL-3.0-or-later
-> in the same change.
+> under MPL-2.0. The template below therefore intentionally says MPL-2.0.
+>
+> This repository's own `metadata/io.github.thezupzup.linthra.yml` already made
+> the cutover: the v0.2.5 release update advanced `CurrentVersion` past
+> `v0.2.4` and set `License: AGPL-3.0-or-later` in the same change (see
+> [license-transition.md](./license-transition.md)). **Still to do:** the
+> external `fdroiddata` recipe's `License:` field and this submission text must
+> be switched to AGPL-3.0-or-later when the F-Droid update pointing at v0.2.5
+> or later is filed.
 
 ---
 

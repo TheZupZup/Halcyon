@@ -20,10 +20,12 @@ class WhatsNewSection extends StatelessWidget {
   /// handful of concise bullets and updated when cutting a new build; exposed so
   /// the widget test can assert each line renders without duplicating the copy.
   static const List<String> releaseNotes = <String>[
-    'Linux Flatpak packaging has advanced with a self-contained audio runtime, launcher entry, and scalable icon.',
-    'Desktop shutdown now waits for app-owned resources to close cleanly instead of leaving teardown in flight.',
-    'Keyboard and assistive-technology support is improved across playback, queue, cast, and source controls.',
-    'The mini-player stays usable with larger text, and repository release/security safeguards are substantially stronger.',
+    'The Linux desktop app now keeps its navigation beside the content on wide windows, and each section remembers where you were.',
+    'Album and artist grids fit more on screen, and album, artist, Now Playing and lyrics views use the whole width instead of one stretched column.',
+    'Playback controls sit on the now-playing bar when there is room, and Folders is now a top-level destination of its own.',
+    'Resizing the window keeps your place, and the Linux app identifies itself properly to desktop launchers and task switchers.',
+    'On Android, using your whole device music library is now an explicit choice, and Android Auto no longer stalls on large Songs lists.',
+    'Jellyfin now reports as unavailable when the server cannot be reached, instead of looking connected while playback fails.',
   ];
 
   @override
