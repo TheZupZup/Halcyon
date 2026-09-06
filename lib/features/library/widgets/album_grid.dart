@@ -4,42 +4,41 @@ import '../../../app/dimens.dart';
 import '../../../core/models/album.dart';
 import 'album_grid_card.dart';
 
-/// Narrowest a card may get before the grid drops a column. Two cards plus the
-/// gutters still fit comfortably on the narrowest phones we support, which is
-/// why [albumGridColumnCount] never returns fewer than [_minColumns].
+/// Narrowest a desktop album card should get before the grid drops a column.
+///
+/// Phones deliberately keep two columns even when that means smaller cards;
+/// this lower bound governs when wider layouts are allowed to add columns.
 const double _minCardWidth = 200;
 
 /// Widest a card may get before the grid adds a column instead.
 ///
 /// This is what keeps a desktop window from reading as a stretched phone: past
-/// this width the extra space buys another album, not a bigger cover. Without
-/// it a 2560 px window rendered six ~400 px cards — the same mobile grid, just
-/// inflated.
+/// this width the extra space buys another album, not a bigger cover.
 const double _maxCardWidth = 260;
 
-/// Phones (and anything narrower than two comfortable cards) get exactly two
-/// columns; the upper bound is a sanity stop for absurd widths rather than a
-/// design limit — every monitor Linthra realistically runs on is sized by
-/// [_maxCardWidth] well before it.
 const int _minColumns = 2;
-const int _maxColumns = 12;
+const double _gridGutter = AppSpacing.md;
 
-/// Columns for [width] logical pixels of *content* width — the space left for
-/// the cards themselves, gutters included, after the grid's own padding.
+/// Columns for [width] logical pixels of content width after the grid's outer
+/// padding. The width still includes the gutters between cards.
 ///
-/// Two on a phone; a column is added as soon as one more card fits at
-/// [_minCardWidth], and columns keep being added while cards would otherwise
-/// grow past [_maxCardWidth]. Pure so the breakpoints can be tested without
-/// pumping a widget.
+/// A candidate column only counts as fitting once both its minimum card width
+/// and the gutters before it fit. Conversely, columns keep being added whenever
+/// the resulting cards would exceed [_maxCardWidth]. There is no arbitrary
+/// desktop cap: a 4K window simply gets as many columns as its available width
+/// calls for.
 int albumGridColumnCount(double width) {
   if (!width.isFinite || width <= 0) return _minColumns;
-  // As many as still fit at the narrow bound, and as many as it takes to keep
-  // cards under the wide one. The narrow bound wins where they disagree, so a
-  // card is never squeezed below [_minCardWidth] just to add a column.
-  final int fits = (width / _minCardWidth).floor();
-  final int dense = (width / _maxCardWidth).ceil();
+
+  // For n columns, cardWidth = (width - gutter * (n - 1)) / n.
+  // Rearranging that expression gives the two bounds below while accounting
+  // for every inter-card gutter.
+  final int fits =
+      ((width + _gridGutter) / (_minCardWidth + _gridGutter)).floor();
+  final int dense =
+      ((width + _gridGutter) / (_maxCardWidth + _gridGutter)).ceil();
   final int columns = dense < fits ? dense : fits;
-  return columns.clamp(_minColumns, _maxColumns);
+  return columns < _minColumns ? _minColumns : columns;
 }
 
 /// The Albums tab body: a responsive grid of [AlbumGridCard]s.
@@ -53,22 +52,21 @@ class AlbumGrid extends StatelessWidget {
   final List<Album> albums;
   final void Function(Album album) onOpen;
 
-  static const double _gutter = AppSpacing.md;
-
   @override
   Widget build(BuildContext context) {
     final double labelExtent = AlbumGridCard.labelExtent(context);
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        final double content = constraints.maxWidth - _gutter * 2;
+        final double content = constraints.maxWidth - _gridGutter * 2;
         final int columns = albumGridColumnCount(content);
-        final double cardWidth = (content - _gutter * (columns - 1)) / columns;
+        final double cardWidth =
+            (content - _gridGutter * (columns - 1)) / columns;
         return GridView.builder(
           key: const Key('library_album_grid'),
-          padding: const EdgeInsets.all(_gutter),
+          padding: const EdgeInsets.all(_gridGutter),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: columns,
-            crossAxisSpacing: _gutter,
+            crossAxisSpacing: _gridGutter,
             mainAxisSpacing: AppSpacing.lg,
             mainAxisExtent: cardWidth + labelExtent,
           ),
