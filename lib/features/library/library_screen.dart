@@ -27,15 +27,14 @@ import 'unified_library_providers.dart';
 import 'widgets/album_grid.dart';
 import 'widgets/alphabet_track_list.dart';
 import 'widgets/artist_grid.dart';
-import 'widgets/folder_browser_tab.dart';
 import 'widgets/library_search_field.dart';
 
-/// Browse the catalog across Songs, Albums, Artists, and provider folders.
+/// Browse the de-duplicated catalog across Songs, Albums and Artists.
 ///
-/// The first three tabs read the de-duplicated local catalog and share one
-/// search box. Folders is an on-demand view of the real hierarchy exposed by a
-/// connected Jellyfin or Navidrome/Subsonic server, so it does not require the
-/// directory tree to be persisted or recursively synced first.
+/// All three tabs read the same local catalog and share one search box. The
+/// server's real directory hierarchy is not here: it lives on its own top-level
+/// [FoldersScreen] destination, so it keeps its place in the tree when you
+/// leave it.
 ///
 /// Songs keeps the long-press multi-select and the A–Z fast-scroller from
 /// before. Switching tabs clears the query, so a search meant for one tab never
@@ -68,7 +67,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     _tabController.addListener(_onTabChanged);
   }
 
@@ -186,7 +185,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         Tab(text: 'Songs'),
         Tab(text: 'Albums'),
         Tab(text: 'Artists'),
-        Tab(text: 'Folders'),
       ],
     );
   }
@@ -223,10 +221,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     }
   }
 
-  /// Catalog search + four browse tabs. Folders performs its own hierarchical
-  /// navigation, so the flat-catalog search field is hidden on that tab.
+  /// Catalog search + the three browse tabs.
   Widget _browseBody(List<Track> songs, List<String> syncingSources) {
-    final bool foldersTab = _tabController.index == 3;
     // A connected folder-capable server (Jellyfin, Navidrome/Subsonic) shows the
     // tabs the moment it connects, so its *first* sync lands here rather than in
     // [_statusBody]. Pass the syncing sources down so the catalog tabs say
@@ -234,21 +230,20 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     final String? syncHeadline = syncingHeadline(syncingSources);
     return Column(
       children: <Widget>[
-        if (!foldersTab)
-          // The box is a text input, not content: on a wide window it stops
-          // growing and stays left-aligned under the tabs rather than running
-          // the width of a monitor.
-          Align(
-            alignment: AlignmentDirectional.centerStart,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: _searchFieldMaxWidth),
-              child: LibrarySearchField(
-                controller: _searchController,
-                onChanged: _onQueryChanged,
-                onClear: _clearSearch,
-              ),
+        // The box is a text input, not content: on a wide window it stops
+        // growing and stays left-aligned under the tabs rather than running
+        // the width of a monitor.
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: _searchFieldMaxWidth),
+            child: LibrarySearchField(
+              controller: _searchController,
+              onChanged: _onQueryChanged,
+              onClear: _clearSearch,
             ),
           ),
+        ),
         Expanded(
           child: TabBarView(
             controller: _tabController,
@@ -256,7 +251,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
               _songsTab(songs, syncHeadline),
               _albumsTab(syncHeadline),
               _artistsTab(syncHeadline),
-              const FolderBrowserTab(),
             ],
           ),
         ),

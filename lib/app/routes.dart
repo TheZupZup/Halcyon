@@ -28,6 +28,11 @@ abstract final class AppRoutes {
   static String artistDetailPath(String id) =>
       '$artistDetail/${Uri.encodeComponent(id)}';
 
+  /// Server folder browsing (Jellyfin, Navidrome/Subsonic), a top-level
+  /// destination of its own so a folder you were deep inside is still open when
+  /// you come back to it from another tab.
+  static const String folders = '/folders';
+
   static const String playlists = '/playlists';
 
   /// Liked tracks, reached from the Playlists tab. A child of [playlists] so it

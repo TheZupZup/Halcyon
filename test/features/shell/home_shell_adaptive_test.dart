@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:linthra/core/models/playback_state.dart';
+import 'package:linthra/core/models/track.dart';
+import 'package:linthra/features/player/mini_player.dart';
 import 'package:linthra/features/player/player_providers.dart';
 import 'package:linthra/features/shell/home_shell.dart';
 
@@ -38,12 +41,14 @@ GoRouter _router(
 ) {
   const List<String> paths = <String>[
     '/library',
+    '/folders',
     '/playlists',
     '/downloads',
     '/settings',
   ];
   const List<String> labels = <String>[
     'Library',
+    'Folders',
     'Playlists',
     'Downloads',
     'Settings',
@@ -88,6 +93,7 @@ Future<void> _pumpShell(
   WidgetTester tester, {
   required TargetPlatform platform,
   required Size size,
+  PlaybackState playback = PlaybackState.idle,
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = size;
@@ -97,13 +103,15 @@ Future<void> _pumpShell(
   final GlobalKey<NavigatorState> rootKey = GlobalKey<NavigatorState>();
   final List<GlobalKey<NavigatorState>> branchKeys =
       <GlobalKey<NavigatorState>>[
-    for (int i = 0; i < 4; i++) GlobalKey<NavigatorState>(),
+    for (int i = 0; i < 5; i++) GlobalKey<NavigatorState>(),
   ];
 
   await tester.pumpWidget(
     ProviderScope(
       overrides: <Override>[
-        playbackControllerProvider.overrideWithValue(FakePlaybackController()),
+        playbackControllerProvider.overrideWithValue(
+          FakePlaybackController(initial: playback),
+        ),
       ],
       child: MaterialApp.router(
         theme: ThemeData(platform: platform),
@@ -136,7 +144,7 @@ void main() {
         tester
             .widget<NavigationRail>(find.byType(NavigationRail))
             .selectedIndex,
-        1,
+        2,
       );
     },
   );
@@ -162,7 +170,7 @@ void main() {
       expect(find.text('Playlists screen'), findsOneWidget);
       expect(
         tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
-        1,
+        2,
       );
 
       tester.view.physicalSize = const Size(1280, 720);
@@ -174,7 +182,7 @@ void main() {
         tester
             .widget<NavigationRail>(find.byType(NavigationRail))
             .selectedIndex,
-        1,
+        2,
       );
     },
   );
@@ -213,6 +221,33 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(NavigationRail), findsOneWidget);
       expect(find.text('Playlists detail'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'the now-playing bar spans the window, under the desktop rail',
+    (WidgetTester tester) async {
+      await _pumpShell(
+        tester,
+        platform: TargetPlatform.linux,
+        size: const Size(1280, 720),
+        playback: const PlaybackState(
+          status: PlaybackStatus.playing,
+          currentTrack: Track(id: '1', title: 'Song One', uri: 'subsonic:1'),
+        ),
+      );
+
+      // The bar is the frame's floor, not a footer inside the content column:
+      // it starts at the window's left edge, where the rail is, and runs the
+      // whole width — the shape a desktop music player has.
+      expect(find.byType(NavigationRail), findsOneWidget);
+      final Rect bar = tester.getRect(find.byType(MiniPlayer));
+      expect(bar.left, 0);
+      expect(bar.width, tester.view.physicalSize.width);
+      expect(
+        bar.top,
+        greaterThan(tester.getRect(find.byType(NavigationRail)).top),
+      );
     },
   );
 

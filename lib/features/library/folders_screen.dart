@@ -1,26 +1,35 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../app/dimens.dart';
-import '../../../core/models/music_folder.dart';
-import '../../../core/services/folder_browsable_music_source.dart';
-import '../../../shared/widgets/empty_state.dart';
-import '../folder_browser_providers.dart';
-import 'track_tile.dart';
+import '../../app/dimens.dart';
+import '../../core/models/music_folder.dart';
+import '../../core/services/folder_browsable_music_source.dart';
+import '../../shared/widgets/empty_state.dart';
+import 'folder_browser_providers.dart';
+import 'widgets/track_tile.dart';
 
 /// Browses the real directory hierarchy exposed by Jellyfin and
 /// Navidrome/Subsonic, one level at a time.
 ///
-/// Navigation stays inside the Library tab. Android's system Back first walks
-/// up the folder trail; only at the roots does it leave the screen.
-class FolderBrowserTab extends ConsumerStatefulWidget {
-  const FolderBrowserTab({super.key});
+/// A top-level destination beside Library, Playlists, Downloads and Settings,
+/// with its own navigation branch — so a folder you were three levels deep in
+/// is still open when you come back to it from another tab.
+///
+/// The hierarchy is fetched on demand, so this does not require the directory
+/// tree to be persisted or recursively synced first. With no folder-capable
+/// server connected it shows an empty state pointing at Connections rather
+/// than disappearing, so the feature is discoverable before it is usable.
+///
+/// Android's system Back first walks up the folder trail; only at the roots
+/// does it leave the screen.
+class FoldersScreen extends ConsumerStatefulWidget {
+  const FoldersScreen({super.key});
 
   @override
-  ConsumerState<FolderBrowserTab> createState() => _FolderBrowserTabState();
+  ConsumerState<FoldersScreen> createState() => _FoldersScreenState();
 }
 
-class _FolderBrowserTabState extends ConsumerState<FolderBrowserTab> {
+class _FoldersScreenState extends ConsumerState<FoldersScreen> {
   final List<_FolderLocation> _trail = <_FolderLocation>[];
 
   @override
@@ -28,9 +37,16 @@ class _FolderBrowserTabState extends ConsumerState<FolderBrowserTab> {
     final List<FolderBrowsableMusicSource> sources =
         ref.watch(folderBrowsableSourcesProvider);
 
+    return Scaffold(
+      appBar: AppBar(title: const Text('Folders')),
+      body: _body(sources),
+    );
+  }
+
+  Widget _body(List<FolderBrowsableMusicSource> sources) {
     if (_trail.isNotEmpty &&
         !sources.any((source) => source.id == _trail.last.sourceId)) {
-      // A sign-out can happen while this tab is open. Return to roots on the
+      // A sign-out can happen while this screen is open. Return to roots on the
       // next frame instead of trying to fetch with a session that no longer
       // exists (and never mutate state during build).
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -39,49 +55,41 @@ class _FolderBrowserTabState extends ConsumerState<FolderBrowserTab> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    // BackButtonListener talks directly to the Router used by go_router. A
-    // nested PopScope inside TabBarView is not reliable on every Android back
-    // implementation, while this listener can consume the physical/system
-    // Back event before the app's root route is closed.
+    if (_trail.isEmpty) {
+      // Nothing to intercept at the roots, so no listener is registered and
+      // Back behaves exactly as it does on the other top-level destinations.
+      return _FolderRoots(sources: sources, onOpen: _openRoot);
+    }
+
+    // BackButtonListener talks directly to the Router used by go_router, and
+    // can consume the physical/system Back event before the app's root route
+    // is closed — which a nested PopScope does not do reliably on every
+    // Android back implementation.
     return BackButtonListener(
       onBackButtonPressed: _handleSystemBack,
-      child: _trail.isEmpty
-          ? _FolderRoots(
-              sources: sources,
-              onOpen: _openRoot,
-            )
-          : _FolderContents(
-              location: _trail.last,
-              onBack: _goBack,
-              onOpen: _openChild,
-            ),
+      child: _FolderContents(
+        location: _trail.last,
+        onBack: _goBack,
+        onOpen: _openChild,
+      ),
     );
   }
 
-  /// Consumes Android Back only when this TabBarView page is actually visible
-  /// and there is a folder level to leave. TabBarView keeps neighbouring pages
-  /// alive off-screen, so visibility is checked from the rendered page bounds;
-  /// otherwise a hidden Folders tab could swallow Back while viewing Songs.
+  /// Consumes Android Back only when this branch is the one on screen and
+  /// there is a folder level to leave.
+  ///
+  /// The shell keeps every branch mounted inside an IndexedStack, so a Folders
+  /// screen sitting three levels deep behind the Library tab would otherwise
+  /// swallow Back while the user is looking at Library. go_router marks the
+  /// inactive branches by disabling their tickers, which is the one signal
+  /// available here that distinguishes "mounted" from "visible" — the branches
+  /// are all laid out at the same offset, so measuring bounds cannot.
   Future<bool> _handleSystemBack() async {
-    if (_trail.isEmpty || !_isVisibleInViewport()) return false;
-    _goBack();
-    return true;
-  }
-
-  bool _isVisibleInViewport() {
-    final RenderObject? renderObject = context.findRenderObject();
-    if (renderObject is! RenderBox ||
-        !renderObject.attached ||
-        !renderObject.hasSize) {
+    if (_trail.isEmpty || !TickerMode.valuesOf(context).enabled) {
       return false;
     }
-
-    final Offset topLeft = renderObject.localToGlobal(Offset.zero);
-    final Size viewport = MediaQuery.sizeOf(context);
-    return topLeft.dx < viewport.width &&
-        topLeft.dx + renderObject.size.width > 0 &&
-        topLeft.dy < viewport.height &&
-        topLeft.dy + renderObject.size.height > 0;
+    _goBack();
+    return true;
   }
 
   void _openRoot(FolderBrowsableMusicSource source, MusicFolder folder) {

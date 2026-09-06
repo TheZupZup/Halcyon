@@ -12,7 +12,7 @@ class HomeShell extends StatelessWidget {
     required this.rootNavigatorKey,
     required this.branchNavigatorKeys,
     super.key,
-  }) : assert(branchNavigatorKeys.length == 4);
+  }) : assert(branchNavigatorKeys.length == _destinations.length);
 
   final StatefulNavigationShell navigationShell;
   final GlobalKey<NavigatorState> rootNavigatorKey;
@@ -29,6 +29,14 @@ class HomeShell extends StatelessWidget {
       icon: Icon(Icons.library_music_outlined),
       selectedIcon: Icon(Icons.library_music),
       label: 'Library',
+    ),
+    // Folders sits beside Library rather than inside it: both are ways of
+    // browsing the same collection, and as its own branch the folder trail
+    // survives a trip to another tab.
+    NavigationDestination(
+      icon: Icon(Icons.folder_outlined),
+      selectedIcon: Icon(Icons.folder),
+      label: 'Folders',
     ),
     NavigationDestination(
       icon: Icon(Icons.queue_music_outlined),
@@ -120,30 +128,45 @@ class HomeShell extends StatelessWidget {
           // the 900 px breakpoint. Only the two chrome slots before it change
           // between real desktop widgets and zero-sized placeholders, so an
           // inactive branch's Navigator stack and scroll state survive resize.
+          //
+          // The mini-player sits below the whole frame rather than inside the
+          // content column, so on a desktop window the now-playing bar runs the
+          // full width under the rail — the shape every desktop music player
+          // has. On phones there is no rail, so nothing about it moves.
           return Scaffold(
             body: FocusTraversalGroup(
               policy: OrderedTraversalPolicy(),
-              child: Row(
+              child: Column(
                 children: <Widget>[
-                  if (desktop)
-                    _buildNavigationRail()
-                  else
-                    const SizedBox.shrink(),
-                  if (desktop)
-                    const VerticalDivider(width: 1)
-                  else
-                    const SizedBox.shrink(),
                   Expanded(
-                    child: FocusTraversalOrder(
-                      order: const NumericFocusOrder(1),
-                      child: FocusTraversalGroup(
-                        child: Column(
-                          children: <Widget>[
-                            Expanded(child: navigationShell),
-                            const MiniPlayer(),
-                          ],
+                    child: Row(
+                      children: <Widget>[
+                        if (desktop)
+                          _buildNavigationRail()
+                        else
+                          const SizedBox.shrink(),
+                        if (desktop)
+                          const VerticalDivider(width: 1)
+                        else
+                          const SizedBox.shrink(),
+                        Expanded(
+                          child: FocusTraversalOrder(
+                            order: const NumericFocusOrder(1),
+                            child: FocusTraversalGroup(
+                              child: navigationShell,
+                            ),
+                          ),
                         ),
-                      ),
+                      ],
+                    ),
+                  ),
+                  // Last in the reading order: the bar spans everything above
+                  // it, so a keyboard user reaches it after both the page and
+                  // the destinations, not between them.
+                  FocusTraversalOrder(
+                    order: const NumericFocusOrder(3),
+                    child: FocusTraversalGroup(
+                      child: const MiniPlayer(),
                     ),
                   ),
                 ],
