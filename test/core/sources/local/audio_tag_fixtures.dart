@@ -73,6 +73,7 @@ abstract final class AudioTagFixtures {
     String? track,
     bool albumArtistFirst = false,
     List<String> artists = const <String>[],
+    int paddingBefore = 0,
     int sampleRate = 44100,
     int totalSamples = 44100 * 3,
   }) {
@@ -93,6 +94,7 @@ abstract final class AudioTagFixtures {
       comments,
       sampleRate: sampleRate,
       totalSamples: totalSamples,
+      paddingBefore: paddingBefore,
     );
   }
 
@@ -100,6 +102,7 @@ abstract final class AudioTagFixtures {
     List<String> comments, {
     int sampleRate = 44100,
     int totalSamples = 44100 * 3,
+    int paddingBefore = 0,
   }) {
     final BytesBuilder vorbis = BytesBuilder();
     const String vendor = 'Linthra test fixture';
@@ -118,6 +121,15 @@ abstract final class AudioTagFixtures {
     file.add(<int>[0x00]); // STREAMINFO, not the last block
     file.add(_uint24be(34));
     file.add(_streamInfo(sampleRate: sampleRate, totalSamples: totalSamples));
+    if (paddingBefore > 0) {
+      // A PADDING block (type 1) standing in for the embedded cover art that
+      // real FLACs carry ahead of their comments. Its only job here is to push
+      // VORBIS_COMMENT far enough into the file to catch a reader that only
+      // looks at a fixed prefix.
+      file.add(<int>[0x01]);
+      file.add(_uint24be(paddingBefore));
+      file.add(Uint8List(paddingBefore));
+    }
     file.add(<int>[0x84]); // VORBIS_COMMENT (4), last block
     file.add(_uint24be(vorbisBlock.length));
     file.add(vorbisBlock);

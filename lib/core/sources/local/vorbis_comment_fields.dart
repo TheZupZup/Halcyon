@@ -19,15 +19,15 @@ import 'dart:typed_data';
 /// [FilesystemLocalMetadataReader] instead.
 ///
 /// Deliberately total: a non-FLAC file, a truncated header, a declared length
-/// that runs past what was read, or invalid UTF-8 all return null so the caller
+/// that runs past the file, or invalid UTF-8 all return null so the caller
 /// falls back. It never throws and never logs the path.
 class VorbisCommentFields {
   const VorbisCommentFields._();
 
-  /// Only the header region is read, never the audio. A file whose comment
-  /// block does not start within this much is treated as unreadable rather than
-  /// pulled into memory — the whole point of parsing tags instead of files.
-  static const int _maxHeaderBytes = 1 << 20; // 1 MiB
+  /// A sanity bound on the comment block itself, so a corrupt 24-bit length
+  /// cannot ask for an arbitrary allocation. Real comment blocks are a few KiB;
+  /// this is not a bound on the metadata ahead of it, which is seeked past.
+  static const int _maxCommentBlockBytes = 1 << 20; // 1 MiB
 
   /// Comments keyed by upper-cased field name, or null when [file] is not a
   /// FLAC whose comment block could be read.
@@ -35,26 +35,52 @@ class VorbisCommentFields {
   /// Values keep their order and their duplicates: `ARTIST=Alice`,
   /// `ARTIST=Bob` yields `{'ARTIST': ['Alice', 'Bob']}`, which is the spec's
   /// way of writing a collaboration.
+  ///
+  /// Walks the block chain and *seeks* past everything that is not the comment
+  /// block, rather than reading a fixed prefix. FLAC puts no ordering
+  /// requirement on metadata blocks, and a file with embedded cover art carries
+  /// a PICTURE block that is routinely megabytes; reading a fixed prefix would
+  /// silently miss the comments on exactly those files and fall back to the
+  /// package's merged list. Only the comment block is ever read into memory,
+  /// never the art and never the audio.
   static Future<Map<String, List<String>>?> read(File file) async {
-    final Uint8List header;
+    RandomAccessFile? handle;
     try {
-      header = await _readHeader(file);
+      handle = await file.open();
+      final Uint8List magic = await handle.read(4);
+      if (!_isFlac(magic)) return null;
+
+      while (true) {
+        final Uint8List header = await handle.read(4);
+        if (header.length < 4) return null; // truncated
+        final bool isLast = (header[0] & 0x80) != 0;
+        final int type = header[0] & 0x7F;
+        final int length = (header[1] << 16) | (header[2] << 8) | header[3];
+
+        if (type == _vorbisCommentBlock) {
+          if (length > _maxCommentBlockBytes) return null;
+          final Uint8List block = await handle.read(length);
+          if (block.length < length) return null; // truncated
+          return _parseComments(block);
+        }
+        if (isLast) return null; // no comment block in this file
+        await handle.setPosition(await handle.position() + length);
+      }
     } on FileSystemException {
       return null;
+    } finally {
+      await handle?.close();
     }
-    return parse(header);
   }
 
-  static Future<Uint8List> _readHeader(File file) async {
-    final RandomAccessFile handle = await file.open();
-    try {
-      final int length = await handle.length();
-      final int wanted = length < _maxHeaderBytes ? length : _maxHeaderBytes;
-      return await handle.read(wanted);
-    } finally {
-      await handle.close();
-    }
-  }
+  static const int _vorbisCommentBlock = 4;
+
+  static bool _isFlac(Uint8List bytes) =>
+      bytes.length >= 4 &&
+      bytes[0] == 0x66 && // f
+      bytes[1] == 0x4C && // L
+      bytes[2] == 0x61 && // a
+      bytes[3] == 0x43; // C
 
   /// The parsing half, separated so it is testable on bytes alone.
   ///
@@ -64,13 +90,7 @@ class VorbisCommentFields {
   /// little-endian: vendor length, vendor, comment count, then each comment as
   /// a length and `FIELD=value` in UTF-8.
   static Map<String, List<String>>? parse(Uint8List bytes) {
-    if (bytes.length < 4 ||
-        bytes[0] != 0x66 || // f
-        bytes[1] != 0x4C || // L
-        bytes[2] != 0x61 || // a
-        bytes[3] != 0x43) {
-      return null;
-    }
+    if (!_isFlac(bytes)) return null;
 
     int offset = 4;
     while (offset + 4 <= bytes.length) {
@@ -84,7 +104,7 @@ class VorbisCommentFields {
       final int end = start + length;
       // A block that runs past what was read is not something to guess at.
       if (end > bytes.length) return null;
-      if (type == 4) {
+      if (type == _vorbisCommentBlock) {
         return _parseComments(Uint8List.sublistView(bytes, start, end));
       }
       if (isLast) return null;
