@@ -10,6 +10,8 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
 import java.util.ArrayDeque
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Walks a user-picked Storage Access Framework tree URI through the content
@@ -40,22 +42,52 @@ class SafDocumentScanner(
 ) {
 
     /**
+     * The cancellation flag of the walk currently queued or running, if any.
+     *
+     * Scans share one worker thread, so a second one waits for the first. That
+     * is right while both are wanted and wrong the moment the first is not: a
+     * user who picks a different folder mid-scan would otherwise watch the new
+     * one sit "loading" for however long the abandoned walk still had to run.
+     * Superseding sets this flag, the walk notices between folders, and the
+     * thread frees up for the selection the user actually made.
+     */
+    private val currentScan = AtomicReference<AtomicBoolean?>(null)
+
+    /**
      * Lists audio documents under [treeUri], reporting back through [result].
      *
-     * The walk runs on [PlatformChannelWorker]'s background thread and [result]
-     * and the result is encoded and answered there, so a real library — thousands of
+     * The walk runs on [PlatformChannelWorker]'s background thread, and [result]
+     * is encoded and answered there too, so a real library — thousands of
      * content-resolver queries plus a [MediaMetadataRetriever] open per file —
      * never blocks the UI (#346). This returns as soon as the work is queued.
+     *
+     * Starting a scan supersedes any earlier one: the older walk stops at its
+     * next folder boundary instead of making this one wait out a scan the user
+     * already moved on from.
      */
     fun listAudioDocuments(treeUri: String, result: MethodChannel.Result) {
+        // Supersede whatever was queued or running before answering this one.
+        val cancelled = AtomicBoolean(false)
+        currentScan.getAndSet(cancelled)?.set(true)
+
         worker.submit(
-            work = { walk(Uri.parse(treeUri)) },
+            work = { walk(Uri.parse(treeUri), cancelled) },
             onSuccess = { documents -> result.success(documents) },
             onFailure = { error ->
                 // A revoked or never-granted tree is a clear "no access"; every
                 // other failure stays a generic read error, so no provider
                 // message (which could carry a path) reaches the Dart side.
-                if (error is SecurityException) {
+                if (error is ScanSuperseded) {
+                    // Only ever reached by a scan a newer one replaced, and the
+                    // Dart side drops a superseded response on every path
+                    // (LibraryController's generation guard), so this reports
+                    // what happened rather than pretending the folder failed.
+                    result.error(
+                        "saf_superseded",
+                        "A newer scan replaced this one.",
+                        null,
+                    )
+                } else if (error is SecurityException) {
                     result.error(
                         "saf_permission",
                         "No access to the selected folder.",
@@ -160,7 +192,7 @@ class SafDocumentScanner(
         }
     }
 
-    private fun walk(treeUri: Uri): Map<String, Any?> {
+    private fun walk(treeUri: Uri, cancelled: AtomicBoolean): Map<String, Any?> {
         // Persist the grant when possible so a folder picked once can still be
         // scanned after a restart; harmless (and ignored) when not persistable.
         try {
@@ -183,6 +215,9 @@ class SafDocumentScanner(
         val queue = ArrayDeque<String>()
         queue.add(DocumentsContract.getTreeDocumentId(treeUri))
         while (queue.isNotEmpty()) {
+            // Checked per folder rather than per file: it bounds the wait to one
+            // directory listing without adding a check to the hot path.
+            if (cancelled.get()) throw ScanSuperseded()
             val parentDocId = queue.poll()
             val childrenUri =
                 DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
@@ -397,6 +432,9 @@ class SafDocumentScanner(
         val bytes = digest.digest(uri.toString().toByteArray(Charsets.UTF_8))
         return bytes.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
     }
+
+    /** Raised inside [walk] when a newer scan superseded this one. */
+    private class ScanSuperseded : Exception()
 
     companion object {
         private val AUDIO_EXTENSIONS =
