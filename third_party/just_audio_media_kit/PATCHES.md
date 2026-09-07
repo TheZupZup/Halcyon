@@ -1,8 +1,9 @@
 # Vendored `just_audio_media_kit`
 
-Linthra vendors this package so the headless Linux audio smoke test can force
-libmpv onto a specific audio output. Everything here is upstream source except
-the two hunks in [`upstream.patch`](upstream.patch).
+Linthra vendors this package for one reason: upstream has no public hook for
+setting extra libmpv options at player creation, and Linthra needs one on two
+paths — production playback and the headless audio smoke test. Everything here
+is upstream source except the two hunks in [`upstream.patch`](upstream.patch).
 
 ## Provenance
 
@@ -38,8 +39,9 @@ Two hunks, ten added lines, no deletions:
    identical `prefetch-playlist` call upstream already makes.
 
 Nothing else changes: no new dependency, no new I/O, no new process or library
-loading, and with the map left empty (production) the generated libmpv calls
-are byte-for-byte what upstream makes.
+loading. With the map left empty the generated libmpv calls are byte-for-byte
+what upstream makes; Linthra does not leave it empty (see below), so the
+difference from upstream is exactly the properties it sets and nothing more.
 
 ### Why
 
@@ -50,9 +52,19 @@ set on each libmpv instance before playback starts. Upstream exposes
 `setProperty` internally but has no public hook for extra mpv options at player
 creation (unlike `prefetchPlaylist`).
 
-Only `tool/linux_audio_backend_smoke.dart` sets it (`{'ao': 'alsa'}`). No
-shipped code path does, so production playback resolves exactly as the hosted
-package did.
+### Who sets it
+
+**Two callers, and production is one of them.** This hook is *not* CI-only —
+removing it breaks shipped playback behaviour, not just a test.
+
+| Caller | Sets | Why |
+| --- | --- | --- |
+| `lib/core/services/linux_playback_controller.dart` (`linuxMpvProperties`) | `cache-on-disk=no` | media_kit turns mpv's on-disk demuxer cache on for every player; Linthra streams audio and manages its own offline cache, and mpv logs `[lavf] Failed to create file cache.` on every stream where it cannot write the temporary file ([#405](https://github.com/thezupzup/linthra/issues/405)). |
+| `tool/linux_audio_backend_smoke.dart` | `ao=alsa` | The headless CI case described above. |
+
+The smoke target layers its value on top of the production defaults rather than
+replacing them (`resolveLinuxMpvProperties` merges), so CI exercises the same
+cache configuration production uses, with only the output device swapped.
 
 ## Auditing this directory
 
@@ -73,6 +85,12 @@ set). CI runs it on every PR.
 2. Replace every file listed in `upstream.sha256` with the new upstream copy and
    regenerate that manifest from the pristine tree.
 3. Re-apply the two hunks (`git apply upstream.patch`, or by hand if they moved)
-   and regenerate `upstream.patch` from the pristine-vs-vendored diff.
+   and regenerate `upstream.patch` from the pristine-vs-vendored diff. **Do not
+   drop them because upstream gained something similar** without checking both
+   callers in *Who sets it* first: production playback depends on this hook, so
+   losing it is a silent behaviour change, not a test-only regression.
 4. Update the table above, refresh `pubspec.lock`, and run
    `./scripts/check_vendored_packages.sh`.
+5. If upstream ever adds its own public hook for player-creation properties,
+   move both callers onto it and drop the patch — that is the outcome this
+   vendoring exists to make unnecessary.
