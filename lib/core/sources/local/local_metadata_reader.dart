@@ -5,12 +5,14 @@ import 'local_audio_metadata.dart';
 /// native content-resolver walk returns.
 ///
 /// This is a seam, deliberately mirroring [SafDocumentLister]: the source
-/// depends on this interface, never on a concrete reader, so tag reading can be
-/// added without touching the scanner, source, or mapper. The production default
-/// is [UnsupportedLocalMetadataReader], which reads nothing — so a filesystem
-/// scan currently relies on filename/folder fallback, exactly as before. A real
-/// pure-Dart reader (ID3/Vorbis/MP4) can slot in here later as a focused
-/// follow-up without changing any caller.
+/// depends on this interface, never on a concrete reader, so tag reading can
+/// change without touching the scanner, source, or mapper, which is exactly
+/// how the real reader arrived (#407) without a caller moving.
+///
+/// Which implementation runs is `localMetadataReaderProvider`'s decision:
+/// `FilesystemLocalMetadataReader` on desktop/Linux, and
+/// [UnsupportedLocalMetadataReader] on Android, whose tags already come from
+/// the native SAF walk.
 abstract interface class LocalMetadataReader {
   /// Returns the tags for the file at [path], or null when none could be read
   /// (unsupported here, an unreadable file, or a format without tags). Must
@@ -18,9 +20,9 @@ abstract interface class LocalMetadataReader {
   Future<LocalAudioMetadata?> readFromPath(String path);
 }
 
-/// The default [LocalMetadataReader] for platforms/builds without a real
-/// filesystem tag reader (desktop today, and tests): it reads nothing, so the
-/// mapper falls back to filename/folder metadata and behaviour is unchanged.
+/// The [LocalMetadataReader] for anywhere a filesystem tag read is not wanted:
+/// Android, whose tags come from the native SAF walk, and tests. It reads
+/// nothing, so the mapper falls back to filename/folder metadata.
 class UnsupportedLocalMetadataReader implements LocalMetadataReader {
   const UnsupportedLocalMetadataReader();
 

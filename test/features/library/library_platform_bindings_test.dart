@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/platform/host_platform.dart';
 import 'package:linthra/core/services/platform_folder_picker_service.dart';
 import 'package:linthra/core/sources/local/audio_file_scanner.dart';
+import 'package:linthra/core/sources/local/filesystem_local_metadata_reader.dart';
 import 'package:linthra/core/sources/local/io_local_lyrics_reader.dart';
 import 'package:linthra/core/sources/local/local_metadata_reader.dart';
 import 'package:linthra/core/sources/local/method_channel_saf_document_lister.dart';
@@ -43,6 +44,14 @@ void main() {
     test('sidecar lyrics are read as a SAF sibling document', () {
       expect(container.read(localLyricsReaderProvider),
           isA<MethodChannelSafLyricsReader>());
+    });
+
+    test('tags still come from the SAF walk, not a second Dart read', () {
+      // #407 added a filesystem tag reader for desktop. Android's tags (and its
+      // cached embedded artwork) already come from the native walk, so reading
+      // them again here would be duplicate work with a different answer.
+      expect(container.read(localMetadataReaderProvider),
+          isA<UnsupportedLocalMetadataReader>());
     });
   });
 
@@ -109,13 +118,11 @@ void main() {
       }
     });
 
-    test('desktop tag reading is still the unsupported reader', () {
-      // Real Linux metadata extraction is later desktop work. Until then the
-      // mapper falls back to filename/folder derivation, on Linux exactly as it
-      // already does for a filesystem path on Android.
+    test('tags are read off the filesystem', () {
+      // #407: Linux reads real tags rather than falling back to the filename.
       expect(
           _containerFor(HostPlatform.linux).read(localMetadataReaderProvider),
-          isA<UnsupportedLocalMetadataReader>());
+          isA<FilesystemLocalMetadataReader>());
     });
   });
 }

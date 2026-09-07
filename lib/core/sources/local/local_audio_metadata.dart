@@ -1,5 +1,6 @@
-/// Audio tags read from an on-device item (an Android SAF document via the
-/// native content resolver, or — in a future follow-up — a desktop file).
+/// Audio tags read from an on-device item: an Android SAF document via the
+/// native content resolver, or a desktop file via
+/// `FilesystemLocalMetadataReader`.
 ///
 /// Every field is optional: a `null` value means "this source had no
 /// trustworthy value for this field", so [LocalTrackMapper] falls back to a

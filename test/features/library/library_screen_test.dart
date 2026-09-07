@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/track.dart';
 import 'package:linthra/core/sources/local/folder_location.dart';
+import 'package:linthra/core/sources/local/local_metadata_reader.dart';
 import 'package:linthra/data/repositories/in_memory_music_library_repository.dart';
 import 'package:linthra/data/repositories/in_memory_selected_music_folder_repository.dart';
 import 'package:linthra/data/repositories/music_library_repository_provider.dart';
@@ -103,6 +104,16 @@ void main() {
             audioFileScannerProvider.overrideWithValue(scanner),
             folderPickerServiceProvider.overrideWithValue(
               FakeFolderPickerService(folder: '/music'),
+            ),
+            // The scanner's paths are fictional, so let the reader be inert
+            // rather than have this widget test touch the real filesystem.
+            // Reading tags is genuinely asynchronous (it has to be, or a scan
+            // starves the event loop), and pumpAndSettle drives a fake clock
+            // that real I/O never completes against. The reader's own
+            // behaviour is covered in
+            // test/core/sources/local/filesystem_local_metadata_reader_test.dart.
+            localMetadataReaderProvider.overrideWithValue(
+              const UnsupportedLocalMetadataReader(),
             ),
           ],
           child: const MaterialApp(home: LibraryScreen()),
