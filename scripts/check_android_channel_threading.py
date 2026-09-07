@@ -32,6 +32,7 @@ KOTLIN = (
 WORKER_FILE = "PlatformChannelWorker.kt"
 SCANNER_FILE = "SafDocumentScanner.kt"
 SCAN_METHOD = "listAudioDocuments"
+CANCEL_METHOD = "cancelScan"
 SCAN_WORK = "walk"
 
 
@@ -348,6 +349,26 @@ def check_cancellation(directory: Path, failures: list[str]) -> None:
         )
 
     check_supersede_handoff(source, failures)
+
+    # Starting a scan supersedes the one before it, which covers picking a
+    # different folder. Abandoning the scan outright (forget the folder, switch
+    # to MediaStore) starts nothing, so it needs its own way in. Dropping this
+    # method leaves the Dart generation guard still discarding the result, so
+    # nothing breaks visibly; the walk just keeps burning content-resolver I/O.
+    cancel = function_span(source, CANCEL_METHOD)
+    if cancel is None:
+        failures.append(
+            f"{SCANNER_FILE}: no {CANCEL_METHOD}() for a scan that is abandoned "
+            "rather than replaced (#346)"
+        )
+    elif not re.search(
+        r"\bcurrentScan\s*\.\s*getAndSet\s*\([^)]*\)\s*\??\s*\.\s*set\s*\(\s*true\s*\)",
+        source[cancel[0] : cancel[1]],
+    ):
+        failures.append(
+            f"{SCANNER_FILE}: {CANCEL_METHOD}() must trip the walk in flight "
+            "through currentScan, or it cancels nothing"
+        )
 
     walk = function_span(source, SCAN_WORK)
     if walk is None:

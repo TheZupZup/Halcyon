@@ -94,6 +94,25 @@ class SafDocumentScanner(
     }
 
     /**
+     * Stops the walk that is queued or running, if any, without starting one.
+     *
+     * [listAudioDocuments] already supersedes its predecessor, which covers a
+     * user picking a different folder. It does not cover abandoning the scan
+     * outright: forgetting the folder, or switching to the device-wide
+     * MediaStore library. Those only invalidate the Dart-side result, so
+     * without this the abandoned walk keeps opening a MediaMetadataRetriever
+     * and extracting artwork for the rest of a library nobody is waiting for,
+     * competing with the MediaStore traversal that just started for the same
+     * content-resolver I/O.
+     *
+     * Cheap (one atomic swap), so it answers on the calling thread. Safe to
+     * call when nothing is running: there is simply no flag to trip.
+     */
+    fun cancelScan() {
+        currentScan.getAndSet(null)?.set(true)
+    }
+
+    /**
      * Whether the app currently holds a persisted *read* grant for [treeUri] —
      * the diagnostic that tells "no music found" apart from a lost folder grant
      * (e.g. after a reboot, or a removable SD card that was remounted).

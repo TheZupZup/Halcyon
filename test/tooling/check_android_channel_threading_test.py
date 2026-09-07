@@ -111,6 +111,10 @@ class SafDocumentScanner(
     + """
     }
 """
+    + """    fun cancelScan() {
+        currentScan.getAndSet(null)?.set(true)
+    }
+"""
     + GOOD_WALK
     + """    private class ScanSuperseded : Exception()
     companion object {
@@ -370,6 +374,24 @@ class CheckerTest(unittest.TestCase):
             "            handler.post { onSuccess(value) }",
         )
         self.assertCaught(self.check(worker=worker), "dispatched to another thread")
+
+    def test_a_missing_cancel_entry_point_is_caught(self):
+        # Forgetting the folder starts no replacement scan, so without this the
+        # abandoned walk runs to completion and nothing looks broken.
+        scanner = GOOD_SCANNER.replace(
+            """    fun cancelScan() {
+        currentScan.getAndSet(null)?.set(true)
+    }
+""",
+            "",
+        )
+        self.assertCaught(self.check(scanner=scanner), "no cancelScan()")
+
+    def test_a_cancel_that_trips_nothing_is_caught(self):
+        scanner = GOOD_SCANNER.replace(
+            "        currentScan.getAndSet(null)?.set(true)\n", ""
+        )
+        self.assertCaught(self.check(scanner=scanner), "must trip the walk in flight")
 
 
 if __name__ == "__main__":

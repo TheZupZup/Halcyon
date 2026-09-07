@@ -84,9 +84,10 @@ read a user-chosen folder is the **Storage Access Framework (SAF)**:
    never run at once. Picking a second folder mid-scan **supersedes** the first
    rather than queueing behind it: the abandoned walk stops at its next file and
    answers `saf_superseded`, so the folder you just chose starts right away
-   instead of waiting out a scan you already moved on from. That flag is
-   process-scoped, so it keeps working if Android recreates the activity
-   mid-scan. `scripts/check_android_channel_threading.py` guards both the thread
+   instead of waiting out a scan you already moved on from. Forgetting the
+   folder or switching to the device-wide library cancels it the same way, even
+   though neither starts a replacement scan. That flag is process-scoped, so it
+   keeps working if Android recreates the activity mid-scan. `scripts/check_android_channel_threading.py` guards both the thread
    boundary and the cancellation, because a walk that drifts back onto the
    platform thread, or a supersede that quietly stops superseding, still
    compiles and still passes every test.

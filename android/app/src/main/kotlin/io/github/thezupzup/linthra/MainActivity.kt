@@ -100,6 +100,15 @@ class MainActivity : AudioServiceActivity() {
                                 .listAudioDocuments(treeUri, result)
                         }
                     }
+                    // Stop the walk in flight without starting another: the
+                    // user forgot the folder or switched to MediaStore, so
+                    // nothing is waiting on its result and it should stop
+                    // burning content-resolver I/O. One atomic swap, so it
+                    // answers here rather than on the worker.
+                    "cancelScan" -> {
+                        safDocumentScanner.cancelScan()
+                        result.success(null)
+                    }
                     "hasPersistedPermission" -> {
                         val treeUri = call.argument<String>("treeUri")
                         if (treeUri == null) {

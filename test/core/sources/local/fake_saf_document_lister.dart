@@ -24,6 +24,7 @@ class FakeSafDocumentLister implements SafDocumentLister {
   final bool unsupported;
   final Object? error;
   String? requestedTreeUri;
+  int cancellations = 0;
 
   @override
   Future<SafScanResult> listAudioDocuments(String treeUri) async {
@@ -41,5 +42,10 @@ class FakeSafDocumentLister implements SafDocumentLister {
       foldersVisited: foldersVisited,
       readFailures: readFailures,
     );
+  }
+
+  @override
+  Future<void> cancelScan() async {
+    cancellations++;
   }
 }

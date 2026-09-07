@@ -51,6 +51,20 @@ class MethodChannelSafDocumentLister implements SafDocumentLister {
     return parseScanResult(result);
   }
 
+  @override
+  Future<void> cancelScan() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod<void>('cancelScan');
+    } on MissingPluginException {
+      // An older native build with no cancel handler: the walk finishes on its
+      // own and the generation guard drops it, exactly as before.
+    } on PlatformException {
+      // Nothing to cancel, or the native side refused. There is no result to
+      // salvage here and no user-visible outcome, so this stays silent.
+    }
+  }
+
   /// Parses the native `listAudioDocuments` reply into a [SafScanResult].
   ///
   /// Pure and public so the parsing — the part with real logic — is unit-testable

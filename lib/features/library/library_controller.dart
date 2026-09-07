@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/catalog/library_grouping.dart';
@@ -28,9 +30,23 @@ class LibraryController extends Notifier<LibraryState> {
 
   /// Supersedes pending local scans when the user changes or forgets a source.
   /// Call this before the first asynchronous part of the source mutation.
+  ///
+  /// Bumping the generations makes an in-flight scan's result unusable, but on
+  /// Android it does not stop the native SAF walk producing it: that keeps
+  /// opening a metadata retriever and extracting artwork for the rest of an
+  /// abandoned library, competing for content-resolver I/O with whatever the
+  /// user switched to. Starting another scan already supersedes the walk ahead
+  /// of it; forgetting the folder or switching to the device-wide library does
+  /// not start one, so ask the scanner to stop directly.
+  ///
+  /// Deliberately not awaited: this must stay synchronous so callers can
+  /// invalidate before their first `await`, and cancellation is best-effort on
+  /// every platform. The generation guard remains the thing that makes the
+  /// result safe; this only saves the work.
   void invalidatePendingScans() {
     _scanGeneration++;
     _loadGeneration++;
+    unawaited(ref.read(safDocumentListerProvider).cancelScan());
   }
 
   /// Waits for already-started local writes before persisting a source change.

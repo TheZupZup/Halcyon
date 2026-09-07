@@ -21,6 +21,7 @@ import 'package:linthra/features/library/local_scan_report_provider.dart';
 import 'package:linthra/features/library/selected_folder_controller.dart';
 import 'package:linthra/features/settings/source/local_music_controller.dart';
 
+import '../../core/sources/local/fake_saf_document_lister.dart';
 import 'fake_audio_file_scanner.dart';
 
 class _DeferredScanner implements AudioFileScanner {
@@ -102,6 +103,58 @@ ProviderContainer _container({
 void main() {
   setUp(LocalScanDiagnostics.reset);
   tearDown(LocalScanDiagnostics.reset);
+
+  test('abandoning a source stops the native walk, not just its result',
+      () async {
+    // Forgetting the folder or switching to the device library never starts
+    // another scan, so nothing supersedes the walk in flight. Without an
+    // explicit cancel it runs to completion opening a metadata retriever per
+    // file, for a result the generation guard is going to throw away.
+    final library = InMemoryMusicLibraryRepository();
+    final lister = FakeSafDocumentLister();
+    final container = _container(
+      library: library,
+      scanner: _DeferredScanner(),
+      extra: [safDocumentListerProvider.overrideWithValue(lister)],
+    );
+    final controller = container.read(libraryControllerProvider.notifier);
+
+    controller.invalidatePendingScans();
+
+    expect(lister.cancellations, 1);
+  });
+
+  test('clearing the local catalog also stops the walk feeding it', () async {
+    final library = InMemoryMusicLibraryRepository();
+    final lister = FakeSafDocumentLister();
+    final container = _container(
+      library: library,
+      scanner: _DeferredScanner(),
+      extra: [safDocumentListerProvider.overrideWithValue(lister)],
+    );
+    final controller = container.read(libraryControllerProvider.notifier);
+
+    await controller.clearLocalCatalog();
+
+    expect(lister.cancellations, 1);
+  });
+
+  test('a plain refresh does not cancel an unrelated scan', () async {
+    // refresh() reloads the shared catalog; it is not a source change and must
+    // leave a running local scan alone.
+    final library = InMemoryMusicLibraryRepository();
+    final lister = FakeSafDocumentLister();
+    final container = _container(
+      library: library,
+      scanner: _DeferredScanner(),
+      extra: [safDocumentListerProvider.overrideWithValue(lister)],
+    );
+    final controller = container.read(libraryControllerProvider.notifier);
+
+    await controller.refresh();
+
+    expect(lister.cancellations, 0);
+  });
 
   test('a superseded scan returns null, not the previous successful report',
       () async {
