@@ -125,17 +125,42 @@ class SafDocumentScanner(
 )
 
 
+GOOD_ACTIVITY = """package io.github.thezupzup.linthra
+
+class MainActivity : AudioServiceActivity() {
+    private val safDocumentScanner by lazy {
+        SafDocumentScanner(applicationContext)
+    }
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        when (call.method) {
+            "listAudioDocuments" -> safDocumentScanner.listAudioDocuments(treeUri, result)
+            "cancelScan" -> {
+                safDocumentScanner.cancelScan()
+                result.success(null)
+            }
+            "hasPersistedPermission" ->
+                result.success(safDocumentScanner.hasPersistedPermission(treeUri))
+            else -> result.notImplemented()
+        }
+    }
+}
+"""
+
+
 class CheckerTest(unittest.TestCase):
     def check(
         self,
         *,
         worker: str = GOOD_WORKER,
         scanner: str = GOOD_SCANNER,
+        activity: str = GOOD_ACTIVITY,
     ):
         with tempfile.TemporaryDirectory() as raw:
             directory = Path(raw)
             (directory / checker.WORKER_FILE).write_text(worker, encoding="utf-8")
             (directory / checker.SCANNER_FILE).write_text(scanner, encoding="utf-8")
+            (directory / checker.ACTIVITY_FILE).write_text(activity, encoding="utf-8")
             return checker.check(directory)
 
     def assertCaught(self, failures: list[str], needle: str) -> None:
@@ -153,6 +178,9 @@ class CheckerTest(unittest.TestCase):
             directory = Path(raw)
             (directory / checker.SCANNER_FILE).write_text(
                 GOOD_SCANNER, encoding="utf-8"
+            )
+            (directory / checker.ACTIVITY_FILE).write_text(
+                GOOD_ACTIVITY, encoding="utf-8"
             )
             self.assertCaught(checker.check(directory), "missing")
 
@@ -392,6 +420,49 @@ class CheckerTest(unittest.TestCase):
             "        currentScan.getAndSet(null)?.set(true)\n", ""
         )
         self.assertCaught(self.check(scanner=scanner), "must trip the walk in flight")
+
+    def test_a_non_identifier_flag_in_the_swap_is_caught(self):
+        # Swapped and tripped, but with a fresh flag nothing else holds: the
+        # walk watches `cancelled` and no later scan can ever reach it.
+        scanner = GOOD_SCANNER.replace(
+            "currentScan.getAndSet(cancelled)?.set(true)",
+            "currentScan.getAndSet(AtomicBoolean(false))?.set(true)",
+        )
+        self.assertCaught(self.check(scanner=scanner), "must be handed the named flag")
+
+    def test_a_cancel_the_channel_does_not_route_is_caught(self):
+        # Dart calls "cancelScan"; without the branch it gets notImplemented,
+        # which the binding deliberately swallows as an older native build.
+        activity = GOOD_ACTIVITY.replace(
+            """            "cancelScan" -> {
+                safDocumentScanner.cancelScan()
+                result.success(null)
+            }
+""",
+            "",
+        )
+        self.assertCaught(self.check(activity=activity), "does not route")
+
+    def test_a_cancel_branch_that_calls_nothing_is_caught(self):
+        activity = GOOD_ACTIVITY.replace(
+            "                safDocumentScanner.cancelScan()\n", ""
+        )
+        self.assertCaught(self.check(activity=activity), "must call cancelScan()")
+
+    def test_a_commented_out_cancel_branch_does_not_count(self):
+        activity = GOOD_ACTIVITY.replace(
+            '            "cancelScan" -> {', '            // "cancelScan" -> {'
+        )
+        self.assertCaught(self.check(activity=activity), "does not route")
+
+    def test_a_missing_activity_is_caught(self):
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            (directory / checker.WORKER_FILE).write_text(GOOD_WORKER, encoding="utf-8")
+            (directory / checker.SCANNER_FILE).write_text(
+                GOOD_SCANNER, encoding="utf-8"
+            )
+            self.assertCaught(checker.check(directory), "missing")
 
 
 if __name__ == "__main__":

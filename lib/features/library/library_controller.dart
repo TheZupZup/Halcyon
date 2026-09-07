@@ -28,16 +28,21 @@ class LibraryController extends Notifier<LibraryState> {
   /// Reloading the shared catalog must not cancel an unrelated local scan.
   Future<void> refresh() => _load();
 
-  /// Supersedes pending local scans when the user changes or forgets a source.
-  /// Call this before the first asynchronous part of the source mutation.
+  /// Supersedes pending local scans when the user changes or forgets a source,
+  /// and when one starts. Call this before the first asynchronous part of the
+  /// source mutation.
   ///
   /// Bumping the generations makes an in-flight scan's result unusable, but on
   /// Android it does not stop the native SAF walk producing it: that keeps
   /// opening a metadata retriever and extracting artwork for the rest of an
   /// abandoned library, competing for content-resolver I/O with whatever the
-  /// user switched to. Starting another scan already supersedes the walk ahead
-  /// of it; forgetting the folder or switching to the device-wide library does
-  /// not start one, so ask the scanner to stop directly.
+  /// user switched to.
+  ///
+  /// Only a new `listAudioDocuments` supersedes a walk natively, so every other
+  /// way to abandon one needs this: forgetting the folder, clearing the local
+  /// catalog, and starting a scan of the device-wide library (which goes to
+  /// MediaStore, never through the SAF channel). This is why the bump lives
+  /// here rather than being written out at each call site.
   ///
   /// Deliberately not awaited: this must stay synchronous so callers can
   /// invalidate before their first `await`, and cancellation is best-effort on
@@ -91,8 +96,13 @@ class LibraryController extends Notifier<LibraryState> {
   /// Returns this operation's report, or null if it was superseded. Callers
   /// must not infer success from the last globally recorded scan report.
   Future<LocalScanReport?> scanFolderWithReport(String folderPath) async {
-    final int generation = ++_scanGeneration;
-    _loadGeneration++;
+    // Through invalidatePendingScans, so starting a scan also stops the native
+    // walk it replaces. A SAF-to-SAF switch would supersede on its own (the
+    // next listAudioDocuments trips the old flag), but switching to the
+    // device-wide library never calls that, and the abandoned SAF walk would
+    // otherwise do metadata and artwork I/O for the whole MediaStore traversal.
+    invalidatePendingScans();
+    final int generation = _scanGeneration;
     state = const LibraryState.loading();
     final FolderLocation location = FolderLocation.parse(folderPath);
     try {

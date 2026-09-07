@@ -8,6 +8,7 @@ import 'package:linthra/core/models/track.dart';
 import 'package:linthra/core/platform/host_platform.dart';
 import 'package:linthra/core/sources/local/android_media_library.dart';
 import 'package:linthra/core/sources/local/audio_file_scanner.dart';
+import 'package:linthra/core/sources/local/folder_location.dart';
 import 'package:linthra/core/sources/local/local_scan_diagnostics.dart';
 import 'package:linthra/core/sources/local/saf_document_lister.dart';
 import 'package:linthra/data/repositories/host_platform_provider.dart';
@@ -122,6 +123,27 @@ void main() {
     controller.invalidatePendingScans();
 
     expect(lister.cancellations, 1);
+  });
+
+  test('starting a MediaStore scan stops the SAF walk it supersedes', () async {
+    // Switching to the device library never calls listAudioDocuments, so
+    // nothing supersedes the SAF walk natively. Without cancelling here it
+    // keeps doing metadata and artwork I/O for the whole MediaStore traversal.
+    final library = InMemoryMusicLibraryRepository();
+    final lister = FakeSafDocumentLister();
+    final container = _container(
+      library: library,
+      scanner: _DeferredScanner(),
+      extra: [safDocumentListerProvider.overrideWithValue(lister)],
+    );
+    final controller = container.read(libraryControllerProvider.notifier);
+
+    await controller.scanFolderWithReport(
+      FolderLocation.androidMediaStoreAudio,
+    );
+
+    expect(lister.cancellations, 1);
+    expect(lister.requestedTreeUri, isNull);
   });
 
   test('clearing the local catalog also stops the walk feeding it', () async {

@@ -31,6 +31,7 @@ KOTLIN = (
 )
 WORKER_FILE = "PlatformChannelWorker.kt"
 SCANNER_FILE = "SafDocumentScanner.kt"
+ACTIVITY_FILE = "MainActivity.kt"
 SCAN_METHOD = "listAudioDocuments"
 CANCEL_METHOD = "cancelScan"
 SCAN_WORK = "walk"
@@ -44,12 +45,16 @@ def read(directory: Path, name: str, failures: list[str]) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def code_only(source: str) -> str:
-    """Mask comments and Kotlin string/char literals, retaining offsets.
+def code_only(source: str, mask_strings: bool = True) -> str:
+    """Mask comments and (by default) Kotlin string/char literals, keeping offsets.
 
     Braces, parentheses and fake calls inside prose must not affect nesting.
     Kotlin block comments can nest, and triple-quoted strings can contain both
     quotes and braces. This intentionally does not try to parse Kotlin syntax.
+
+    Pass mask_strings=False when the literal itself is the thing being checked,
+    such as a `when` arm's method name. Strings are still scanned past either
+    way, so a `//` inside one never opens a comment.
     """
     result = list(source)
     i = 0
@@ -82,7 +87,8 @@ def code_only(source: str) -> str:
         elif source.startswith('"""', i):
             end = source.find('"""', i + 3)
             i = n if end < 0 else end + 3
-            mask(start, i)
+            if mask_strings:
+                mask(start, i)
         elif source[i] in ('"', "'"):
             quote = source[i]
             i += 1
@@ -95,7 +101,8 @@ def code_only(source: str) -> str:
                 else:
                     i += 1
             i = min(i, n)
-            mask(start, i)
+            if mask_strings:
+                mask(start, i)
         else:
             i += 1
     return "".join(result)
@@ -299,20 +306,27 @@ def check_supersede_handoff(source: str, failures: list[str]) -> None:
             "tripped right there (`?.set(true)`), or the superseded scan runs on"
         )
 
-    # The flag that was swapped in has to be the one the walk watches.
+    # The flag that was swapped in has to be the one the walk watches. Anything
+    # but a named local is rejected rather than skipped: swapping a fresh
+    # `AtomicBoolean(false)` in reads fine and leaves the walk watching a flag
+    # nothing holds a reference to, which is unverifiable here and wrong anyway.
     flag = body[arguments[0] : arguments[1]].strip()
-    if re.fullmatch(r"\w+", flag):
-        submit = call_span(body, "worker.submit")
-        work = (
-            None if submit is None else lambda_span(body[submit[0] : submit[1]], "work")
+    if not re.fullmatch(r"\w+", flag):
+        failures.append(
+            f"{SCANNER_FILE}: currentScan must be handed the named flag this "
+            f"scan passes to the walk, not `{flag}`. Anything else leaves the "
+            "walk watching a flag no later scan can reach (#346)"
         )
-        if submit is not None and work is not None:
-            work_in_body = (submit[0] + work[0], submit[0] + work[1])
-            if not within(occurrences(body, rf"\b{re.escape(flag)}\b"), work_in_body):
-                failures.append(
-                    f"{SCANNER_FILE}: the flag swapped into currentScan never "
-                    "reaches the submitted walk, so setting it cancels nothing"
-                )
+        return
+    submit = call_span(body, "worker.submit")
+    work = None if submit is None else lambda_span(body[submit[0] : submit[1]], "work")
+    if submit is not None and work is not None:
+        work_in_body = (submit[0] + work[0], submit[0] + work[1])
+        if not within(occurrences(body, rf"\b{re.escape(flag)}\b"), work_in_body):
+            failures.append(
+                f"{SCANNER_FILE}: the flag swapped into currentScan never "
+                "reaches the submitted walk, so setting it cancels nothing"
+            )
 
 
 def check_cancellation(directory: Path, failures: list[str]) -> None:
@@ -370,6 +384,8 @@ def check_cancellation(directory: Path, failures: list[str]) -> None:
             "through currentScan, or it cancels nothing"
         )
 
+    check_cancel_is_reachable(directory, failures)
+
     walk = function_span(source, SCAN_WORK)
     if walk is None:
         failures.append(f"{SCANNER_FILE}: no {SCAN_WORK}() to check")
@@ -406,6 +422,40 @@ def check_cancellation(directory: Path, failures: list[str]) -> None:
             f"{SCANNER_FILE}: {SCAN_WORK}() must rethrow ScanSuperseded before its "
             "catch-all, or a superseded scan is counted as an unreadable subtree "
             "and answers a partial success instead (#346)"
+        )
+
+
+def check_cancel_is_reachable(directory: Path, failures: list[str]) -> None:
+    """A cancel the channel does not route to is a cancel that never runs.
+
+    Dart calls `cancelScan` on the SAF channel. Drop that branch from the
+    handler and the call falls to `notImplemented`, which Dart receives as a
+    MissingPluginException and deliberately swallows (an older native build is
+    a supported case). So nothing throws, nothing logs, and abandoned walks
+    quietly run to completion again.
+    """
+    # Comments masked, string literals kept: the branch label is a literal.
+    source = code_only(read(directory, ACTIVITY_FILE, failures), mask_strings=False)
+    if not source:
+        return
+
+    branch = re.search(rf'"{CANCEL_METHOD}"\s*->', source)
+    if branch is None:
+        failures.append(
+            f'{ACTIVITY_FILE}: the SAF channel does not route "{CANCEL_METHOD}", '
+            "so Dart gets notImplemented and the walk is never cancelled (#346)"
+        )
+        return
+
+    # It has to reach the scanner, not just exist. The branch body is the rest
+    # of the `when` arm, so bound the search at the next arm.
+    rest = source[branch.end() :]
+    end = re.search(r'^\s*(?:"[^"]*"|else)\s*->', rest, re.MULTILINE)
+    arm = rest[: end.start()] if end else rest
+    if not re.search(rf"\.\s*{CANCEL_METHOD}\s*\(", arm):
+        failures.append(
+            f'{ACTIVITY_FILE}: the "{CANCEL_METHOD}" branch must call '
+            f"{CANCEL_METHOD}() on the scanner"
         )
 
 
