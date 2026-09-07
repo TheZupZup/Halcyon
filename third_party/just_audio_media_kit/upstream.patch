@@ -6,8 +6,8 @@
  
 +  /// Optional libmpv properties applied to each [Player] after creation.
 +  ///
-+  /// Linthra leaves this empty in production. The headless Linux audio smoke
-+  /// target sets `ao=alsa` so CI can route output through an ALSA null device.
++  /// Linthra sets its Linux defaults here (see `linuxMpvProperties`); the
++  /// headless audio smoke layers `ao=alsa` on top for an ALSA null device.
 +  static Map<String, String> mpvProperties = const {};
 +
    static final _logger = Logger('JustAudioMediaKit');

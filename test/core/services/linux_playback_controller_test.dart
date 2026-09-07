@@ -94,6 +94,36 @@ class _Resolver implements PlayableUriResolver {
 Track _track(String id, String uri) => Track(id: id, title: id, uri: uri);
 
 void main() {
+  group('linuxMpvProperties', () {
+    test('turns off mpv\'s on-disk packet cache', () {
+      expect(resolveLinuxMpvProperties(const {})['cache-on-disk'], 'no');
+    });
+
+    test('never disables mpv caching wholesale', () {
+      // media_kit sets `cache=yes`; only the on-disk packet file is the
+      // problem, so a broad `cache=no` would cost normal network buffering.
+      expect(
+        resolveLinuxMpvProperties(const {}).keys,
+        <String>['cache-on-disk'],
+      );
+    });
+
+    test('keeps what a caller already configured, and adds the defaults', () {
+      // The headless audio smoke picks the output device this way.
+      final resolved = resolveLinuxMpvProperties(const {'ao': 'alsa'});
+
+      expect(resolved['ao'], 'alsa');
+      expect(resolved['cache-on-disk'], 'no');
+    });
+
+    test('lets an explicit caller value win over a default', () {
+      expect(
+        resolveLinuxMpvProperties(const {'cache-on-disk': 'yes'}),
+        containsPair('cache-on-disk', 'yes'),
+      );
+    });
+  });
+
   group('LinuxPlaybackBackendInitializer', () {
     test('registers the backend exactly once after successful initialization',
         () {

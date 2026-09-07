@@ -206,9 +206,27 @@ source-specific player exists and credentials remain in the existing resolver.
 (and wired in through a `dependency_overrides` path entry) rather than pulled
 from pub.dev. The local delta is two hunks that add
 `JustAudioMediaKit.mpvProperties`, an optional map of libmpv properties applied
-at player creation, so the headless CI smoke target can force `ao=alsa` where
-there is no PipeWire/Pulse device. Production sets nothing, so the libmpv calls
-are identical to the published package's.
+at player creation. Linthra uses it for the defaults below, and the headless CI
+smoke target layers `ao=alsa` on top where there is no PipeWire/Pulse device.
+
+### libmpv properties Linthra sets
+
+`linuxMpvProperties` in `lib/core/services/linux_playback_controller.dart` is
+the one place these live, and `resolveLinuxMpvProperties` merges anything a
+caller already set on top of them.
+
+| Property | Value | Why |
+| --- | --- | --- |
+| `cache-on-disk` | `no` | media_kit turns mpv's on-disk demuxer cache on for every player (`'cache-on-disk': 'yes'`, media_kit 1.2.6 `lib/src/player/native/player/real.dart`). That suits a video player buffering gigabytes; Linthra streams audio and manages its own offline downloads. Where mpv cannot create its temporary file — a sandbox, or a cache directory it cannot write — it logs `[lavf] Failed to create cache temporary file.` and `[lavf] Failed to create file cache.` on every stream ([#405](https://github.com/thezupzup/linthra/issues/405)). |
+
+Only the temporary on-disk packet file is turned off. media_kit's `cache=yes`
+stays, so memory and network buffering behave as before, and Linthra's own
+download/offline cache is a separate mechanism that this does not touch.
+
+Ordering matters and is not accidental: media_kit applies its own defaults while
+the player initializes, and `just_audio_media_kit` applies `mpvProperties`
+afterwards through `NativePlayer.setProperty`, which awaits that initialization.
+The Linthra values therefore land last.
 
 `third_party/just_audio_media_kit/PATCHES.md` records the exact upstream
 version and archive digest, what is and isn't vendored, and how to refresh it.
