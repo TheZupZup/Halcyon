@@ -104,6 +104,8 @@ class SafDocumentScanner(
     private val worker: PlatformChannelWorker = PlatformChannelWorker(),
 ) {
     fun listAudioDocuments(treeUri: String, result: MethodChannel.Result) {
+        val cancelled = AtomicBoolean(false)
+        currentScan.getAndSet(cancelled)?.set(true)
 """
     + SUBMITTING_SCAN
     + """
@@ -322,6 +324,52 @@ class CheckerTest(unittest.TestCase):
             "            // } catch (e: ScanSuperseded) { throw e\n",
         )
         self.assertCaught(self.check(scanner=scanner), "before its catch-all")
+
+    def test_deleting_the_supersede_handoff_is_caught(self):
+        # currentScan declared but never swapped: every walk keeps an unset flag.
+        scanner = GOOD_SCANNER.replace(
+            "        currentScan.getAndSet(cancelled)?.set(true)\n", ""
+        )
+        self.assertCaught(self.check(scanner=scanner), "must swap the new flag")
+
+    def test_a_swap_that_never_trips_the_old_flag_is_caught(self):
+        scanner = GOOD_SCANNER.replace(
+            "currentScan.getAndSet(cancelled)?.set(true)",
+            "currentScan.getAndSet(cancelled)",
+        )
+        self.assertCaught(self.check(scanner=scanner), "must be tripped right there")
+
+    def test_a_flag_that_never_reaches_the_walk_is_caught(self):
+        # Swapped and tripped, but the walk watches a different one.
+        scanner = GOOD_SCANNER.replace(
+            "walk(Uri.parse(treeUri), cancelled)",
+            "walk(Uri.parse(treeUri), AtomicBoolean(false))",
+        )
+        self.assertCaught(self.check(scanner=scanner), "never reaches the submitted")
+
+    def test_cancellation_only_at_the_folder_boundary_is_caught(self):
+        # The regression the per-entry check exists for: a flat Music folder is
+        # one outer iteration, so the folder check alone interrupts nothing.
+        scanner = GOOD_SCANNER.replace(
+            "                        if (cancelled.get()) throw ScanSuperseded()\n", ""
+        )
+        self.assertCaught(self.check(scanner=scanner), "inside the cursor loop")
+
+    def test_a_callback_redispatched_to_another_executor_is_caught(self):
+        # Lexically inside the task, but back on the platform thread: this is the
+        # shape a "replies belong on the main thread" fix would take.
+        worker = GOOD_WORKER.replace(
+            "                    onFailure(e)",
+            "                    platform.execute { onFailure(e) }",
+        )
+        self.assertCaught(self.check(worker=worker), "dispatched to another thread")
+
+    def test_a_callback_posted_to_the_main_looper_is_caught(self):
+        worker = GOOD_WORKER.replace(
+            "            onSuccess(value)",
+            "            handler.post { onSuccess(value) }",
+        )
+        self.assertCaught(self.check(worker=worker), "dispatched to another thread")
 
 
 if __name__ == "__main__":

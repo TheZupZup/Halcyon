@@ -159,6 +159,18 @@ def outside(positions: list[int], span: tuple[int, int]) -> bool:
     return any(not (span[0] <= position < span[1]) for position in positions)
 
 
+def within(positions: list[int], span: tuple[int, int]) -> bool:
+    return any(span[0] <= position < span[1] for position in positions)
+
+
+# Ways to hand a lambda to some other thread. Nesting a callback in one of
+# these inside the background task puts the reply back where it started.
+REDISPATCH = (
+    r"\b(?:\w+\s*\.\s*(?:execute|post|postDelayed|postAtTime|submit|schedule)"
+    r"|runOnUiThread|runBlocking)\s*\{"
+)
+
+
 def check_worker(directory: Path, failures: list[str]) -> None:
     source = code_only(read(directory, WORKER_FILE, failures))
     if not source:
@@ -192,7 +204,25 @@ def check_worker(directory: Path, failures: list[str]) -> None:
                 f"{WORKER_FILE}: callbacks must stay inside the background executor "
                 "so MethodChannel encoding cannot stall the platform thread"
             )
-            break
+            return
+
+    # Lexically inside the task is not the same as running on its thread. Handing
+    # a callback to another executor or to the main looper reads like a careful
+    # fix ("replies belong on the platform thread") and puts the codec's
+    # success-envelope encoding of a whole library back where it started.
+    inner = body[task[0] : task[1]]
+    for match in re.finditer(REDISPATCH, inner):
+        nested = balanced_span(inner, match.end() - 1)
+        if nested is None:
+            continue
+        for callback in ("onSuccess", "onFailure"):
+            if within(occurrences(inner, rf"\b{callback}\s*\("), nested):
+                failures.append(
+                    f"{WORKER_FILE}: {callback}() is dispatched to another thread "
+                    "from inside the background task. The reply must be encoded on "
+                    "the worker, not handed back to the platform thread (#346)"
+                )
+                return
 
 
 def check_scanner(directory: Path, failures: list[str]) -> None:
@@ -240,6 +270,50 @@ def companion_span(code: str) -> tuple[int, int] | None:
     return balanced_span(code, match.end() - 1)
 
 
+def check_supersede_handoff(source: str, failures: list[str]) -> None:
+    """The flag only supersedes if the scan actually swaps and trips it.
+
+    Declaring `currentScan` proves nothing on its own: drop the one-line
+    `getAndSet(...)?.set(true)` from the scan and every walk keeps an unset flag,
+    so a replacement queues behind the obsolete one exactly as before. Require
+    the swap, the trip of what it replaced, and that the new flag reaches the
+    submitted walk.
+    """
+    span = function_span(source, SCAN_METHOD)
+    if span is None:
+        return
+    body = source[span[0] : span[1]]
+
+    swap = re.search(r"\bcurrentScan\s*\.\s*getAndSet\s*\(", body)
+    arguments = None if swap is None else balanced_span(body, swap.end() - 1)
+    if arguments is None:
+        failures.append(
+            f"{SCANNER_FILE}: {SCAN_METHOD}() must swap the new flag into "
+            "currentScan, or nothing is ever superseded (#346)"
+        )
+        return
+    if not re.match(r"\s*\??\s*\.\s*set\s*\(\s*true\s*\)", body[arguments[1] + 1 :]):
+        failures.append(
+            f"{SCANNER_FILE}: the walk currentScan.getAndSet() replaced must be "
+            "tripped right there (`?.set(true)`), or the superseded scan runs on"
+        )
+
+    # The flag that was swapped in has to be the one the walk watches.
+    flag = body[arguments[0] : arguments[1]].strip()
+    if re.fullmatch(r"\w+", flag):
+        submit = call_span(body, "worker.submit")
+        work = (
+            None if submit is None else lambda_span(body[submit[0] : submit[1]], "work")
+        )
+        if submit is not None and work is not None:
+            work_in_body = (submit[0] + work[0], submit[0] + work[1])
+            if not within(occurrences(body, rf"\b{re.escape(flag)}\b"), work_in_body):
+                failures.append(
+                    f"{SCANNER_FILE}: the flag swapped into currentScan never "
+                    "reaches the submitted walk, so setting it cancels nothing"
+                )
+
+
 def check_cancellation(directory: Path, failures: list[str]) -> None:
     """Superseding a queued scan has to keep working, and it fails quietly.
 
@@ -273,14 +347,33 @@ def check_cancellation(directory: Path, failures: list[str]) -> None:
             "and nothing to cancel (#346)"
         )
 
+    check_supersede_handoff(source, failures)
+
     walk = function_span(source, SCAN_WORK)
     if walk is None:
         failures.append(f"{SCANNER_FILE}: no {SCAN_WORK}() to check")
         return
     body = source[walk[0] : walk[1]]
-    if not occurrences(body, r"\bthrow\s+ScanSuperseded\s*\("):
+    throws = occurrences(body, r"\bthrow\s+ScanSuperseded\s*\(")
+    if not throws:
         failures.append(f"{SCANNER_FILE}: {SCAN_WORK}() never acts on cancellation")
         return
+
+    # A folder-boundary check alone is not cancellation for the common library
+    # shape: one flat Music folder is a single outer iteration whose cursor loop
+    # opens a MediaMetadataRetriever per track. Deleting the per-entry check
+    # leaves the outer one in place and looks like it still works.
+    loop = re.search(r"\bwhile\s*\(\s*\w+\s*\.\s*moveToNext\s*\(\s*\)\s*\)\s*\{", body)
+    if loop is None:
+        failures.append(f"{SCANNER_FILE}: no cursor loop in {SCAN_WORK}() to check")
+    else:
+        cursor = balanced_span(body, loop.end() - 1)
+        if cursor is None or not within(throws, cursor):
+            failures.append(
+                f"{SCANNER_FILE}: {SCAN_WORK}() must check cancellation inside the "
+                "cursor loop, not only per folder. A flat Music folder is one "
+                "outer iteration and would otherwise run to completion (#346)"
+            )
 
     # The rethrow has to come before the catch-all, or Kotlin never reaches it.
     superseded = re.search(r"\bcatch\s*\(\s*\w+\s*:\s*ScanSuperseded\s*\)", body)
