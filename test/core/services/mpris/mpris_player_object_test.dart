@@ -17,6 +17,12 @@ class _Artwork implements MediaArtworkSource {
   @override
   Uri? cached(Uri reference) => _ready[reference];
 
+  // MPRIS reads this one: the Linux shell needs the file, not the Android
+  // content:// wrapper. The fake keeps the same entries so a test that warms a
+  // cover gets it back whichever accessor the code under test uses.
+  @override
+  Uri? cachedFileUri(Uri reference) => _ready[reference];
+
   @override
   Stream<Uri> get coverReady => const Stream<Uri>.empty();
 }
@@ -123,6 +129,26 @@ void main() {
       expect(controller.stopCount, 1);
       expect(controller.skipCount, 1);
       expect(controller.previousCount, 1);
+    });
+
+    test('PlayPause pauses a buffering player instead of playing it', () async {
+      // playerctl play-pause mid-buffer used to call play(), which cannot
+      // cancel pending playback: the sound arrived anyway once recovery
+      // finished. The in-app transport treats buffering as pauseable and this
+      // has to match it.
+      for (final PlaybackStatus status in <PlaybackStatus>[
+        PlaybackStatus.buffering,
+        PlaybackStatus.reconnecting,
+      ]) {
+        controller.pauseCount = 0;
+        controller.playCount = 0;
+        controller.emit(PlaybackState(status: status, currentTrack: _track()));
+
+        await call('PlayPause');
+
+        expect(controller.pauseCount, 1, reason: '$status');
+        expect(controller.playCount, 0, reason: '$status');
+      }
     });
 
     test('PlayPause pauses while playing and plays otherwise', () async {
@@ -250,16 +276,36 @@ void main() {
       expect(property('PlaybackStatus'), const DBusString('Stopped'));
     });
 
-    test('loading, buffering and reconnecting read as paused, not stopped', () {
-      // Reporting Stopped mid-recovery would make the shell's now-playing card
-      // disappear and come back, which looks like a crash.
+    test('buffering and reconnecting still read as playing', () {
+      // MPRIS has no buffering state, and a player waiting on data is working
+      // toward sound rather than stopped by the user. Same call the in-app
+      // transport makes, and it has to agree with PlayPause, or a shell draws a
+      // play button for a state whose toggle pauses.
+      for (final PlaybackStatus status in <PlaybackStatus>[
+        PlaybackStatus.buffering,
+        PlaybackStatus.reconnecting,
+      ]) {
+        controller.emit(PlaybackState(status: status, currentTrack: _track()));
+        expect(property('PlaybackStatus'), const DBusString('Playing'),
+            reason: '$status');
+      }
+    });
+
+    test('loading reads as paused, and nothing mid-recovery reads as stopped',
+        () {
+      // Reporting Stopped would make the shell's now-playing card disappear and
+      // come back, which looks like a crash.
+      controller.emit(PlaybackState(
+          status: PlaybackStatus.loading, currentTrack: _track()));
+      expect(property('PlaybackStatus'), const DBusString('Paused'));
+
       for (final PlaybackStatus status in <PlaybackStatus>[
         PlaybackStatus.loading,
         PlaybackStatus.buffering,
         PlaybackStatus.reconnecting,
       ]) {
         controller.emit(PlaybackState(status: status, currentTrack: _track()));
-        expect(property('PlaybackStatus'), const DBusString('Paused'),
+        expect(property('PlaybackStatus'), isNot(const DBusString('Stopped')),
             reason: '$status');
       }
     });

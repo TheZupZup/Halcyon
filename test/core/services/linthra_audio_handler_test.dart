@@ -39,6 +39,9 @@ class _RecordingArtworkSource implements MediaArtworkSource {
   }
 
   @override
+  Uri? cachedFileUri(Uri reference) => _cache[reference];
+
+  @override
   Stream<Uri> get coverReady => _coverReady.stream;
 
   Future<void> close() => _coverReady.close();

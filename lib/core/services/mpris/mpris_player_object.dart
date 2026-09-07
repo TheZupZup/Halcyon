@@ -167,7 +167,12 @@ class MprisPlayerObject extends DBusObject {
         await _controller.pause();
         return DBusMethodSuccessResponse();
       case 'PlayPause':
-        if (_state.status == PlaybackStatus.playing) {
+        // Same test the in-app transport uses (playback_controls.dart): a
+        // buffering or reconnecting player is working toward sound, so the
+        // toggle has to stop it. Testing `status == playing` made playerctl
+        // play-pause call play() mid-buffer, which cannot cancel anything and
+        // lets the audio arrive anyway.
+        if (_state.isPlaying || _state.isBuffering) {
           await _controller.pause();
         } else {
           await _controller.play();
@@ -249,9 +254,52 @@ class MprisPlayerObject extends DBusObject {
   /// progress bar showing the old position until the next track change.
   Future<void> _seekTo(Duration position) async {
     await _controller.seek(position);
+    await _announceSeek(position);
+  }
+
+  /// Tolerance for calling a position change a seek rather than playback.
+  ///
+  /// The state stream ticks position while playing, so a small forward step is
+  /// ordinary progress. Anything past this did not come from time passing.
+  /// Generous on purpose: missing a two-second nudge costs a shell nothing (it
+  /// is inside its own extrapolation error), while a false positive would put a
+  /// Seeked on the bus every tick.
+  static const Duration _seekTolerance = Duration(seconds: 2);
+
+  /// Emits `Seeked` when the position moved in a way playback cannot explain.
+  ///
+  /// A seek made in Linthra's own UI calls [PlaybackController.seek] directly
+  /// and reaches this object only as a changed position on the state stream.
+  /// Without this, a shell keeps extrapolating from the old position until the
+  /// track changes, so its progress bar silently disagrees with the app.
+  /// Called by [MprisMediaSession] on every state.
+  Future<void> syncSeek() async {
+    final Duration position = _state.position;
+    final Object? track = _state.currentTrack;
+    final Duration? last = _lastPosition;
+    final Object? lastTrack = _lastPositionTrack;
+    _lastPosition = position;
+    _lastPositionTrack = track;
+
+    // A new track restarts the timeline; that is not a seek.
+    if (last == null || !identical(track, lastTrack) && track != lastTrack) {
+      return;
+    }
+    if ((position - last).abs() <= _seekTolerance) return;
+    await _announceSeek(position);
+  }
+
+  Future<void> _announceSeek(Duration position) async {
+    // Recorded so the state tick that follows a seek made from the bus does not
+    // read as a second, separate seek.
+    _lastPosition = position;
+    _lastPositionTrack = _state.currentTrack;
     await emitSignal(playerInterface, 'Seeked',
         <DBusValue>[DBusInt64(position.inMicroseconds)]);
   }
+
+  Duration? _lastPosition;
+  Object? _lastPositionTrack;
 
   // ---------------------------------------------------------------- properties
 
@@ -374,14 +422,21 @@ class MprisPlayerObject extends DBusObject {
 
   /// The cover a shell can load by itself, or null.
   ///
-  /// Same rule as the Android media session's `artUri`: a `file:`/`content:`
-  /// URI or a token-free `http(s)` image passes through; an app-internal
-  /// reference (Subsonic's `subsonic-cover:<id>`) is only published once its
-  /// cover has been cached locally. A credentialed URL never reaches the bus.
+  /// Same rule as the Android media session's `artUri` for what may be
+  /// published: a token-free `http(s)` image or a local `file:` passes through,
+  /// an app-internal reference (Subsonic's `subsonic-cover:<id>`) only once its
+  /// cover has been cached, and a credentialed URL never reaches the bus.
+  ///
+  /// Different *form* though. The cache hands Android a `content://` URI backed
+  /// by Linthra's FileProvider, which nothing on a Linux desktop can open, so a
+  /// shell would fetch nothing and draw no cover. This asks for the same entry
+  /// as a `file:` URI instead, and refuses a `content:` it is given directly
+  /// rather than publishing one a shell cannot use.
   Uri? _artUrl(Uri? artworkUri) {
     if (artworkUri == null) return null;
+    if (artworkUri.isScheme('content')) return null;
     if (isPlatformLoadableArtwork(artworkUri)) return artworkUri;
-    return _artwork?.cached(artworkUri);
+    return _artwork?.cachedFileUri(artworkUri);
   }
 
   /// A stable object path for the current track, renewed when the track changes.
@@ -402,14 +457,19 @@ class MprisPlayerObject extends DBusObject {
     switch (status) {
       case PlaybackStatus.playing:
         return 'Playing';
-      case PlaybackStatus.paused:
-        // Loading, buffering and reconnecting are all "the player is on this
-        // track but no sound is coming out", which is what a shell draws as
-        // paused. Reporting Stopped would make the card disappear mid-recovery.
-        return 'Paused';
-      case PlaybackStatus.loading:
       case PlaybackStatus.buffering:
       case PlaybackStatus.reconnecting:
+        // Still Playing: MPRIS has no buffering state, and a player waiting on
+        // data is working toward sound rather than stopped by the user. This is
+        // the same call the in-app transport makes (`isPlaying || isBuffering`),
+        // and it has to agree with PlayPause above, or a shell would draw a play
+        // button for a state whose toggle pauses.
+        return 'Playing';
+      case PlaybackStatus.paused:
+      case PlaybackStatus.loading:
+        // Loading is "on this track, nothing coming out yet" and settles into
+        // playing or paused on its own. Never Stopped for any of these: that
+        // would make the card disappear and come back like a crash.
         return 'Paused';
       case PlaybackStatus.idle:
       case PlaybackStatus.completed:

@@ -24,8 +24,8 @@ typedef DBusClientFactory = DBusClient Function();
 /// leaves `org.mpris.MediaPlayer2.linthra` on the bus after it exits leaves a
 /// ghost in every shell that was listening.
 class MprisMediaSession implements MediaSession {
-  MprisMediaSession._(
-      this._client, this._object, this._subscription, this.name);
+  MprisMediaSession._(this._client, this._object, this._subscription, this.name,
+      this._coverReady);
 
   /// The bus name Linthra owns, e.g. `org.mpris.MediaPlayer2.linthra`.
   final String name;
@@ -33,6 +33,12 @@ class MprisMediaSession implements MediaSession {
   final DBusClient _client;
   final MprisPlayerObject _object;
   final StreamSubscription<PlaybackState> _subscription;
+
+  /// Covers finishing their prewarm. A track is often published before its
+  /// cover is cached, and nothing else would republish it: the diff loop only
+  /// runs on a playback state, so a cover that lands while paused would stay
+  /// missing from the shell's card for the whole pause.
+  final StreamSubscription<Uri>? _coverReady;
   bool _detached = false;
 
   static const String _baseName = 'org.mpris.MediaPlayer2.linthra';
@@ -53,23 +59,35 @@ class MprisMediaSession implements MediaSession {
     DBusClient? client;
     try {
       client = clientFactory();
-      final String? name = await _claimName(client, processId ?? pid);
-      if (name == null) {
-        await client.close();
-        return null;
-      }
 
+      // Export before claiming, not after. Taking the name is what puts
+      // NameOwnerChanged on the bus, and a shell watching for MPRIS players
+      // introspects the moment it sees one. Claiming first leaves a window
+      // where /org/mpris/MediaPlayer2 does not exist yet, so that introspect
+      // answers UnknownObject and a shell that does not retry discovery just
+      // never shows Linthra.
       final MprisPlayerObject object =
           MprisPlayerObject(controller, artwork: artwork);
       await client.registerObject(object);
 
+      final String? name = await _claimName(client, processId ?? pid);
+      if (name == null) {
+        // Both candidates taken. Take the object back off the bus rather than
+        // leaving an unnamed export behind on a client we are about to close.
+        await client.unregisterObject(object);
+        await client.close();
+        return null;
+      }
+
       final MprisMediaSession session = MprisMediaSession._(
         client,
         object,
-        // Subscribed after the object is exported so the first notification a
-        // shell can receive always describes an object it can already read.
+        // Subscribed after both, so the first notification a shell can receive
+        // always describes an object it can already read, under a name it has
+        // already seen appear.
         controller.stateStream.listen(null),
         name,
+        artwork?.coverReady.listen(null),
       );
       session._start(controller);
       return session;
@@ -128,8 +146,23 @@ class MprisMediaSession implements MediaSession {
         }
       }
       previous = current;
+      // Position is not a diffed property (the spec has shells extrapolate it),
+      // so a seek made in Linthra's own UI has to be announced separately.
+      unawaited(_guard(_object.syncSeek));
       if (changed.isEmpty) return;
       unawaited(_emit(changed));
+    });
+
+    _coverReady?.onData((Uri _) {
+      // Republish Metadata only when the cover actually reached the current
+      // track: the prewarm also warms look-ahead covers, and a signal for a
+      // track nobody is on is chatter.
+      final Map<String, DBusValue> current =
+          _object.properties(MprisPlayerObject.playerInterface);
+      final DBusValue? metadata = current['Metadata'];
+      if (metadata == null || previous['Metadata'] == metadata) return;
+      previous = current;
+      unawaited(_emit(<String, DBusValue>{'Metadata': metadata}));
     });
   }
 
@@ -155,6 +188,7 @@ class MprisMediaSession implements MediaSession {
     if (_detached) return;
     _detached = true;
     await _guard(_subscription.cancel);
+    if (_coverReady != null) await _guard(_coverReady.cancel);
     await _guard(() => _client.unregisterObject(_object));
     await _guard(() => _client.releaseName(name));
     await _guard(_client.close);
