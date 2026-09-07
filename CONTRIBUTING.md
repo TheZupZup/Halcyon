@@ -123,6 +123,11 @@ These rules matter a lot for Linthra:
 If your change touches authentication, streaming, diagnostics, or stored
 credentials, mention it in the PR so I know to review that part carefully.
 
+Found a vulnerability? Don't open a public issue. Report it privately through
+[GitHub Private Vulnerability Reporting](https://github.com/TheZupZup/Linthra/security/advisories/new);
+[SECURITY.md](./SECURITY.md) has the details of what's in scope and what to
+expect.
+
 ## Testing
 
 Some bugs only show up on real hardware. If your change touches a real music
