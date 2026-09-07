@@ -43,6 +43,17 @@ class MainActivity : AudioServiceActivity() {
         InstallHistoryChannel(applicationContext)
     }
 
+    // Walks the picked SAF tree and reads sidecar lyrics from it. One instance
+    // for the activity rather than one per channel call, like every other
+    // channel here. Superseding an in-flight walk does not depend on this: the
+    // cancellation flag lives in SafDocumentScanner's companion object, process-
+    // scoped like the worker thread it frees, so it survives this activity being
+    // recreated mid-scan the same way the pending folder pick below does (#346).
+    // Application-scoped so it never retains this activity.
+    private val safDocumentScanner by lazy {
+        SafDocumentScanner(applicationContext)
+    }
+
     // Optional device-wide local-library path. Unlike SAF, this uses Android's
     // explicit Music and audio runtime permission and MediaStore. Kept on its
     // own channel so broad-library access is auditable separately from targeted
@@ -75,14 +86,28 @@ class MainActivity : AudioServiceActivity() {
                     // walk was never reached. Returning the tree URI routes the
                     // scan through SafDocumentScanner instead.
                     "pickFolderTree" -> startFolderPick(result)
+                    // Walks the picked tree and returns its audio documents.
+                    // The scan itself runs off this (platform) thread — see
+                    // PlatformChannelWorker — so this branch only queues it and
+                    // returns; `result` is encoded and answered from the worker
+                    // once the walk finishes.
                     "listAudioDocuments" -> {
                         val treeUri = call.argument<String>("treeUri")
                         if (treeUri == null) {
                             result.error("bad_args", "treeUri is required", null)
                         } else {
-                            SafDocumentScanner(applicationContext)
+                            safDocumentScanner
                                 .listAudioDocuments(treeUri, result)
                         }
+                    }
+                    // Stop the walk in flight without starting another: the
+                    // user forgot the folder or switched to MediaStore, so
+                    // nothing is waiting on its result and it should stop
+                    // burning content-resolver I/O. One atomic swap, so it
+                    // answers here rather than on the worker.
+                    "cancelScan" -> {
+                        safDocumentScanner.cancelScan()
+                        result.success(null)
                     }
                     "hasPersistedPermission" -> {
                         val treeUri = call.argument<String>("treeUri")
@@ -90,7 +115,7 @@ class MainActivity : AudioServiceActivity() {
                             result.error("bad_args", "treeUri is required", null)
                         } else {
                             result.success(
-                                SafDocumentScanner(applicationContext)
+                                safDocumentScanner
                                     .hasPersistedPermission(treeUri),
                             )
                         }
@@ -109,7 +134,7 @@ class MainActivity : AudioServiceActivity() {
                             )
                         } else {
                             result.success(
-                                SafDocumentScanner(applicationContext)
+                                safDocumentScanner
                                     .readSidecarText(uri, extension),
                             )
                         }
