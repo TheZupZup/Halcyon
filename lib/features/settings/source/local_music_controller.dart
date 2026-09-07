@@ -2,10 +2,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/sources/local/android_media_library.dart';
 import '../../../core/sources/local/folder_location.dart';
-import '../../../core/sources/local/local_music_source.dart';
 import '../../../core/sources/local/local_scan_report.dart';
 import '../../../data/repositories/host_platform_provider.dart';
-import '../../../data/repositories/music_library_repository_provider.dart';
 import '../../library/library_controller.dart';
 import '../../library/library_providers.dart';
 import '../../library/local_scan_report_provider.dart';
@@ -106,16 +104,14 @@ class LocalMusicController extends Notifier<LocalMusicActionState> {
   }
 
   Future<void> forget() async {
+    final library = ref.read(libraryControllerProvider.notifier);
+    // Invalidate immediately, before the first await. The selection controller
+    // also invalidates source changes, and clearLocalCatalog serializes the
+    // actual clear after any already-started local catalog write.
+    library.invalidatePendingScans();
     state = const LocalMusicActionState(busy: true);
     await ref.read(selectedFolderControllerProvider.notifier).clear();
-    await ref.read(musicLibraryRepositoryProvider).upsertCatalog(
-      sourceId: const LocalMusicSource(folderPath: null).id,
-      tracks: const [],
-      albums: const [],
-      artists: const [],
-    );
-    ref.read(localScanReportProvider.notifier).clear();
-    await ref.read(libraryControllerProvider.notifier).refresh();
+    await library.clearLocalCatalog();
     state = const LocalMusicActionState(
       message: 'Local music forgotten. Your files were not deleted.',
     );
@@ -124,8 +120,11 @@ class LocalMusicController extends Notifier<LocalMusicActionState> {
   /// Scans [folder], turns the resulting report into the card's status line,
   /// and hands the report back so a caller can act on the outcome.
   Future<LocalScanReport?> _scan(String folder) async {
-    await ref.read(libraryControllerProvider.notifier).scanFolder(folder);
-    final report = ref.read(localScanReportProvider);
+    // Use this operation's result, never the last globally recorded report:
+    // a superseded scan must not look successful or persist a source switch.
+    final report = await ref
+        .read(libraryControllerProvider.notifier)
+        .scanFolderWithReport(folder);
     final FolderLocation location = FolderLocation.parse(folder);
     if (report == null) {
       state = const LocalMusicActionState();

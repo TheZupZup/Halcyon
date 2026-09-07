@@ -175,7 +175,7 @@ void main() {
       expect(container.read(libraryControllerProvider).tracks, tracks);
     });
 
-    test('refresh invalidates a scan that is still in flight', () async {
+    test('explicit source invalidation discards an in-flight scan', () async {
       final repository = InMemoryMusicLibraryRepository();
       final scanner = _DeferredAudioFileScanner();
       final container = _scanContainer(
@@ -185,6 +185,7 @@ void main() {
       final controller = container.read(libraryControllerProvider.notifier);
 
       final Future<void> scan = controller.scanFolder('/forgotten');
+      controller.invalidatePendingScans();
       await controller.refresh();
       scanner.requests['/forgotten']!.complete(<String>[
         '/forgotten/ShouldNotReturn.mp3',
@@ -193,6 +194,27 @@ void main() {
 
       expect(await repository.getAllTracks(), isEmpty);
       expect(container.read(libraryControllerProvider).tracks, isEmpty);
+    });
+
+    test('an unrelated catalog refresh does not cancel a local scan', () async {
+      final repository = InMemoryMusicLibraryRepository();
+      final scanner = _DeferredAudioFileScanner();
+      final container = _scanContainer(
+        repository: repository,
+        scanner: scanner,
+      );
+      final controller = container.read(libraryControllerProvider.notifier);
+
+      final scan = controller.scanFolderWithReport('/music');
+      await controller.refresh();
+      scanner.requests['/music']!.complete(<String>['/music/One.mp3']);
+      final report = await scan;
+
+      expect(report, isNotNull);
+      expect(report!.hadError, isFalse);
+      expect(report.importedTracks, 1);
+      expect(await repository.getAllTracks(), hasLength(1));
+      expect(container.read(localScanReportProvider), same(report));
     });
 
     test(
