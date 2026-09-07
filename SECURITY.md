@@ -16,8 +16,9 @@ Please **do not** open a public issue for a suspected vulnerability, and do not
 put technical details in one. A public issue asking for a private channel is
 fine, but the report itself belongs in the private advisory.
 
-If Private Vulnerability Reporting is unavailable to you for some reason, say so
-in a public issue without details and we will arrange another private channel.
+If Private Vulnerability Reporting is unavailable to you for some reason, email
+**support@linthra.ca**, which reaches the maintainer directly. Either channel is
+fine; the advisory form is easier to coordinate a fix in.
 
 ## What to include
 
@@ -83,7 +84,7 @@ Anything that breaks Linthra's own promises:
 
 ## Other contact
 
-For privacy questions that are not vulnerabilities, see the contact section in
-[PRIVACY.md](./PRIVACY.md). For ordinary bugs, use
-[Settings → Report a bug](./docs/reporting-bugs.md) and the normal issue
+Same address, support@linthra.ca, for privacy questions that are not
+vulnerabilities (also listed in [PRIVACY.md](./PRIVACY.md)). For ordinary bugs,
+use [Settings → Report a bug](./docs/reporting-bugs.md) and the normal issue
 templates.
