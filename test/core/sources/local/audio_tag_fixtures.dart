@@ -59,19 +59,29 @@ abstract final class AudioTagFixtures {
   /// the top bit, block type in the low seven) and a 24-bit big-endian length.
   /// STREAMINFO (type 0) is mandatory and is where the duration comes from:
   /// total samples divided by sample rate.
+  ///
+  /// [albumArtistFirst] writes `ALBUMARTIST` ahead of `ARTIST`. Vorbis puts no
+  /// ordering requirement on comments and real taggers differ, so a reader that
+  /// depends on which one it meets first is wrong for half the files in the
+  /// wild. Every other fixture here happens to write `ARTIST` first, which is
+  /// exactly the bias that would let such a reader look correct.
   static Uint8List flac({
     String? title,
     String? artist,
     String? albumArtist,
     String? album,
     String? track,
+    bool albumArtistFirst = false,
     int sampleRate = 44100,
     int totalSamples = 44100 * 3,
   }) {
-    final List<String> comments = <String>[
-      if (title != null) 'TITLE=$title',
+    final List<String> artists = <String>[
       if (artist != null) 'ARTIST=$artist',
       if (albumArtist != null) 'ALBUMARTIST=$albumArtist',
+    ];
+    final List<String> comments = <String>[
+      if (title != null) 'TITLE=$title',
+      ...(albumArtistFirst ? artists.reversed : artists),
       if (album != null) 'ALBUM=$album',
       if (track != null) 'TRACKNUMBER=$track',
     ];

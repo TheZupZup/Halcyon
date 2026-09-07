@@ -257,6 +257,76 @@ void main() {
     });
   });
 
+  group('Vorbis merges ARTIST and ALBUMARTIST', () {
+    // The package appends both tags to one list, so the field names are gone by
+    // the time this reader sees them. Taking the first entry makes the answer
+    // depend on the order the tagger wrote them in, which Vorbis does not
+    // constrain. These fix the behaviour to the values, not the order.
+
+    test('a normal album answers exactly, both tags naming the same artist',
+        () async {
+      for (final bool albumArtistFirst in <bool>[false, true]) {
+        final String path = write(
+          'a\$albumArtistFirst.flac',
+          AudioTagFixtures.flac(
+            title: 'Comfortably Numb',
+            artist: 'Pink Floyd',
+            albumArtist: 'Pink Floyd',
+            album: 'The Wall',
+            albumArtistFirst: albumArtistFirst,
+          ),
+        );
+
+        final LocalAudioMetadata? metadata = await reader.readFromPath(path);
+
+        expect(metadata?.artist, 'Pink Floyd');
+      }
+    });
+
+    test('a compilation reports no artist rather than a coin flip', () async {
+      // ARTIST and ALBUMARTIST disagree and the reader cannot tell which is
+      // which, so the mapper falls back to the filename and folder. Absent
+      // beats naming the compilation as the performer half the time.
+      final String artistFirst = write(
+        'artist-first.flac',
+        AudioTagFixtures.flac(
+          title: 'Song',
+          artist: 'Featured Guest',
+          albumArtist: 'Various Artists',
+          album: 'Comp',
+        ),
+      );
+      final String albumArtistFirst = write(
+        'albumartist-first.flac',
+        AudioTagFixtures.flac(
+          title: 'Song',
+          artist: 'Featured Guest',
+          albumArtist: 'Various Artists',
+          album: 'Comp',
+          albumArtistFirst: true,
+        ),
+      );
+
+      final LocalAudioMetadata? a = await reader.readFromPath(artistFirst);
+      final LocalAudioMetadata? b = await reader.readFromPath(albumArtistFirst);
+
+      // The point of the test: same file, two tagger orders, same answer.
+      expect(a?.artist, isNull);
+      expect(b?.artist, isNull);
+      expect(a?.title, 'Song');
+      expect(b?.title, 'Song');
+    });
+
+    test('one tag alone is unambiguous whichever it is', () async {
+      final String path = write(
+        'artist-only.flac',
+        AudioTagFixtures.flac(title: 'Song', artist: 'Solo Act'),
+      );
+
+      expect((await reader.readFromPath(path))?.artist, 'Solo Act');
+    });
+  });
+
   group('staying off the UI thread', () {
     // The tag parse itself is synchronous. If readFromPath did all its work
     // before returning, its Future would already be complete, and awaiting a

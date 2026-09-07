@@ -55,6 +55,30 @@ class FilesystemLocalMetadataReader implements LocalMetadataReader {
     }
   }
 
+  /// The track artist from Vorbis's merged ARTIST/ALBUMARTIST list, or null
+  /// when the two are present and disagree.
+  ///
+  /// Vorbis comments carry no ordering requirement, and the package folds both
+  /// tags into one list in file order, so `first` is whichever the tagger
+  /// happened to write first. On a compilation (`ARTIST=Featured Guest`,
+  /// `ALBUMARTIST=Various Artists`) that means the same file reports the
+  /// performer or the compilation name depending on the tool that wrote it —
+  /// verified against fixtures written both ways.
+  ///
+  /// The distinction only matters when the values actually differ. A normal
+  /// album tags both with the same name, so the list is one repeated value and
+  /// there is nothing to guess; that is the common case and it is answered
+  /// exactly. When they disagree, this returns null rather than a coin flip,
+  /// and the mapper falls back to the filename and folder, consistent with the
+  /// album artist above: absent beats wrong half the time.
+  static String? _unambiguousArtist(List<String> merged) {
+    final Set<String> distinct = <String>{
+      for (final String value in merged)
+        if (value.trim().isNotEmpty) value.trim(),
+    };
+    return distinct.length == 1 ? distinct.first : null;
+  }
+
   /// Maps one parsed container to Linthra's source-agnostic holder.
   ///
   /// Only the fields the catalog can actually store are mapped. The package
@@ -87,14 +111,16 @@ class FilesystemLocalMetadataReader implements LocalMetadataReader {
           trackNumber: tag.trackNumber,
           duration: tag.duration,
         ),
-      // Vorbis comments (FLAC, OGG, Opus). The package merges ARTIST and
-      // ALBUMARTIST into one list, so there is no honest album artist to
-      // report here — leaving it null lets the mapper group on album + artist,
-      // the same way the Subsonic source handles a server with no trustworthy
-      // per-song album artist. Better than guessing which entry is which.
+      // Vorbis comments (FLAC, OGG, Opus). The package appends both ARTIST and
+      // ALBUMARTIST to one list (`case 'ARTIST' || "ALBUMARTIST"`), discarding
+      // which was which, so there is no honest album artist to report here —
+      // leaving it null lets the mapper group on album + artist, the same way
+      // the Subsonic source handles a server with no trustworthy per-song album
+      // artist. See [_unambiguousArtist] for why the track artist cannot just
+      // take the first entry either.
       VorbisMetadata() => _metadata(
           title: tag.title.firstOrNull,
-          artist: tag.artist.firstOrNull,
+          artist: _unambiguousArtist(tag.artist),
           album: tag.album.firstOrNull,
           trackNumber: tag.trackNumber.firstOrNull,
           duration: tag.duration,
