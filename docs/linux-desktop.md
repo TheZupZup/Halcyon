@@ -206,9 +206,27 @@ source-specific player exists and credentials remain in the existing resolver.
 (and wired in through a `dependency_overrides` path entry) rather than pulled
 from pub.dev. The local delta is two hunks that add
 `JustAudioMediaKit.mpvProperties`, an optional map of libmpv properties applied
-at player creation, so the headless CI smoke target can force `ao=alsa` where
-there is no PipeWire/Pulse device. Production sets nothing, so the libmpv calls
-are identical to the published package's.
+at player creation. Linthra uses it for the defaults below, and the headless CI
+smoke target layers `ao=alsa` on top where there is no PipeWire/Pulse device.
+
+### libmpv properties Linthra sets
+
+`linuxMpvProperties` in `lib/core/services/linux_playback_controller.dart` is
+the one place these live, and `resolveLinuxMpvProperties` merges anything a
+caller already set on top of them.
+
+| Property | Value | Why |
+| --- | --- | --- |
+| `cache-on-disk` | `no` | media_kit turns mpv's on-disk demuxer cache on for every player (`'cache-on-disk': 'yes'`, media_kit 1.2.6 `lib/src/player/native/player/real.dart`). That suits a video player buffering gigabytes; Linthra streams audio and manages its own offline downloads. Where mpv cannot create its temporary file — a sandbox, or a cache directory it cannot write — it logs `[lavf] Failed to create cache temporary file.` and `[lavf] Failed to create file cache.` on every stream ([#405](https://github.com/thezupzup/linthra/issues/405)). |
+
+Only the temporary on-disk packet file is turned off. media_kit's `cache=yes`
+stays, so memory and network buffering behave as before, and Linthra's own
+download/offline cache is a separate mechanism that this does not touch.
+
+Ordering matters and is not accidental: media_kit applies its own defaults while
+the player initializes, and `just_audio_media_kit` applies `mpvProperties`
+afterwards through `NativePlayer.setProperty`, which awaits that initialization.
+The Linthra values therefore land last.
 
 `third_party/just_audio_media_kit/PATCHES.md` records the exact upstream
 version and archive digest, what is and isn't vendored, and how to refresh it.
@@ -240,7 +258,8 @@ undeclared network access to an isolated `flatpak-builder` build.
 | SAF (`content://` folders) | Android-only, by design | Linux picks a real filesystem path. The scanner's desktop path is the one that runs. |
 | Folder chooser | Supported | Linthra's own runner channel (`linux/runner/folder_picker_channel.cc`) opens `GtkFileChooserNative`: the ordinary GTK dialog natively, and the xdg-desktop-portal chooser inside the Flatpak, where `file_picker`'s `zenity`/`kdialog` do not exist ([issue #438](https://github.com/TheZupZup/Linthra/issues/438)). `scripts/check_linux_runner.py` holds the runner's channel name to the Dart side's. |
 | Lost folder access | Supported | A selected folder that stops resolving (unmounted drive, deleted folder, revoked portal document) is reported as a recoverable "select it again" state on the Local music card, and the indexed catalog is left alone rather than replaced with an empty scan. |
-| Local tag/artwork reading | Unsupported | `UnsupportedLocalMetadataReader` on every filesystem scan, Android included. Tracks fall back to filename/folder derivation. A real desktop reader is later work in #376. |
+| Local tag reading | Supported | `FilesystemLocalMetadataReader` reads title, artist, album artist, album, track number and duration from ID3, Vorbis comments, MP4 atoms, APEv2 and RIFF INFO through `audio_metadata_reader` ([issue #407](https://github.com/TheZupZup/Linthra/issues/407)). An unreadable or untagged file still appears, from its filename. Android is deliberately unchanged: its tags come from the native SAF walk. |
+| Local embedded artwork | Unsupported | Tags are read without pulling cover images out of every file during a scan. Extracting and caching embedded art on desktop is [issue #408](https://github.com/TheZupZup/Linthra/issues/408); tracks keep the placeholder until then. |
 | Chromecast | Android/iOS only | Already gated in `cast_providers.dart`; Linux keeps the honest "cast unavailable" service. |
 | Share sheet, launcher-icon switching | Android-only, by design | No desktop equivalent; the UI simply omits them. |
 | Desktop layout, keyboard shortcuts | Not started | The existing layout renders in the window and is usable for development. The desktop UX pass is later work in #376. |

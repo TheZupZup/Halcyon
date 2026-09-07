@@ -39,6 +39,16 @@ jobs:
       - name: Install dependencies
         run: flutter pub get --enforce-lockfile
 
+      # Cheap, Flutter-independent, and it runs before the build because the
+      # regression it guards against would build perfectly: a method-channel
+      # handler that does its work inline blocks Android's platform thread and
+      # only shows up as an ANR on a real music library (#346).
+      - name: Check Android channel threading
+        run: python3 scripts/check_android_channel_threading.py
+
+      - name: Test the Android channel threading tooling
+        run: python3 test/tooling/check_android_channel_threading_test.py
+
       - name: Build debug APK
         run: flutter build apk --debug
 

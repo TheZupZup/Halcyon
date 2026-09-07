@@ -5,6 +5,7 @@ import '../../core/services/platform_folder_picker_service.dart';
 import '../../core/sources/local/android_media_library.dart';
 import '../../core/sources/local/audio_file_scanner.dart';
 import '../../core/sources/local/directory_readability.dart';
+import '../../core/sources/local/filesystem_local_metadata_reader.dart';
 import '../../core/sources/local/local_metadata_reader.dart';
 import '../../core/sources/local/method_channel_android_media_library.dart';
 import '../../core/sources/local/method_channel_saf_document_lister.dart';
@@ -66,6 +67,13 @@ final directoryReadabilityProvider = Provider<DirectoryReadability>((ref) {
 
 /// The tag-reading seam used to enrich filesystem (desktop/Linux and
 /// resolved-path) tracks with their audio metadata.
+///
+/// Android is deliberately left on [UnsupportedLocalMetadataReader]: its tags
+/// already come from the native SAF walk, which also caches embedded artwork,
+/// so reading them a second time in Dart would be duplicate work with a
+/// different answer. Everywhere else this is the only place tags come from.
 final localMetadataReaderProvider = Provider<LocalMetadataReader>((ref) {
-  return const UnsupportedLocalMetadataReader();
+  return ref.watch(hostPlatformProvider).isAndroid
+      ? const UnsupportedLocalMetadataReader()
+      : const FilesystemLocalMetadataReader();
 });

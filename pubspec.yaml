@@ -116,6 +116,17 @@ dependencies:
   # docs/dependency-license-audit.md §3.
   dbus: ^0.7.12
 
+  # Reads audio tags off the filesystem on desktop/Linux, so a local library
+  # shows real titles, artists, albums and durations instead of filenames
+  # (#407). Pure Dart (MIT), no native code: it parses the tag structures —
+  # ID3, Vorbis comments, MP4 atoms, APEv2, RIFF INFO — rather than reading a
+  # whole file to find its title, and it is asked for tags only, never cover
+  # art (embedded artwork is #408). Used ONLY by
+  # FilesystemLocalMetadataReader behind the LocalMetadataReader seam; Android
+  # keeps reading its tags in the native SAF walk and never loads this. See
+  # docs/dependency-license-audit.md §3.
+  audio_metadata_reader: ^1.7.1
+
 dependency_overrides:
   # Patched locally so headless Linux smoke tests can set libmpv `ao=alsa`
   # via [JustAudioMediaKit.mpvProperties] without forking production playback.

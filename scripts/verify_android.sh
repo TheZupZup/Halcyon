@@ -78,6 +78,14 @@ main() {
   # diagnostics fixture carrying real private data.
   run_step "secret & privacy scan" "$REPO_ROOT/scripts/check_secrets.sh"
 
+  # Also Flutter-independent, and the reason it is a check at all: a library
+  # walk that drifts back onto the platform thread still compiles and still
+  # passes every test — it only shows up as an ANR on a real library (#346).
+  run_step "Android channel threading" \
+    python3 scripts/check_android_channel_threading.py
+  run_step "Android channel threading tooling tests" \
+    python3 test/tooling/check_android_channel_threading_test.py
+
   if android_sdk_available; then
     run_step "flutter build apk --debug" "$FLUTTER" build apk --debug
   else

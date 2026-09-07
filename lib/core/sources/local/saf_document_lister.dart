@@ -87,6 +87,19 @@ class SafUnsupportedException implements Exception {
 ///  - throws a `FolderScanException` when traversal is available but fails.
 abstract interface class SafDocumentLister {
   Future<SafScanResult> listAudioDocuments(String treeUri);
+
+  /// Stops the walk in flight, if any, without starting another.
+  ///
+  /// Starting a scan already supersedes the one before it, which covers the
+  /// user picking a different folder. This covers abandoning the scan instead:
+  /// forgetting the folder, or switching to the device-wide library. Without
+  /// it the native walk runs to completion for a result nobody will read,
+  /// competing for content-resolver I/O with whatever replaced it.
+  ///
+  /// Best-effort and never throws: a platform that cannot cancel simply has
+  /// nothing to stop, and the Dart-side generation guard still discards the
+  /// result either way.
+  Future<void> cancelScan();
 }
 
 /// The default [SafDocumentLister] for platforms without native SAF traversal
@@ -100,4 +113,7 @@ class UnsupportedSafDocumentLister implements SafDocumentLister {
   Future<SafScanResult> listAudioDocuments(String treeUri) async {
     throw const SafUnsupportedException();
   }
+
+  @override
+  Future<void> cancelScan() async {}
 }

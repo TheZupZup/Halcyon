@@ -72,6 +72,20 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://pub.dev/api/archives/audio_metadata_reader-1.7.1.tar.gz",
+        "sha256": "79b08282447dfc4b7ff955f9c4eff824d7284c7b021ccfe8204550d8801a08a5",
+        "strip-components": 0,
+        "dest": ".pub-cache/hosted/pub.dev/audio_metadata_reader-1.7.1"
+    },
+    {
+        "type": "inline",
+        "contents": "79b08282447dfc4b7ff955f9c4eff824d7284c7b021ccfe8204550d8801a08a5",
+        "dest": ".pub-cache/hosted-hashes/pub.dev",
+        "dest-filename": "audio_metadata_reader-1.7.1.sha256"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://pub.dev/api/archives/audio_service-0.18.18.tar.gz",
         "sha256": "cb122c7c2639d2a992421ef96b67948ad88c5221da3365ccef1031393a76e044",
         "strip-components": 0,
@@ -376,6 +390,20 @@
         "contents": "fb0f1107cac15a5ea6ef0a6ef71a807b9e4267c713bb93e00e92d737cc8dbd8a",
         "dest": ".pub-cache/hosted-hashes/pub.dev",
         "dest-filename": "charcode-1.4.0.sha256"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://pub.dev/api/archives/charset-2.0.1.tar.gz",
+        "sha256": "27802032a581e01ac565904ece8c8962564b1070690794f0072f6865958ce8b9",
+        "strip-components": 0,
+        "dest": ".pub-cache/hosted/pub.dev/charset-2.0.1"
+    },
+    {
+        "type": "inline",
+        "contents": "27802032a581e01ac565904ece8c8962564b1070690794f0072f6865958ce8b9",
+        "dest": ".pub-cache/hosted-hashes/pub.dev",
+        "dest-filename": "charset-2.0.1.sha256"
     },
     {
         "type": "archive",
@@ -866,6 +894,20 @@
         "contents": "f9881ff4998044947ec38d098bc7c8316ae1186fa786eddffdb867b9bc94dfce",
         "dest": ".pub-cache/hosted-hashes/pub.dev",
         "dest-filename": "image-4.8.0.sha256"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://pub.dev/api/archives/intl-0.20.3.tar.gz",
+        "sha256": "1ca20c894b1717686a2319b8548763d812bc0aabdac580420a44c5178c57a867",
+        "strip-components": 0,
+        "dest": ".pub-cache/hosted/pub.dev/intl-0.20.3"
+    },
+    {
+        "type": "inline",
+        "contents": "1ca20c894b1717686a2319b8548763d812bc0aabdac580420a44c5178c57a867",
+        "dest": ".pub-cache/hosted-hashes/pub.dev",
+        "dest-filename": "intl-0.20.3.sha256"
     },
     {
         "type": "archive",

@@ -74,21 +74,21 @@ The specific combinations that need stating rather than assuming:
   AGPL in its §1.12 "Secondary License" definition. A naive text classifier that
   tests for "GNU Affero General Public License" before "Mozilla Public License"
   will mis-report every MPL-2.0 package as AGPL. Match MPL first.
-- **Result — 160 entries in `pubspec.lock`:**
+- **Result — 163 entries in `pubspec.lock`:**
 
   | Source | Count | Licenses |
   | --- | --- | --- |
-  | pub.dev hosted | 155 | **100** BSD-3-Clause, **42** MIT, **6** Apache-2.0, **6** BSD-2-Clause, **1** MPL-2.0 |
+  | pub.dev hosted | 158 | **101** BSD-3-Clause, **43** MIT, **7** Apache-2.0, **6** BSD-2-Clause, **1** MPL-2.0 |
   | Flutter SDK (`flutter`, `flutter_test`, `flutter_web_plugins`, `sky_engine`) | 4 | BSD-3-Clause (the SDK's own license) |
   | Vendored path dependency (`just_audio_media_kit`) | 1 | Unlicense (public domain) — see §5 |
 
   **No GPL, no LGPL, no proprietary, and no unknown or unverifiable license** in
   the resolved Dart/Flutter set. The single MPL-2.0 package is `dbus 0.7.12`
-  (§3). Counts by dependency kind: 20 direct-main, 3 direct-dev and 132
+  (§3). Counts by dependency kind: 21 direct-main, 3 direct-dev and 134
   transitive hosted packages.
 - **Supersedes the earlier snapshot.** A previous revision of this document
   reported 152 packages against Flutter 3.27.4 and, separately, classified
-  `just_audio` as MIT. Both are corrected here: the tree is now 160 entries
+  `just_audio` as MIT. Both are corrected here: the tree is now 163 entries
   against the committed lockfile, and `just_audio 0.9.46` ships an
   **Apache-2.0** `LICENSE`.
 - **Limits.** This is a repository/license engineering audit against the
@@ -134,10 +134,21 @@ published archive (§2).
 | `bonsoir`                | `^5.1.11`    | (Skyost)            | MIT            | mDNS/Bonjour service discovery used by `cast`; Android side is AOSP `NsdManager`, not GMS. Pinned to 5.x for Dart 3.6 (6.x+ needs Dart ≥3.8). See §5 (Casting). |
 | `url_launcher`           | `^6.3.0`     | flutter.dev         | BSD-3-Clause   | Opens the browser for the "Report a bug" → "Open GitHub issue" action (a prefilled, **unsubmitted** issue the user reviews). AOSP `ACTION_VIEW` intent; **no** GMS. See note below and §7 (Reporting a bug). |
 | `permission_handler`     | `^11.3.1`    | baseflow.com        | MIT            | Runtime permission requests. |
+| `audio_metadata_reader`  | `^1.7.1`     | (ClementBeal)       | MIT            | Reads local audio tags on desktop/Linux (ID3, Vorbis comments, MP4 atoms, APEv2, RIFF INFO). Pure Dart, parses tag structures rather than loading whole files. |
 | `audio_session`          | `^0.1.25`    | ryanheise.com       | MIT            | Audio-focus / interruption handling. |
 | `media_kit_libs_linux`   | `^1.2.1`     | media-kit.dev       | MIT            | Linux native registration for media_kit; links the **system/Flatpak libmpv** built in §5. Ships no prebuilt binary. |
 | `dbus`                   | `^0.7.12`    | canonical.com       | **MPL-2.0**    | D-Bus client behind the Linux MPRIS media session, so desktop shells and media keys can control Linthra. Already in the tree transitively (via `bonsoir_linux`); now declared directly. Compatible with AGPL-3.0-or-later under MPL-2.0 §3.3 — see §1 and §3. |
 | `just_audio_media_kit`   | (vendored)   | — (see §5)          | Unlicense      | Vendored Linux `just_audio` backend. Third-party code — **not** relicensed (§5). |
+
+> `audio_metadata_reader` was added so a Linux local library shows real titles,
+> artists, albums and durations instead of filenames
+> ([#407](https://github.com/thezupzup/linthra/issues/407)). It is **MIT**, pure
+> Dart, and pulls in two transitive runtime packages: `charset` (`2.0.1`,
+> (shirne), **Apache-2.0**) for the legacy text encodings ID3v2 tags can use, and
+> `intl` (`0.20.3`, dart.dev, **BSD-3-Clause**) for date parsing. Apache-2.0 is
+> compatible with AGPL-3.0-or-later (§1). The package reads only files the user
+> selected; it makes no network calls and Android does not use it at all (tags
+> there still come from the native SAF walk).
 
 > The `http` and `flutter_secure_storage` entries were added with the Jellyfin
 > source foundation; `cast` and `bonsoir` were added with real Chromecast
@@ -406,14 +417,17 @@ The in-app "Report a bug" flow (Settings → Report a bug) is the reason
 - **Project license:** AGPL-3.0-or-later (free, F-Droid-accepted). Releases up
   to and including v0.2.4 remain MPL-2.0 (§1).
 - **Direct dependencies:** MIT / BSD-3-Clause / Apache-2.0, plus one MPL-2.0
-  (`dbus`, for MPRIS) — all AGPL-compatible. No proprietary direct deps.
-- **Transitive set:** the full committed lockfile (160 entries) was audited from
-  each package's published archive (§2) — 100 BSD-3-Clause, 42 MIT, 6
+  (`dbus`, for MPRIS), all AGPL-compatible. No proprietary direct deps.
+- **Transitive set:** the full committed lockfile (163 entries) was audited from
+  each package's published archive (§2): 101 BSD-3-Clause, 43 MIT, 7
   Apache-2.0, 6 BSD-2-Clause, 1 MPL-2.0, plus 4 BSD-3-Clause SDK entries and 1
   Unlicense vendored package. **No GPL, no LGPL, no proprietary, no unknown.**
-- **The one MPL-2.0 package** (`dbus` — now direct, for MPRIS, and still
-  transitive via `bonsoir_linux`) is not marked "Incompatible With Secondary
-  Licenses", so MPL-2.0 §3.3 permits the AGPL combination (§1, §3).
+  The three most recent entries (`audio_metadata_reader` MIT, `charset`
+  Apache-2.0, `intl` BSD-3-Clause) were read from their archives the same way
+  when local metadata reading landed (§3).
+- **The one MPL-2.0 package** (`dbus`, now direct for MPRIS and still reached
+  transitively through `bonsoir_linux`) is not marked "Incompatible With
+  Secondary Licenses", so MPL-2.0 §3.3 permits the AGPL combination (§1, §3).
 - **Linux/Flatpak media stack:** FFmpeg `n9.0.1` (no `--enable-gpl`, no
   `--enable-nonfree`), mpv `v0.41.0` (`-Dgpl=false` **with** every GPL-only
   component explicitly disabled), libplacebo LGPL-2.1-or-later, libass ISC —

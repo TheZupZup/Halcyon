@@ -76,6 +76,21 @@ read a user-chosen folder is the **Storage Access Framework (SAF)**:
    descending into subfolders. One unreadable subfolder is skipped and counted,
    not fatal; a totally unreadable selected folder surfaces a clear error rather
    than a silent empty result.
+4. That walk runs **off the platform (main) thread**, on `PlatformChannelWorker`'s
+   single background thread, and the method-channel reply is encoded and sent
+   there too. A real library means thousands of
+   content-resolver queries plus a `MediaMetadataRetriever` open per file, so
+   scanning inline would freeze the UI and eventually trip an ANR. Two scans
+   never run at once. Picking a second folder mid-scan **supersedes** the first
+   rather than queueing behind it: the abandoned walk stops at its next file and
+   answers `saf_superseded`, so the folder you just chose starts right away
+   instead of waiting out a scan you already moved on from. Forgetting the
+   folder or switching to the device-wide library cancels it the same way, even
+   though neither starts a replacement scan. That flag is process-scoped, so it
+   keeps working if Android recreates the activity mid-scan. `scripts/check_android_channel_threading.py` guards both the thread
+   boundary and the cancellation, because a walk that drifts back onto the
+   platform thread, or a supersede that quietly stops superseding, still
+   compiles and still passes every test.
 
 This is why a raw path like `/storage/emulated/0/Music/...` is the wrong thing to
 store — it looks fine but can't be read under scoped storage. If you selected a
@@ -99,6 +114,23 @@ is an ordinary `dart:io` walk. What differs is where the path comes from:
    or deleted, or a portal grant you revoked — Linthra says so and asks you to
    select it again. It does **not** treat that as "this folder is empty now", so
    your indexed library stays as it is until you choose.
+4. **Tags are read from the files themselves**, not guessed from their names:
+   title, artist, album artist, album, track number and duration, from ID3
+   (MP3), Vorbis comments (FLAC, OGG, Opus), MP4 atoms (M4A), APEv2 and RIFF
+   INFO (WAV). Only the tag structures are parsed, so a 60 MB FLAC is not read
+   into memory to find its title. A file with no tags, or one that cannot be
+   parsed, still appears in the library with its filename-derived name — a
+   track is never dropped for having bad tags.
+
+   Two honest gaps on Linux today: **embedded cover art is not extracted yet**
+   ([#408](https://github.com/thezupzup/linthra/issues/408)), so local tracks
+   keep the placeholder; and **album artist** depends on the container. ID3
+   (TPE2), APEv2 and FLAC report a real one, so a compilation groups under the
+   album artist. OGG and Opus do not: the tag reader Linthra uses folds their
+   `ARTIST` and `ALBUMARTIST` comments into one list and loses which was which,
+   and guessing would be worse than reporting none, so those group by album and
+   artist instead. FLAC avoids that because Linthra reads its comment block
+   itself and keeps the field names.
 
 ## Local music vs Offline downloads vs Cache
 

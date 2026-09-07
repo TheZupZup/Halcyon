@@ -10,6 +10,8 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
 import java.util.ArrayDeque
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Walks a user-picked Storage Access Framework tree URI through the content
@@ -28,18 +30,86 @@ import java.util.ArrayDeque
  * walk, so one bad subtree can't zero out an otherwise-readable library. A
  * total access denial (a revoked grant) still surfaces as a SecurityException
  * so the user sees a clear "no access" message instead of a silent empty.
+ *
+ * Threading: the walk is blocking and proportional to the library, so it runs
+ * on [PlatformChannelWorker]'s background thread rather than on the platform
+ * thread Flutter calls the channel handler on (#346). The cheap calls
+ * ([hasPersistedPermission], [readSidecarText]) still answer inline.
  */
-class SafDocumentScanner(private val context: Context) {
-
-    /** Lists audio documents under [treeUri], reporting back through [result]. */
+class SafDocumentScanner(
+    private val context: Context,
+    private val worker: PlatformChannelWorker = PlatformChannelWorker(),
+) {
+    /**
+     * Lists audio documents under [treeUri], reporting back through [result].
+     *
+     * The walk runs on [PlatformChannelWorker]'s background thread, and [result]
+     * is encoded and answered there too, so a real library — thousands of
+     * content-resolver queries plus a [MediaMetadataRetriever] open per file —
+     * never blocks the UI (#346). This returns as soon as the work is queued.
+     *
+     * Starting a scan supersedes any earlier one: the older walk stops at its
+     * next file instead of making this one wait out a scan the user already
+     * moved on from. The flag that does it is process-scoped (see [currentScan])
+     * because the worker thread it frees is, so this holds across a scanner
+     * rebuilt with a recreated activity.
+     */
     fun listAudioDocuments(treeUri: String, result: MethodChannel.Result) {
-        try {
-            result.success(walk(Uri.parse(treeUri)))
-        } catch (e: SecurityException) {
-            result.error("saf_permission", "No access to the selected folder.", null)
-        } catch (e: Exception) {
-            result.error("saf_failed", "Failed to read the selected folder.", null)
-        }
+        // Supersede whatever was queued or running before answering this one.
+        val cancelled = AtomicBoolean(false)
+        currentScan.getAndSet(cancelled)?.set(true)
+
+        worker.submit(
+            work = { walk(Uri.parse(treeUri), cancelled) },
+            onSuccess = { documents -> result.success(documents) },
+            onFailure = { error ->
+                // A revoked or never-granted tree is a clear "no access"; every
+                // other failure stays a generic read error, so no provider
+                // message (which could carry a path) reaches the Dart side.
+                if (error is ScanSuperseded) {
+                    // Only ever reached by a scan a newer one replaced, and the
+                    // Dart side drops a superseded response on every path
+                    // (LibraryController's generation guard), so this reports
+                    // what happened rather than pretending the folder failed.
+                    result.error(
+                        "saf_superseded",
+                        "A newer scan replaced this one.",
+                        null,
+                    )
+                } else if (error is SecurityException) {
+                    result.error(
+                        "saf_permission",
+                        "No access to the selected folder.",
+                        null,
+                    )
+                } else {
+                    result.error(
+                        "saf_failed",
+                        "Failed to read the selected folder.",
+                        null,
+                    )
+                }
+            },
+        )
+    }
+
+    /**
+     * Stops the walk that is queued or running, if any, without starting one.
+     *
+     * [listAudioDocuments] already supersedes its predecessor, which covers a
+     * user picking a different folder. It does not cover abandoning the scan
+     * outright: forgetting the folder, or switching to the device-wide
+     * MediaStore library. Those only invalidate the Dart-side result, so
+     * without this the abandoned walk keeps opening a MediaMetadataRetriever
+     * and extracting artwork for the rest of a library nobody is waiting for,
+     * competing with the MediaStore traversal that just started for the same
+     * content-resolver I/O.
+     *
+     * Cheap (one atomic swap), so it answers on the calling thread. Safe to
+     * call when nothing is running: there is simply no flag to trip.
+     */
+    fun cancelScan() {
+        currentScan.getAndSet(null)?.set(true)
     }
 
     /**
@@ -130,7 +200,7 @@ class SafDocumentScanner(private val context: Context) {
         }
     }
 
-    private fun walk(treeUri: Uri): Map<String, Any?> {
+    private fun walk(treeUri: Uri, cancelled: AtomicBoolean): Map<String, Any?> {
         // Persist the grant when possible so a folder picked once can still be
         // scanned after a restart; harmless (and ignored) when not persistable.
         try {
@@ -153,6 +223,9 @@ class SafDocumentScanner(private val context: Context) {
         val queue = ArrayDeque<String>()
         queue.add(DocumentsContract.getTreeDocumentId(treeUri))
         while (queue.isNotEmpty()) {
+            // Checked here and once more per entry below, so a superseded walk
+            // stops within one file's work rather than one folder's.
+            if (cancelled.get()) throw ScanSuperseded()
             val parentDocId = queue.poll()
             val childrenUri =
                 DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
@@ -185,6 +258,12 @@ class SafDocumentScanner(private val context: Context) {
                 isRoot = false
                 cursor.use { c ->
                     while (c.moveToNext()) {
+                        // Also checked per entry, not only per folder: the
+                        // common shape is one flat Music folder holding every
+                        // track, so the outer loop runs once and a per-folder
+                        // check alone would not interrupt anything. This is the
+                        // loop that opens a MediaMetadataRetriever per file.
+                        if (cancelled.get()) throw ScanSuperseded()
                         val docId = c.getString(0) ?: continue
                         val name = c.getString(1) ?: continue
                         val mime = c.getString(2)
@@ -224,6 +303,16 @@ class SafDocumentScanner(private val context: Context) {
                         }
                     }
                 }
+            } catch (e: ScanSuperseded) {
+                // Cancellation is not a read failure. Without this clause the
+                // per-entry check in the cursor loop above lands in the generic
+                // catch, is counted as one unreadable subtree, and the walk
+                // carries on to answer a partial success. The Dart side would
+                // then decode a response of thousands of entries only to discard
+                // it, while the scan the user is actually waiting for keeps
+                // queueing. Rethrow so the worker answers the small
+                // saf_superseded error instead.
+                throw e
             } catch (e: SecurityException) {
                 // A total access denial must surface as a clear error, not a
                 // silent empty — rethrow so listAudioDocuments reports it.
@@ -368,7 +457,36 @@ class SafDocumentScanner(private val context: Context) {
         return bytes.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
     }
 
+    /** Raised inside [walk] when a newer scan superseded this one. */
+    private class ScanSuperseded : Exception()
+
     companion object {
+        /**
+         * The cancellation flag of the walk currently queued or running, if any.
+         *
+         * Scans share one worker thread, so a second one waits for the first.
+         * That is right while both are wanted and wrong the moment the first is
+         * not: a user who picks a different folder mid-scan would otherwise
+         * watch the new one sit "loading" for however long the abandoned walk
+         * still had to run. Superseding sets this flag, the walk notices at its
+         * next file, and the thread frees up for the selection the user
+         * actually made.
+         *
+         * Process-scoped, deliberately, because the thread it frees is:
+         * [PlatformChannelWorker]'s executor outlives any one activity, so a
+         * flag that did not would stop cancelling exactly when the activity is
+         * recreated mid-scan ("Don't keep activities", a low-memory reclaim
+         * while the audio service keeps the process alive, a config change
+         * outside the manifest's list; the same recreation `MainActivity`'s
+         * pending folder pick already has to survive). The new activity's
+         * scanner would hold an empty flag, the obsolete walk would keep the
+         * worker thread, and the folder the user just picked would wait it out.
+         *
+         * Only ever read and written through [AtomicReference.getAndSet] here,
+         * so two scans racing from different threads still hand off cleanly.
+         */
+        private val currentScan = AtomicReference<AtomicBoolean?>(null)
+
         private val AUDIO_EXTENSIONS =
             listOf(".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wav")
 
