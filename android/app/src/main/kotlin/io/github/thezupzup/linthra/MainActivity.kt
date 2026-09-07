@@ -44,11 +44,12 @@ class MainActivity : AudioServiceActivity() {
     }
 
     // Walks the picked SAF tree and reads sidecar lyrics from it. One instance
-    // for the activity, not one per call: it holds the cancellation flag of the
-    // walk in flight, and a fresh scanner per request would have nothing to
-    // cancel — the superseded walk would keep the shared worker thread and the
-    // newly picked folder would wait it out (#346). Application-scoped so it
-    // never retains this activity.
+    // for the activity rather than one per channel call, like every other
+    // channel here. Superseding an in-flight walk does not depend on this: the
+    // cancellation flag lives in SafDocumentScanner's companion object, process-
+    // scoped like the worker thread it frees, so it survives this activity being
+    // recreated mid-scan the same way the pending folder pick below does (#346).
+    // Application-scoped so it never retains this activity.
     private val safDocumentScanner by lazy {
         SafDocumentScanner(applicationContext)
     }

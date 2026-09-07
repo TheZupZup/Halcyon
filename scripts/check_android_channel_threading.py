@@ -3,8 +3,9 @@
 
 This is a narrow, offline source tripwire, not a Kotlin compiler or a proof of
 thread safety. It checks that the expensive walk is evaluated inside the work
-lambda submitted to the real background worker, and that result encoding stays
-on that worker. A token appearing somewhere in the same method is not enough.
+lambda submitted to the real background worker, that result encoding stays on
+that worker, and that superseding a queued scan keeps working. A token appearing
+somewhere in the same method is not enough.
 
     python3 scripts/check_android_channel_threading.py
 """
@@ -30,7 +31,6 @@ KOTLIN = (
 )
 WORKER_FILE = "PlatformChannelWorker.kt"
 SCANNER_FILE = "SafDocumentScanner.kt"
-ACTIVITY_FILE = "MainActivity.kt"
 SCAN_METHOD = "listAudioDocuments"
 SCAN_WORK = "walk"
 
@@ -233,38 +233,65 @@ def check_scanner(directory: Path, failures: list[str]) -> None:
         failures.append(f"{SCANNER_FILE}: expected exactly one worker submission")
 
 
-def check_scanner_is_shared(directory: Path, failures: list[str]) -> None:
-    """One scanner for the channel, so a new scan can cancel the one in flight.
+def companion_span(code: str) -> tuple[int, int] | None:
+    match = re.search(r"\bcompanion\s+object\s*\{", code)
+    if match is None:
+        return None
+    return balanced_span(code, match.end() - 1)
 
-    Constructing `SafDocumentScanner(...)` per request is the natural thing to
-    write and it silently disables cancellation: the fresh instance holds no
-    in-flight walk, so the superseded one keeps the shared worker thread and the
-    folder the user just picked waits it out. Nothing fails, nothing logs, the
-    scan simply takes as long as the one it replaced.
+
+def check_cancellation(directory: Path, failures: list[str]) -> None:
+    """Superseding a queued scan has to keep working, and it fails quietly.
+
+    Two ways to break it that both compile, pass every test, and read like a
+    tidy-up in review:
+
+    1. Moving `currentScan` out of the companion object onto the instance. It
+       looks like ordinary state, but the thread it frees is process-wide, so an
+       instance flag stops cancelling the moment the activity is recreated
+       mid-scan and the new scanner comes up holding nothing.
+    2. Dropping the `ScanSuperseded` rethrow from the walk's per-folder catch.
+       Cancellation is then counted as one unreadable subtree, the walk finishes
+       and answers a partial success, and the replacement scan keeps waiting.
+
+    Neither logs anything. The scan just takes as long as the one it replaced.
     """
-    source = code_only(read(directory, ACTIVITY_FILE, failures))
+    source = code_only(read(directory, SCANNER_FILE, failures))
     if not source:
         return
 
-    constructions = occurrences(source, rf"\b{re.escape(SCANNER_FILE[:-3])}\s*\(")
-    if len(constructions) != 1:
+    flag = occurrences(source, r"\bval\s+currentScan\b")
+    if not flag:
+        failures.append(f"{SCANNER_FILE}: no currentScan flag to supersede a walk")
+        return
+    companion = companion_span(source)
+    if companion is None or outside(flag, companion):
         failures.append(
-            f"{ACTIVITY_FILE}: expected exactly one SafDocumentScanner construction, "
-            f"found {len(constructions)} — a scanner built per request has no "
-            "in-flight walk to cancel (#346)"
+            f"{SCANNER_FILE}: currentScan must live in the companion object, "
+            "process-scoped like the worker thread it frees. An activity "
+            "recreated mid-scan otherwise brings up a scanner with an empty flag "
+            "and nothing to cancel (#346)"
         )
+
+    walk = function_span(source, SCAN_WORK)
+    if walk is None:
+        failures.append(f"{SCANNER_FILE}: no {SCAN_WORK}() to check")
+        return
+    body = source[walk[0] : walk[1]]
+    if not occurrences(body, r"\bthrow\s+ScanSuperseded\s*\("):
+        failures.append(f"{SCANNER_FILE}: {SCAN_WORK}() never acts on cancellation")
         return
 
-    # The single construction has to be the stored one, not a call site that
-    # happens to be alone today.
-    if not re.search(
-        r"\bval\s+\w+\s+by\s+lazy\s*\{[^}]*SafDocumentScanner\s*\(",
-        source,
-        re.DOTALL,
+    # The rethrow has to come before the catch-all, or Kotlin never reaches it.
+    superseded = re.search(r"\bcatch\s*\(\s*\w+\s*:\s*ScanSuperseded\s*\)", body)
+    catch_all = re.search(r"\bcatch\s*\(\s*\w+\s*:\s*Exception\s*\)", body)
+    if catch_all is not None and (
+        superseded is None or superseded.start() > catch_all.start()
     ):
         failures.append(
-            f"{ACTIVITY_FILE}: the SafDocumentScanner must be held for the "
-            "activity (a `by lazy` property), not built at a call site"
+            f"{SCANNER_FILE}: {SCAN_WORK}() must rethrow ScanSuperseded before its "
+            "catch-all, or a superseded scan is counted as an unreadable subtree "
+            "and answers a partial success instead (#346)"
         )
 
 
@@ -272,7 +299,7 @@ def check(directory: Path) -> list[str]:
     failures: list[str] = []
     check_worker(directory, failures)
     check_scanner(directory, failures)
-    check_scanner_is_shared(directory, failures)
+    check_cancellation(directory, failures)
     return failures
 
 

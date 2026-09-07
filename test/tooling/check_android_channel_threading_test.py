@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Mutation tests for the SAF threading tripwire (#346).
 
-The synthetic fixtures deliberately move the walk outside the submitted work,
-including the regression that #570's previous checker failed to detect.
-Everything runs offline without an Android SDK or Gradle.
+The synthetic fixtures deliberately break one thing each: the walk moved
+outside the submitted work (including the regression that #570's previous
+checker failed to detect), and the two quiet ways scan cancellation stops
+working. Everything runs offline without an Android SDK or Gradle.
 """
 
 from __future__ import annotations
@@ -61,7 +62,7 @@ class PlatformChannelWorker(
 """
 
 SUBMITTING_SCAN = """        worker.submit(
-            work = { walk(Uri.parse(treeUri)) },
+            work = { walk(Uri.parse(treeUri), cancelled) },
             onSuccess = { documents -> result.success(documents) },
             onFailure = { error ->
                 if (error is SecurityException) {
@@ -71,6 +72,27 @@ SUBMITTING_SCAN = """        worker.submit(
                 }
             },
         )"""
+
+GOOD_WALK = """    private fun walk(treeUri: Uri, cancelled: AtomicBoolean): Map<String, Any?> {
+        while (queue.isNotEmpty()) {
+            if (cancelled.get()) throw ScanSuperseded()
+            try {
+                cursor.use { c ->
+                    while (c.moveToNext()) {
+                        if (cancelled.get()) throw ScanSuperseded()
+                    }
+                }
+            } catch (e: ScanSuperseded) {
+                throw e
+            } catch (e: SecurityException) {
+                throw e
+            } catch (e: Exception) {
+                readFailures++
+            }
+        }
+        return emptyMap()
+    }
+"""
 
 GOOD_SCANNER = (
     """package io.github.thezupzup.linthra
@@ -86,32 +108,15 @@ class SafDocumentScanner(
     + SUBMITTING_SCAN
     + """
     }
-    private fun walk(treeUri: Uri): Map<String, Any?> = emptyMap()
+"""
+    + GOOD_WALK
+    + """    private class ScanSuperseded : Exception()
+    companion object {
+        private val currentScan = AtomicReference<AtomicBoolean?>(null)
+    }
 }
 """
 )
-
-
-GOOD_ACTIVITY = """package io.github.thezupzup.linthra
-
-class MainActivity : AudioServiceActivity() {
-    // One scanner for the channel: it holds the cancellation flag of the walk
-    // in flight, and a fresh one per request would have nothing to cancel.
-    private val safDocumentScanner by lazy {
-        SafDocumentScanner(applicationContext)
-    }
-
-    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
-        when (call.method) {
-            "listAudioDocuments" -> safDocumentScanner.listAudioDocuments(treeUri, result)
-            "hasPersistedPermission" ->
-                result.success(safDocumentScanner.hasPersistedPermission(treeUri))
-            "readSidecarText" ->
-                result.success(safDocumentScanner.readSidecarText(uri, extension))
-        }
-    }
-}
-"""
 
 
 class CheckerTest(unittest.TestCase):
@@ -120,13 +125,11 @@ class CheckerTest(unittest.TestCase):
         *,
         worker: str = GOOD_WORKER,
         scanner: str = GOOD_SCANNER,
-        activity: str = GOOD_ACTIVITY,
     ):
         with tempfile.TemporaryDirectory() as raw:
             directory = Path(raw)
             (directory / checker.WORKER_FILE).write_text(worker, encoding="utf-8")
             (directory / checker.SCANNER_FILE).write_text(scanner, encoding="utf-8")
-            (directory / checker.ACTIVITY_FILE).write_text(activity, encoding="utf-8")
             return checker.check(directory)
 
     def assertCaught(self, failures: list[str], needle: str) -> None:
@@ -145,20 +148,17 @@ class CheckerTest(unittest.TestCase):
             (directory / checker.SCANNER_FILE).write_text(
                 GOOD_SCANNER, encoding="utf-8"
             )
-            (directory / checker.ACTIVITY_FILE).write_text(
-                GOOD_ACTIVITY, encoding="utf-8"
-            )
             self.assertCaught(checker.check(directory), "missing")
 
     def test_the_pre_fix_shape_is_caught(self):
-        inline = "        result.success(walk(Uri.parse(treeUri)))"
+        inline = "        result.success(walk(Uri.parse(treeUri), cancelled))"
         self.assertCaught(
             self.check(scanner=GOOD_SCANNER.replace(SUBMITTING_SCAN, inline)),
             "does not submit",
         )
 
     def test_a_reformatted_inline_reply_is_caught(self):
-        inline = "        result . success (\n walk(Uri.parse(treeUri))\n )"
+        inline = "        result . success (\n walk(Uri.parse(treeUri), cancelled)\n )"
         self.assertCaught(
             self.check(scanner=GOOD_SCANNER.replace(SUBMITTING_SCAN, inline)),
             "does not submit",
@@ -207,30 +207,36 @@ class CheckerTest(unittest.TestCase):
     def test_eager_walk_then_submitted_value_is_caught(self):
         scanner = GOOD_SCANNER.replace(
             SUBMITTING_SCAN,
-            "        val documents = walk(Uri.parse(treeUri))\n"
-            + SUBMITTING_SCAN.replace("walk(Uri.parse(treeUri))", "documents"),
+            "        val documents = walk(Uri.parse(treeUri), cancelled)\n"
+            + SUBMITTING_SCAN.replace(
+                "walk(Uri.parse(treeUri), cancelled)", "documents"
+            ),
         )
         self.assertCaught(self.check(scanner=scanner), "inside the submitted work")
 
     def test_eager_walk_with_another_valid_work_lambda_is_caught(self):
         scanner = GOOD_SCANNER.replace(
             SUBMITTING_SCAN,
-            "        val eager = walk(Uri.parse(treeUri))\n" + SUBMITTING_SCAN,
+            "        val eager = walk(Uri.parse(treeUri), cancelled)\n"
+            + SUBMITTING_SCAN,
         )
         self.assertCaught(self.check(scanner=scanner), "inside the submitted work")
 
     def test_walk_after_submission_is_caught(self):
         scanner = GOOD_SCANNER.replace(
-            SUBMITTING_SCAN, SUBMITTING_SCAN + "\n        walk(Uri.parse(treeUri))"
+            SUBMITTING_SCAN,
+            SUBMITTING_SCAN + "\n        walk(Uri.parse(treeUri), cancelled)",
         )
         self.assertCaught(self.check(scanner=scanner), "inside the submitted work")
 
     def test_work_in_a_comment_cannot_hide_an_eager_walk(self):
         scanner = GOOD_SCANNER.replace(
             SUBMITTING_SCAN,
-            "        val documents = walk(Uri.parse(treeUri))\n"
-            "        // work = { walk(Uri.parse(treeUri)) }\n"
-            + SUBMITTING_SCAN.replace("walk(Uri.parse(treeUri))", "documents"),
+            "        val documents = walk(Uri.parse(treeUri), cancelled)\n"
+            "        // work = { walk(Uri.parse(treeUri), cancelled) }\n"
+            + SUBMITTING_SCAN.replace(
+                "walk(Uri.parse(treeUri), cancelled)", "documents"
+            ),
         )
         self.assertCaught(self.check(scanner=scanner), "inside the submitted work")
 
@@ -267,41 +273,55 @@ class CheckerTest(unittest.TestCase):
         )
         self.assertEqual(self.check(scanner=scanner), [])
 
-    def test_a_scanner_built_per_request_is_caught(self):
-        # The shape that silently disabled cancellation: each request gets a
-        # fresh instance, so there is never an in-flight walk to supersede.
-        activity = GOOD_ACTIVITY.replace(
-            "safDocumentScanner.listAudioDocuments(treeUri, result)",
-            "SafDocumentScanner(applicationContext)"
-            ".listAudioDocuments(treeUri, result)",
-        )
-        self.assertCaught(self.check(activity=activity), "exactly one")
-
-    def test_a_scanner_built_at_a_call_site_is_caught(self):
-        # Exactly one construction, but not a stored one: cancellation state
-        # still dies with the call.
-        activity = GOOD_ACTIVITY.replace(
-            """    private val safDocumentScanner by lazy {
-        SafDocumentScanner(applicationContext)
+    def test_an_instance_scoped_cancellation_flag_is_caught(self):
+        # Compiles and works until the activity is recreated mid-scan, at which
+        # point the new scanner's flag is empty and nothing cancels.
+        scanner = GOOD_SCANNER.replace(
+            """    companion object {
+        private val currentScan = AtomicReference<AtomicBoolean?>(null)
     }
-
 """,
             "",
         ).replace(
-            "safDocumentScanner.listAudioDocuments(treeUri, result)",
-            "SafDocumentScanner(applicationContext)"
-            ".listAudioDocuments(treeUri, result)",
+            "class SafDocumentScanner(",
+            "private val currentScan = AtomicReference<AtomicBoolean?>(null)\n"
+            "class SafDocumentScanner(",
         )
-        self.assertCaught(self.check(activity=activity), "held for the")
+        self.assertCaught(self.check(scanner=scanner), "companion object")
 
-    def test_a_missing_activity_is_caught(self):
-        with tempfile.TemporaryDirectory() as raw:
-            directory = Path(raw)
-            (directory / checker.WORKER_FILE).write_text(GOOD_WORKER, encoding="utf-8")
-            (directory / checker.SCANNER_FILE).write_text(
-                GOOD_SCANNER, encoding="utf-8"
-            )
-            self.assertCaught(checker.check(directory), "missing")
+    def test_a_missing_cancellation_flag_is_caught(self):
+        scanner = GOOD_SCANNER.replace("val currentScan", "val unusedScan")
+        self.assertCaught(self.check(scanner=scanner), "no currentScan")
+
+    def test_dropping_the_superseded_rethrow_is_caught(self):
+        # The quiet one: cancellation becomes "one unreadable subtree" and the
+        # walk answers a partial success instead of saf_superseded.
+        scanner = GOOD_SCANNER.replace(
+            "            } catch (e: ScanSuperseded) {\n                throw e\n", ""
+        )
+        self.assertCaught(self.check(scanner=scanner), "before its catch-all")
+
+    def test_a_superseded_catch_after_the_catch_all_is_caught(self):
+        # Present but unreachable: Kotlin matches the catch-all first.
+        scanner = GOOD_SCANNER.replace(
+            "            } catch (e: ScanSuperseded) {\n                throw e\n", ""
+        ).replace(
+            "            } catch (e: Exception) {\n                readFailures++\n",
+            "            } catch (e: Exception) {\n                readFailures++\n"
+            "            } catch (e: ScanSuperseded) {\n                throw e\n",
+        )
+        self.assertCaught(self.check(scanner=scanner), "before its catch-all")
+
+    def test_a_walk_that_never_checks_cancellation_is_caught(self):
+        scanner = GOOD_SCANNER.replace("throw ScanSuperseded()", "continue")
+        self.assertCaught(self.check(scanner=scanner), "never acts on cancellation")
+
+    def test_a_commented_out_rethrow_does_not_count(self):
+        scanner = GOOD_SCANNER.replace(
+            "            } catch (e: ScanSuperseded) {\n                throw e\n",
+            "            // } catch (e: ScanSuperseded) { throw e\n",
+        )
+        self.assertCaught(self.check(scanner=scanner), "before its catch-all")
 
 
 if __name__ == "__main__":

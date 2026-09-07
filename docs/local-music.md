@@ -81,9 +81,15 @@ read a user-chosen folder is the **Storage Access Framework (SAF)**:
    there too. A real library means thousands of
    content-resolver queries plus a `MediaMetadataRetriever` open per file, so
    scanning inline would freeze the UI and eventually trip an ANR. Two scans
-   queue rather than run at once. `scripts/check_android_channel_threading.py`
-   guards the boundary, because a walk that drifts back onto the platform thread
-   still compiles and still passes every test.
+   never run at once. Picking a second folder mid-scan **supersedes** the first
+   rather than queueing behind it: the abandoned walk stops at its next file and
+   answers `saf_superseded`, so the folder you just chose starts right away
+   instead of waiting out a scan you already moved on from. That flag is
+   process-scoped, so it keeps working if Android recreates the activity
+   mid-scan. `scripts/check_android_channel_threading.py` guards both the thread
+   boundary and the cancellation, because a walk that drifts back onto the
+   platform thread, or a supersede that quietly stops superseding, still
+   compiles and still passes every test.
 
 This is why a raw path like `/storage/emulated/0/Music/...` is the wrong thing to
 store — it looks fine but can't be read under scoped storage. If you selected a

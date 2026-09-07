@@ -40,21 +40,6 @@ class SafDocumentScanner(
     private val context: Context,
     private val worker: PlatformChannelWorker = PlatformChannelWorker(),
 ) {
-
-    /**
-     * The cancellation flag of the walk currently queued or running, if any.
-     *
-     * Scans share one worker thread, so a second one waits for the first. That
-     * is right while both are wanted and wrong the moment the first is not: a
-     * user who picks a different folder mid-scan would otherwise watch the new
-     * one sit "loading" for however long the abandoned walk still had to run.
-     * Superseding sets this flag, the walk notices at its next file, and the
-     * thread frees up for the selection the user actually made. This is why
-     * `MainActivity` keeps one scanner instead of building one per request:
-     * a fresh instance would have no in-flight walk to cancel.
-     */
-    private val currentScan = AtomicReference<AtomicBoolean?>(null)
-
     /**
      * Lists audio documents under [treeUri], reporting back through [result].
      *
@@ -65,8 +50,9 @@ class SafDocumentScanner(
      *
      * Starting a scan supersedes any earlier one: the older walk stops at its
      * next file instead of making this one wait out a scan the user already
-     * moved on from. That needs one scanner for the whole channel rather than
-     * one per request, which is why `MainActivity` holds it.
+     * moved on from. The flag that does it is process-scoped (see [currentScan])
+     * because the worker thread it frees is, so this holds across a scanner
+     * rebuilt with a recreated activity.
      */
     fun listAudioDocuments(treeUri: String, result: MethodChannel.Result) {
         // Supersede whatever was queued or running before answering this one.
@@ -298,6 +284,16 @@ class SafDocumentScanner(
                         }
                     }
                 }
+            } catch (e: ScanSuperseded) {
+                // Cancellation is not a read failure. Without this clause the
+                // per-entry check in the cursor loop above lands in the generic
+                // catch, is counted as one unreadable subtree, and the walk
+                // carries on to answer a partial success. The Dart side would
+                // then decode a response of thousands of entries only to discard
+                // it, while the scan the user is actually waiting for keeps
+                // queueing. Rethrow so the worker answers the small
+                // saf_superseded error instead.
+                throw e
             } catch (e: SecurityException) {
                 // A total access denial must surface as a clear error, not a
                 // silent empty — rethrow so listAudioDocuments reports it.
@@ -446,6 +442,32 @@ class SafDocumentScanner(
     private class ScanSuperseded : Exception()
 
     companion object {
+        /**
+         * The cancellation flag of the walk currently queued or running, if any.
+         *
+         * Scans share one worker thread, so a second one waits for the first.
+         * That is right while both are wanted and wrong the moment the first is
+         * not: a user who picks a different folder mid-scan would otherwise
+         * watch the new one sit "loading" for however long the abandoned walk
+         * still had to run. Superseding sets this flag, the walk notices at its
+         * next file, and the thread frees up for the selection the user
+         * actually made.
+         *
+         * Process-scoped, deliberately, because the thread it frees is:
+         * [PlatformChannelWorker]'s executor outlives any one activity, so a
+         * flag that did not would stop cancelling exactly when the activity is
+         * recreated mid-scan ("Don't keep activities", a low-memory reclaim
+         * while the audio service keeps the process alive, a config change
+         * outside the manifest's list; the same recreation `MainActivity`'s
+         * pending folder pick already has to survive). The new activity's
+         * scanner would hold an empty flag, the obsolete walk would keep the
+         * worker thread, and the folder the user just picked would wait it out.
+         *
+         * Only ever read and written through [AtomicReference.getAndSet] here,
+         * so two scans racing from different threads still hand off cleanly.
+         */
+        private val currentScan = AtomicReference<AtomicBoolean?>(null)
+
         private val AUDIO_EXTENSIONS =
             listOf(".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wav")
 
