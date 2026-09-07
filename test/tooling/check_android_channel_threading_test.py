@@ -92,12 +92,41 @@ class SafDocumentScanner(
 )
 
 
+GOOD_ACTIVITY = """package io.github.thezupzup.linthra
+
+class MainActivity : AudioServiceActivity() {
+    // One scanner for the channel: it holds the cancellation flag of the walk
+    // in flight, and a fresh one per request would have nothing to cancel.
+    private val safDocumentScanner by lazy {
+        SafDocumentScanner(applicationContext)
+    }
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        when (call.method) {
+            "listAudioDocuments" -> safDocumentScanner.listAudioDocuments(treeUri, result)
+            "hasPersistedPermission" ->
+                result.success(safDocumentScanner.hasPersistedPermission(treeUri))
+            "readSidecarText" ->
+                result.success(safDocumentScanner.readSidecarText(uri, extension))
+        }
+    }
+}
+"""
+
+
 class CheckerTest(unittest.TestCase):
-    def check(self, *, worker: str = GOOD_WORKER, scanner: str = GOOD_SCANNER):
+    def check(
+        self,
+        *,
+        worker: str = GOOD_WORKER,
+        scanner: str = GOOD_SCANNER,
+        activity: str = GOOD_ACTIVITY,
+    ):
         with tempfile.TemporaryDirectory() as raw:
             directory = Path(raw)
             (directory / checker.WORKER_FILE).write_text(worker, encoding="utf-8")
             (directory / checker.SCANNER_FILE).write_text(scanner, encoding="utf-8")
+            (directory / checker.ACTIVITY_FILE).write_text(activity, encoding="utf-8")
             return checker.check(directory)
 
     def assertCaught(self, failures: list[str], needle: str) -> None:
@@ -113,18 +142,23 @@ class CheckerTest(unittest.TestCase):
     def test_a_missing_worker_file_is_caught(self):
         with tempfile.TemporaryDirectory() as raw:
             directory = Path(raw)
-            (directory / checker.SCANNER_FILE).write_text(GOOD_SCANNER, encoding="utf-8")
+            (directory / checker.SCANNER_FILE).write_text(
+                GOOD_SCANNER, encoding="utf-8"
+            )
+            (directory / checker.ACTIVITY_FILE).write_text(
+                GOOD_ACTIVITY, encoding="utf-8"
+            )
             self.assertCaught(checker.check(directory), "missing")
 
     def test_the_pre_fix_shape_is_caught(self):
-        inline = '        result.success(walk(Uri.parse(treeUri)))'
+        inline = "        result.success(walk(Uri.parse(treeUri)))"
         self.assertCaught(
             self.check(scanner=GOOD_SCANNER.replace(SUBMITTING_SCAN, inline)),
             "does not submit",
         )
 
     def test_a_reformatted_inline_reply_is_caught(self):
-        inline = '        result . success (\n walk(Uri.parse(treeUri))\n )'
+        inline = "        result . success (\n walk(Uri.parse(treeUri))\n )"
         self.assertCaught(
             self.check(scanner=GOOD_SCANNER.replace(SUBMITTING_SCAN, inline)),
             "does not submit",
@@ -154,14 +188,19 @@ class CheckerTest(unittest.TestCase):
         self.assertCaught(self.check(worker=worker), "work() is evaluated outside")
 
     def test_callbacks_outside_the_executor_are_caught(self):
-        worker = GOOD_WORKER.replace("                    onFailure(e)", "                    throw e").replace(
-            "            onSuccess(value)", "            value\n        }\n        onSuccess(work())"
+        worker = GOOD_WORKER.replace(
+            "                    onFailure(e)", "                    throw e"
+        ).replace(
+            "            onSuccess(value)",
+            "            value\n        }\n        onSuccess(work())",
         )
         self.assertCaught(self.check(worker=worker), "callbacks must stay inside")
 
     def test_a_renamed_scan_method_is_caught(self):
         self.assertCaught(
-            self.check(scanner=GOOD_SCANNER.replace("fun listAudioDocuments", "fun listAudio")),
+            self.check(
+                scanner=GOOD_SCANNER.replace("fun listAudioDocuments", "fun listAudio")
+            ),
             "no listAudioDocuments()",
         )
 
@@ -202,25 +241,67 @@ class CheckerTest(unittest.TestCase):
         self.assertCaught(self.check(scanner=scanner), "must not answer inline")
 
     def test_a_second_submission_is_caught(self):
-        scanner = GOOD_SCANNER.replace(SUBMITTING_SCAN, SUBMITTING_SCAN + "\n" + SUBMITTING_SCAN)
+        scanner = GOOD_SCANNER.replace(
+            SUBMITTING_SCAN, SUBMITTING_SCAN + "\n" + SUBMITTING_SCAN
+        )
         self.assertCaught(self.check(scanner=scanner), "exactly one")
 
     def test_a_synchronous_production_executor_is_caught(self):
-        worker = GOOD_WORKER.replace("newSingleThreadExecutor", "newSingleThreadExecutorRemoved")
+        worker = GOOD_WORKER.replace(
+            "newSingleThreadExecutor", "newSingleThreadExecutorRemoved"
+        )
         self.assertCaught(self.check(worker=worker), "background thread factory")
 
     def test_comments_and_strings_cannot_fake_calls(self):
-        worker = GOOD_WORKER.replace("                    work()", '                    "work()"')
+        worker = GOOD_WORKER.replace(
+            "                    work()", '                    "work()"'
+        )
         self.assertCaught(self.check(worker=worker), "work() is evaluated outside")
 
     def test_nested_comments_and_raw_strings_do_not_break_nesting(self):
         scanner = GOOD_SCANNER.replace(
             SUBMITTING_SCAN,
-            '        /* outer { /* inner ) } */ still } */\n'
+            "        /* outer { /* inner ) } */ still } */\n"
             '        val prose = """{ ) worker.submit(work = { walk() })"""\n'
             + SUBMITTING_SCAN,
         )
         self.assertEqual(self.check(scanner=scanner), [])
+
+    def test_a_scanner_built_per_request_is_caught(self):
+        # The shape that silently disabled cancellation: each request gets a
+        # fresh instance, so there is never an in-flight walk to supersede.
+        activity = GOOD_ACTIVITY.replace(
+            "safDocumentScanner.listAudioDocuments(treeUri, result)",
+            "SafDocumentScanner(applicationContext)"
+            ".listAudioDocuments(treeUri, result)",
+        )
+        self.assertCaught(self.check(activity=activity), "exactly one")
+
+    def test_a_scanner_built_at_a_call_site_is_caught(self):
+        # Exactly one construction, but not a stored one: cancellation state
+        # still dies with the call.
+        activity = GOOD_ACTIVITY.replace(
+            """    private val safDocumentScanner by lazy {
+        SafDocumentScanner(applicationContext)
+    }
+
+""",
+            "",
+        ).replace(
+            "safDocumentScanner.listAudioDocuments(treeUri, result)",
+            "SafDocumentScanner(applicationContext)"
+            ".listAudioDocuments(treeUri, result)",
+        )
+        self.assertCaught(self.check(activity=activity), "held for the")
+
+    def test_a_missing_activity_is_caught(self):
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            (directory / checker.WORKER_FILE).write_text(GOOD_WORKER, encoding="utf-8")
+            (directory / checker.SCANNER_FILE).write_text(
+                GOOD_SCANNER, encoding="utf-8"
+            )
+            self.assertCaught(checker.check(directory), "missing")
 
 
 if __name__ == "__main__":

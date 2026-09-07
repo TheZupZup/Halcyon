@@ -48,8 +48,10 @@ class SafDocumentScanner(
      * is right while both are wanted and wrong the moment the first is not: a
      * user who picks a different folder mid-scan would otherwise watch the new
      * one sit "loading" for however long the abandoned walk still had to run.
-     * Superseding sets this flag, the walk notices between folders, and the
-     * thread frees up for the selection the user actually made.
+     * Superseding sets this flag, the walk notices at its next file, and the
+     * thread frees up for the selection the user actually made. This is why
+     * `MainActivity` keeps one scanner instead of building one per request:
+     * a fresh instance would have no in-flight walk to cancel.
      */
     private val currentScan = AtomicReference<AtomicBoolean?>(null)
 
@@ -62,8 +64,9 @@ class SafDocumentScanner(
      * never blocks the UI (#346). This returns as soon as the work is queued.
      *
      * Starting a scan supersedes any earlier one: the older walk stops at its
-     * next folder boundary instead of making this one wait out a scan the user
-     * already moved on from.
+     * next file instead of making this one wait out a scan the user already
+     * moved on from. That needs one scanner for the whole channel rather than
+     * one per request, which is why `MainActivity` holds it.
      */
     fun listAudioDocuments(treeUri: String, result: MethodChannel.Result) {
         // Supersede whatever was queued or running before answering this one.
@@ -215,8 +218,8 @@ class SafDocumentScanner(
         val queue = ArrayDeque<String>()
         queue.add(DocumentsContract.getTreeDocumentId(treeUri))
         while (queue.isNotEmpty()) {
-            // Checked per folder rather than per file: it bounds the wait to one
-            // directory listing without adding a check to the hot path.
+            // Checked here and once more per entry below, so a superseded walk
+            // stops within one file's work rather than one folder's.
             if (cancelled.get()) throw ScanSuperseded()
             val parentDocId = queue.poll()
             val childrenUri =
@@ -250,6 +253,12 @@ class SafDocumentScanner(
                 isRoot = false
                 cursor.use { c ->
                     while (c.moveToNext()) {
+                        // Also checked per entry, not only per folder: the
+                        // common shape is one flat Music folder holding every
+                        // track, so the outer loop runs once and a per-folder
+                        // check alone would not interrupt anything. This is the
+                        // loop that opens a MediaMetadataRetriever per file.
+                        if (cancelled.get()) throw ScanSuperseded()
                         val docId = c.getString(0) ?: continue
                         val name = c.getString(1) ?: continue
                         val mime = c.getString(2)

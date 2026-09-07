@@ -43,6 +43,16 @@ class MainActivity : AudioServiceActivity() {
         InstallHistoryChannel(applicationContext)
     }
 
+    // Walks the picked SAF tree and reads sidecar lyrics from it. One instance
+    // for the activity, not one per call: it holds the cancellation flag of the
+    // walk in flight, and a fresh scanner per request would have nothing to
+    // cancel — the superseded walk would keep the shared worker thread and the
+    // newly picked folder would wait it out (#346). Application-scoped so it
+    // never retains this activity.
+    private val safDocumentScanner by lazy {
+        SafDocumentScanner(applicationContext)
+    }
+
     // Optional device-wide local-library path. Unlike SAF, this uses Android's
     // explicit Music and audio runtime permission and MediaStore. Kept on its
     // own channel so broad-library access is auditable separately from targeted
@@ -85,7 +95,7 @@ class MainActivity : AudioServiceActivity() {
                         if (treeUri == null) {
                             result.error("bad_args", "treeUri is required", null)
                         } else {
-                            SafDocumentScanner(applicationContext)
+                            safDocumentScanner
                                 .listAudioDocuments(treeUri, result)
                         }
                     }
@@ -95,7 +105,7 @@ class MainActivity : AudioServiceActivity() {
                             result.error("bad_args", "treeUri is required", null)
                         } else {
                             result.success(
-                                SafDocumentScanner(applicationContext)
+                                safDocumentScanner
                                     .hasPersistedPermission(treeUri),
                             )
                         }
@@ -114,7 +124,7 @@ class MainActivity : AudioServiceActivity() {
                             )
                         } else {
                             result.success(
-                                SafDocumentScanner(applicationContext)
+                                safDocumentScanner
                                     .readSidecarText(uri, extension),
                             )
                         }

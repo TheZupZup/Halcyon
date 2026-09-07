@@ -30,6 +30,7 @@ KOTLIN = (
 )
 WORKER_FILE = "PlatformChannelWorker.kt"
 SCANNER_FILE = "SafDocumentScanner.kt"
+ACTIVITY_FILE = "MainActivity.kt"
 SCAN_METHOD = "listAudioDocuments"
 SCAN_WORK = "walk"
 
@@ -232,10 +233,46 @@ def check_scanner(directory: Path, failures: list[str]) -> None:
         failures.append(f"{SCANNER_FILE}: expected exactly one worker submission")
 
 
+def check_scanner_is_shared(directory: Path, failures: list[str]) -> None:
+    """One scanner for the channel, so a new scan can cancel the one in flight.
+
+    Constructing `SafDocumentScanner(...)` per request is the natural thing to
+    write and it silently disables cancellation: the fresh instance holds no
+    in-flight walk, so the superseded one keeps the shared worker thread and the
+    folder the user just picked waits it out. Nothing fails, nothing logs, the
+    scan simply takes as long as the one it replaced.
+    """
+    source = code_only(read(directory, ACTIVITY_FILE, failures))
+    if not source:
+        return
+
+    constructions = occurrences(source, rf"\b{re.escape(SCANNER_FILE[:-3])}\s*\(")
+    if len(constructions) != 1:
+        failures.append(
+            f"{ACTIVITY_FILE}: expected exactly one SafDocumentScanner construction, "
+            f"found {len(constructions)} — a scanner built per request has no "
+            "in-flight walk to cancel (#346)"
+        )
+        return
+
+    # The single construction has to be the stored one, not a call site that
+    # happens to be alone today.
+    if not re.search(
+        r"\bval\s+\w+\s+by\s+lazy\s*\{[^}]*SafDocumentScanner\s*\(",
+        source,
+        re.DOTALL,
+    ):
+        failures.append(
+            f"{ACTIVITY_FILE}: the SafDocumentScanner must be held for the "
+            "activity (a `by lazy` property), not built at a call site"
+        )
+
+
 def check(directory: Path) -> list[str]:
     failures: list[str] = []
     check_worker(directory, failures)
     check_scanner(directory, failures)
+    check_scanner_is_shared(directory, failures)
     return failures
 
 
