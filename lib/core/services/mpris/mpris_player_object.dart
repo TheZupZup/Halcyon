@@ -202,6 +202,13 @@ class MprisPlayerObject extends DBusObject {
 
   /// `Seek(x)` — a *relative* jump in microseconds, clamped into the track.
   ///
+  /// Whether the current track can be seeked, which is what `CanSeek`
+  /// advertises and what both seek methods honour.
+  ///
+  /// A track with no known duration is still loading (or is a stream), and has
+  /// no timeline to seek within.
+  bool get _canSeek => _state.duration > Duration.zero;
+
   /// The spec is explicit that seeking past the end means skipping to the next
   /// track, and that a negative result clamps to zero rather than going back a
   /// track.
@@ -209,6 +216,12 @@ class MprisPlayerObject extends DBusObject {
     if (methodCall.signature != DBusSignature('x')) {
       return DBusMethodErrorResponse.invalidArgs();
     }
+    // CanSeek is false for a track with no known duration (still loading, or a
+    // stream). Seeking one anyway is not just meaningless: on the Linux
+    // controller a seek supersedes the in-flight load, so a `playerctl
+    // position` against a loading track strands it with no playback at all.
+    if (!_canSeek) return DBusMethodSuccessResponse();
+
     final int offset = (methodCall.values.first as DBusInt64).value;
     final PlaybackState state = _state;
     final Duration target = state.position + Duration(microseconds: offset);
@@ -230,6 +243,8 @@ class MprisPlayerObject extends DBusObject {
     if (methodCall.signature != DBusSignature('ox')) {
       return DBusMethodErrorResponse.invalidArgs();
     }
+    if (!_canSeek) return DBusMethodSuccessResponse();
+
     final DBusObjectPath trackId = methodCall.values[0] as DBusObjectPath;
     final int position = (methodCall.values[1] as DBusInt64).value;
 
@@ -386,7 +401,7 @@ class MprisPlayerObject extends DBusObject {
       'CanGoPrevious': DBusBoolean(state.hasPrevious),
       'CanPlay': DBusBoolean(state.currentTrack != null),
       'CanPause': DBusBoolean(state.currentTrack != null),
-      'CanSeek': DBusBoolean(state.duration > Duration.zero),
+      'CanSeek': DBusBoolean(_canSeek),
       'CanControl': const DBusBoolean(true),
     };
   }

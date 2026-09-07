@@ -316,6 +316,38 @@ void main() {
     });
   });
 
+  group('seeking a track that cannot be seeked', () {
+    // CanSeek is false without a known duration. Honouring it is not cosmetic:
+    // on the Linux controller a seek supersedes the in-flight load, so seeking
+    // a still-loading track strands it with no playback at all.
+    test('CanSeek is false while the duration is unknown', () {
+      controller.emit(PlaybackState(
+          status: PlaybackStatus.loading, currentTrack: _track()));
+      expect(property('CanSeek'), const DBusBoolean(false));
+    });
+
+    test('Seek does nothing when CanSeek is false', () async {
+      controller.emit(PlaybackState(
+          status: PlaybackStatus.loading, currentTrack: _track()));
+
+      await call('Seek', values: <DBusValue>[const DBusInt64(5000000)]);
+
+      expect(controller.seeks, isEmpty);
+    });
+
+    test('SetPosition does nothing when CanSeek is false', () async {
+      controller.emit(PlaybackState(
+          status: PlaybackStatus.loading, currentTrack: _track()));
+
+      await call('SetPosition', values: <DBusValue>[
+        DBusObjectPath('/io/github/thezupzup/linthra/track/1'),
+        const DBusInt64(5000000),
+      ]);
+
+      expect(controller.seeks, isEmpty);
+    });
+  });
+
   group('metadata', () {
     test('publishes what the catalog knows', () {
       controller.emit(PlaybackState(

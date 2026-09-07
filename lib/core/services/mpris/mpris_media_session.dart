@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:dbus/dbus.dart';
 
@@ -107,10 +108,20 @@ class MprisMediaSession implements MediaSession {
   /// MPRIS says a player that cannot take the plain name should append
   /// `.instance<pid>`, so a second Linthra window is still individually
   /// controllable instead of silently invisible to every shell.
+  ///
+  /// The pid is tried first because it is the spec's suggestion and it makes
+  /// the name legible in `playerctl -l`, but it cannot be trusted to be unique:
+  /// each Flatpak instance has its own pid namespace, so two sandboxed windows
+  /// can genuinely both be pid 2, and the runner allows several instances
+  /// (G_APPLICATION_NON_UNIQUE). Random suffixes follow, so a collision costs a
+  /// less readable name rather than a window with no media controls at all.
   static Future<String?> _claimName(DBusClient client, int processId) async {
+    final Random random = Random();
     for (final String candidate in <String>[
       _baseName,
       '$_baseName.instance$processId',
+      for (int i = 0; i < 8; i++)
+        '$_baseName.instance$processId-${random.nextInt(1 << 32)}',
     ]) {
       final DBusRequestNameReply reply = await client.requestName(
         candidate,
@@ -161,7 +172,12 @@ class MprisMediaSession implements MediaSession {
           _object.properties(MprisPlayerObject.playerInterface);
       final DBusValue? metadata = current['Metadata'];
       if (metadata == null || previous['Metadata'] == metadata) return;
-      previous = current;
+      // Only the baseline for what is actually being emitted. Taking all of
+      // `current` would mark properties this signal does not carry as already
+      // published: a coverReady landing just before a state event would leave
+      // CanGoNext or PlaybackStatus looking unchanged to the loop below, and
+      // the shell would keep stale controls.
+      previous = <String, DBusValue>{...previous, 'Metadata': metadata};
       unawaited(_emit(<String, DBusValue>{'Metadata': metadata}));
     });
   }

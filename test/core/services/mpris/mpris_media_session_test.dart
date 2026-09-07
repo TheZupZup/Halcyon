@@ -45,6 +45,11 @@ class _FakeBus extends DBusClient {
   final List<String> order = <String>[];
   int closeCalls = 0;
 
+  /// Refuses every name, however many candidates are tried. Needed now that
+  /// the fallback keeps going with random suffixes, so a fixed set of taken
+  /// names can no longer exhaust it.
+  bool refuseAll = false;
+
   @override
   Future<DBusRequestNameReply> requestName(
     String name, {
@@ -52,7 +57,7 @@ class _FakeBus extends DBusClient {
   }) async {
     requestedNames.add(name);
     order.add('name');
-    return takenNames.contains(name)
+    return refuseAll || takenNames.contains(name)
         ? DBusRequestNameReply.exists
         : DBusRequestNameReply.primaryOwner;
   }
@@ -178,12 +183,7 @@ void main() {
     });
 
     test('a bus that refuses every name leaves nothing open', () async {
-      final _FakeBus bus = _FakeBus(
-        takenNames: <String>{
-          'org.mpris.MediaPlayer2.linthra',
-          'org.mpris.MediaPlayer2.linthra.instance7',
-        },
-      );
+      final _FakeBus bus = _FakeBus()..refuseAll = true;
 
       final MprisMediaSession? session = await MprisMediaSession.connect(
         controller,
@@ -200,6 +200,31 @@ void main() {
           reason: 'an export must not outlive the attach that failed');
       expect(bus.closeCalls, 1,
           reason: 'a client that claimed nothing must not stay open');
+    });
+
+    test('a taken pid name still yields a usable one', () async {
+      // Each Flatpak instance has its own pid namespace, so two sandboxed
+      // windows can genuinely both be pid 2, and the runner allows several
+      // instances. If the pid name is taken too, falling back to nothing would
+      // leave that window with no media controls at all.
+      final _FakeBus bus = _FakeBus(
+        takenNames: <String>{
+          'org.mpris.MediaPlayer2.linthra',
+          'org.mpris.MediaPlayer2.linthra.instance7',
+        },
+      );
+
+      final MprisMediaSession? session = await MprisMediaSession.connect(
+        controller,
+        clientFactory: () => bus,
+        processId: 7,
+      );
+      addTearDown(() async => session?.detach());
+
+      expect(session, isNotNull);
+      expect(session!.name, startsWith('org.mpris.MediaPlayer2.linthra.'),
+          reason: 'the Flatpak grant only covers Linthra\'s own names');
+      expect(bus.takenNames, isNot(contains(session.name)));
     });
 
     test('the object is exported before the name is claimed', () async {
@@ -295,6 +320,51 @@ void main() {
       final Map<DBusValue, DBusValue> props =
           (changed.last.values[1] as DBusDict).children;
       expect(props.containsKey(const DBusString('Metadata')), isTrue);
+    });
+
+    test('a cover landing just before a state change does not swallow it',
+        () async {
+      // The cover callback emits only Metadata, so it must move only that
+      // baseline. Marking every property as published would make the state
+      // callback right behind it see no differences, and a shell would keep
+      // stale controls (CanGoNext, PlaybackStatus) for as long as they stayed
+      // unchanged after that.
+      final _Artwork artwork = _Artwork();
+      final _FakeBus raceBus = _FakeBus();
+      final MprisMediaSession raced = (await MprisMediaSession.connect(
+        controller,
+        artwork: artwork,
+        clientFactory: () => raceBus,
+      ))!;
+      addTearDown(raced.detach);
+
+      final Uri reference = Uri.parse('subsonic-cover:42');
+      controller.emit(PlaybackState(
+        status: PlaybackStatus.paused,
+        currentTrack: _track('a', artworkUri: reference),
+      ));
+      await pumpEventQueue();
+
+      // The cover lands, and the playback state changes right after it.
+      artwork.warm(reference, Uri.file('/cache/42.img'));
+      controller.emit(PlaybackState(
+        status: PlaybackStatus.playing,
+        currentTrack: _track('a', artworkUri: reference),
+        upNext: <Track>[_track('b')],
+      ));
+      await pumpEventQueue();
+
+      final Set<String> published = <String>{
+        for (final _Signal s in raceBus.signals
+            .where((_Signal s) => s.name == 'PropertiesChanged'))
+          ...(s.values[1] as DBusDict)
+              .children
+              .keys
+              .map((DBusValue k) => (k as DBusString).value),
+      };
+      expect(published, contains('PlaybackStatus'),
+          reason: 'the state change behind the cover must still be published');
+      expect(published, contains('CanGoNext'));
     });
 
     test('an in-app seek is announced with Seeked', () async {
