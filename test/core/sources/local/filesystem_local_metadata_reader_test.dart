@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -253,6 +254,67 @@ void main() {
 
       expect(track.title, 'Broken');
       expect(track.trackNumber, 5);
+    });
+  });
+
+  group('staying off the UI thread', () {
+    // The tag parse itself is synchronous. If readFromPath did all its work
+    // before returning, its Future would already be complete, and awaiting a
+    // complete Future only schedules a microtask. The microtask queue drains
+    // fully before the event loop gets another turn, so a scan of a whole
+    // library would run as one unbroken chain: no frame rendered and no input
+    // handled from the first file to the last. Nothing about that shows up in
+    // a normal test, which is why these two assert it directly.
+
+    test('one read reaches the event loop, not just the microtask queue',
+        () async {
+      final String path =
+          write('One.flac', AudioTagFixtures.flac(title: 'One'));
+      var reachedEventLoop = false;
+      // Timer fires from the event loop; a microtask-only chain never lets it.
+      Timer.run(() => reachedEventLoop = true);
+
+      await reader.readFromPath(path);
+
+      expect(
+        reachedEventLoop,
+        isTrue,
+        reason: 'readFromPath returned without ever yielding to the event '
+            'loop, so a scan would freeze the UI for its whole duration',
+      );
+    });
+
+    test('a run of reads keeps letting the event loop in', () async {
+      final List<String> paths = <String>[
+        for (int i = 0; i < 20; i++)
+          write('Track $i.flac', AudioTagFixtures.flac(title: 'T$i')),
+      ];
+      var ticks = 0;
+      final Timer timer =
+          Timer.periodic(const Duration(microseconds: 100), (_) => ticks++);
+      addTearDown(timer.cancel);
+
+      for (final String path in paths) {
+        await reader.readFromPath(path);
+      }
+
+      // Not one tick per file exactly (timers are not that precise), but a
+      // starved event loop scores zero, which is the failure being caught.
+      expect(
+        ticks,
+        greaterThan(0),
+        reason: 'the event loop never ran during a 20-file pass',
+      );
+    });
+
+    test('a missing file still yields before giving up', () async {
+      // The early return is the one path that skips the parse; it must not
+      // become the fast synchronous path that starves everything after it.
+      var reachedEventLoop = false;
+      Timer.run(() => reachedEventLoop = true);
+
+      expect(await reader.readFromPath('${root.path}/nope.flac'), isNull);
+      expect(reachedEventLoop, isTrue);
     });
   });
 }

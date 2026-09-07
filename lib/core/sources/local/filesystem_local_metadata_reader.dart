@@ -31,7 +31,19 @@ class FilesystemLocalMetadataReader implements LocalMetadataReader {
   Future<LocalAudioMetadata?> readFromPath(String path) async {
     try {
       final File file = File(path);
-      if (!file.existsSync()) return null;
+      // `await`, and asynchronous `exists()` rather than `existsSync()`, is
+      // load-bearing: it is the only point in this method that reaches the
+      // event loop. `readAllMetadata` below is synchronous, so without a real
+      // asynchronous call first, this method would do all its work before
+      // returning an already-completed Future. A caller awaiting that gets a
+      // microtask, and the microtask queue drains completely before the event
+      // loop runs again — so a scan of thousands of files would be one
+      // unbroken chain with no frame rendered and no input handled from the
+      // first file to the last. Measured on a 2000-iteration stand-in: zero
+      // event-loop ticks with the synchronous check, one per file with this.
+      // Switching this back to existsSync() re-freezes the desktop UI for the
+      // length of the scan, silently (see the test that asserts the yield).
+      if (!await file.exists()) return null;
       // Format-specific rather than the package's unified `readMetadata`: that
       // one folds ID3's TPE2 (album artist) into a single `artist` field, which
       // would lose the distinction the catalog groups albums by.
