@@ -72,20 +72,35 @@ abstract final class AudioTagFixtures {
     String? album,
     String? track,
     bool albumArtistFirst = false,
+    List<String> artists = const <String>[],
     int sampleRate = 44100,
     int totalSamples = 44100 * 3,
   }) {
-    final List<String> artists = <String>[
+    final List<String> artistComments = <String>[
       if (artist != null) 'ARTIST=$artist',
+      // Vorbis writes a collaboration as a repeated field, not a joined string.
+      for (final String extra in artists) 'ARTIST=$extra',
       if (albumArtist != null) 'ALBUMARTIST=$albumArtist',
     ];
     final List<String> comments = <String>[
       if (title != null) 'TITLE=$title',
-      ...(albumArtistFirst ? artists.reversed : artists),
+      ...(albumArtistFirst ? artistComments.reversed : artistComments),
       if (album != null) 'ALBUM=$album',
       if (track != null) 'TRACKNUMBER=$track',
     ];
 
+    return _flacFrom(
+      comments,
+      sampleRate: sampleRate,
+      totalSamples: totalSamples,
+    );
+  }
+
+  static Uint8List _flacFrom(
+    List<String> comments, {
+    int sampleRate = 44100,
+    int totalSamples = 44100 * 3,
+  }) {
     final BytesBuilder vorbis = BytesBuilder();
     const String vendor = 'Linthra test fixture';
     vorbis.add(_uint32le(vendor.length));
@@ -108,6 +123,12 @@ abstract final class AudioTagFixtures {
     file.add(vorbisBlock);
     return file.toBytes();
   }
+
+  /// A FLAC whose comment block carries [comments] verbatim, so a test can
+  /// write shapes the typed builder above will not: a missing `=`, a lower-case
+  /// field name, a value containing its own `=`.
+  static Uint8List flacWithRawComments(List<String> comments) =>
+      _flacFrom(comments);
 
   /// A WAV carrying RIFF `INFO` tags.
   ///

@@ -6,7 +6,7 @@ import 'local_audio_metadata.dart';
 ///
 /// This is a seam, deliberately mirroring [SafDocumentLister]: the source
 /// depends on this interface, never on a concrete reader, so tag reading can
-/// change without touching the scanner, source, or mapper — which is exactly
+/// change without touching the scanner, source, or mapper, which is exactly
 /// how the real reader arrived (#407) without a caller moving.
 ///
 /// Which implementation runs is `localMetadataReaderProvider`'s decision:

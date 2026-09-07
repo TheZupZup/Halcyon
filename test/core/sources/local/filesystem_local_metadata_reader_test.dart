@@ -283,40 +283,6 @@ void main() {
       }
     });
 
-    test('a compilation reports no artist rather than a coin flip', () async {
-      // ARTIST and ALBUMARTIST disagree and the reader cannot tell which is
-      // which, so the mapper falls back to the filename and folder. Absent
-      // beats naming the compilation as the performer half the time.
-      final String artistFirst = write(
-        'artist-first.flac',
-        AudioTagFixtures.flac(
-          title: 'Song',
-          artist: 'Featured Guest',
-          albumArtist: 'Various Artists',
-          album: 'Comp',
-        ),
-      );
-      final String albumArtistFirst = write(
-        'albumartist-first.flac',
-        AudioTagFixtures.flac(
-          title: 'Song',
-          artist: 'Featured Guest',
-          albumArtist: 'Various Artists',
-          album: 'Comp',
-          albumArtistFirst: true,
-        ),
-      );
-
-      final LocalAudioMetadata? a = await reader.readFromPath(artistFirst);
-      final LocalAudioMetadata? b = await reader.readFromPath(albumArtistFirst);
-
-      // The point of the test: same file, two tagger orders, same answer.
-      expect(a?.artist, isNull);
-      expect(b?.artist, isNull);
-      expect(a?.title, 'Song');
-      expect(b?.title, 'Song');
-    });
-
     test('one tag alone is unambiguous whichever it is', () async {
       final String path = write(
         'artist-only.flac',
@@ -324,6 +290,50 @@ void main() {
       );
 
       expect((await reader.readFromPath(path))?.artist, 'Solo Act');
+    });
+
+    test('repeated ARTIST fields are a collaboration, not an ambiguity',
+        () async {
+      // The spec's way to credit two performers. The merged list looks exactly
+      // like ARTIST + ALBUMARTIST, which is why the field names have to be read
+      // rather than inferred.
+      final String path = write(
+        'collab.flac',
+        AudioTagFixtures.flac(
+          title: 'Under Pressure',
+          artist: 'Queen',
+          artists: <String>['David Bowie'],
+          album: 'Hot Space',
+        ),
+      );
+
+      final LocalAudioMetadata? metadata = await reader.readFromPath(path);
+
+      expect(metadata?.artist, 'Queen, David Bowie');
+      expect(metadata?.albumArtist, isNull);
+    });
+
+    test('a compilation keeps the performer and the album artist apart',
+        () async {
+      // Reading the field names means this no longer has to choose: the
+      // performer stays the performer and the album artist groups the album.
+      for (final bool albumArtistFirst in <bool>[false, true]) {
+        final String path = write(
+          'comp\$albumArtistFirst.flac',
+          AudioTagFixtures.flac(
+            title: 'Song',
+            artist: 'Featured Guest',
+            albumArtist: 'Various Artists',
+            album: 'Comp',
+            albumArtistFirst: albumArtistFirst,
+          ),
+        );
+
+        final LocalAudioMetadata? metadata = await reader.readFromPath(path);
+
+        expect(metadata?.artist, 'Featured Guest');
+        expect(metadata?.albumArtist, 'Various Artists');
+      }
     });
   });
 
