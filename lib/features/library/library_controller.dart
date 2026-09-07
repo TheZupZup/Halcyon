@@ -13,17 +13,23 @@ import 'local_scan_report_provider.dart';
 /// Drives the Library screen: loads tracks from the [MusicLibraryRepository]
 /// and exposes them as a [LibraryState].
 class LibraryController extends Notifier<LibraryState> {
+  int _catalogGeneration = 0;
+
   @override
   LibraryState build() {
     _load();
     return const LibraryState.loading();
   }
 
-  Future<void> refresh() => _load();
+  Future<void> refresh() {
+    _catalogGeneration++;
+    return _load();
+  }
 
   /// Scans a filesystem folder, SAF tree, or Android device-wide MediaStore
   /// selection, persists the discovered tracks, then reloads the catalog.
   Future<void> scanFolder(String folderPath) async {
+    final int generation = ++_catalogGeneration;
     state = const LibraryState.loading();
     final FolderLocation location = FolderLocation.parse(folderPath);
     try {
@@ -35,6 +41,10 @@ class LibraryController extends Notifier<LibraryState> {
         metadataReader: ref.read(localMetadataReaderProvider),
       );
       final LocalScan scan = await source.scanTracks();
+      // A SAF scan can take long enough for the user to forget this source or
+      // start a scan of another one. Never let that obsolete result repopulate
+      // or replace the catalog chosen by the newer action.
+      if (generation != _catalogGeneration) return;
       final repository = ref.read(musicLibraryRepositoryProvider);
       await repository.upsertCatalog(
         sourceId: source.id,
@@ -45,6 +55,7 @@ class LibraryController extends Notifier<LibraryState> {
       ref.read(localScanReportProvider.notifier).record(scan.report);
       await _load();
     } on FolderScanException catch (error) {
+      if (generation != _catalogGeneration) return;
       ref.read(localScanReportProvider.notifier).record(
             LocalScanReport.failure(
               folderSelected: folderPath.isNotEmpty,
@@ -61,6 +72,7 @@ class LibraryController extends Notifier<LibraryState> {
           );
       state = LibraryState.error(error.message);
     } catch (_) {
+      if (generation != _catalogGeneration) return;
       ref.read(localScanReportProvider.notifier).record(
             LocalScanReport.failure(
               folderSelected: folderPath.isNotEmpty,

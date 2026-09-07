@@ -28,18 +28,48 @@ import java.util.ArrayDeque
  * walk, so one bad subtree can't zero out an otherwise-readable library. A
  * total access denial (a revoked grant) still surfaces as a SecurityException
  * so the user sees a clear "no access" message instead of a silent empty.
+ *
+ * Threading: the walk is blocking and proportional to the library, so it runs
+ * on [PlatformChannelWorker]'s background thread rather than on the platform
+ * thread Flutter calls the channel handler on (#346). The cheap calls
+ * ([hasPersistedPermission], [readSidecarText]) still answer inline.
  */
-class SafDocumentScanner(private val context: Context) {
+class SafDocumentScanner(
+    private val context: Context,
+    private val worker: PlatformChannelWorker = PlatformChannelWorker(),
+) {
 
-    /** Lists audio documents under [treeUri], reporting back through [result]. */
+    /**
+     * Lists audio documents under [treeUri], reporting back through [result].
+     *
+     * The walk runs on [PlatformChannelWorker]'s background thread and [result]
+     * and the result is encoded and answered there, so a real library — thousands of
+     * content-resolver queries plus a [MediaMetadataRetriever] open per file —
+     * never blocks the UI (#346). This returns as soon as the work is queued.
+     */
     fun listAudioDocuments(treeUri: String, result: MethodChannel.Result) {
-        try {
-            result.success(walk(Uri.parse(treeUri)))
-        } catch (e: SecurityException) {
-            result.error("saf_permission", "No access to the selected folder.", null)
-        } catch (e: Exception) {
-            result.error("saf_failed", "Failed to read the selected folder.", null)
-        }
+        worker.submit(
+            work = { walk(Uri.parse(treeUri)) },
+            onSuccess = { documents -> result.success(documents) },
+            onFailure = { error ->
+                // A revoked or never-granted tree is a clear "no access"; every
+                // other failure stays a generic read error, so no provider
+                // message (which could carry a path) reaches the Dart side.
+                if (error is SecurityException) {
+                    result.error(
+                        "saf_permission",
+                        "No access to the selected folder.",
+                        null,
+                    )
+                } else {
+                    result.error(
+                        "saf_failed",
+                        "Failed to read the selected folder.",
+                        null,
+                    )
+                }
+            },
+        )
     }
 
     /**
