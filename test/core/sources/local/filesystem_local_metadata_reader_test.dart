@@ -313,6 +313,26 @@ void main() {
       expect(metadata?.albumArtist, isNull);
     });
 
+    test('a jointly credited album keeps every album artist', () async {
+      // Repeating the field is how Vorbis writes a joint credit, for an album
+      // as much as for a track. Keeping only the first would group the album
+      // under half its name.
+      final String path = write(
+        'joint.flac',
+        AudioTagFixtures.flacWithRawComments(<String>[
+          'TITLE=Track',
+          'ARTIST=Performer',
+          'ALBUMARTIST=Sleaford Mods',
+          'ALBUMARTIST=Amy Taylor',
+        ]),
+      );
+
+      final LocalAudioMetadata? metadata = await reader.readFromPath(path);
+
+      expect(metadata?.albumArtist, 'Sleaford Mods, Amy Taylor');
+      expect(metadata?.artist, 'Performer');
+    });
+
     test('a compilation keeps the performer and the album artist apart',
         () async {
       // Reading the field names means this no longer has to choose: the

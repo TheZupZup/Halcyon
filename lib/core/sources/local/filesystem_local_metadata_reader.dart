@@ -67,9 +67,10 @@ class FilesystemLocalMetadataReader implements LocalMetadataReader {
   ///
   /// [fields] is null for every non-FLAC container (and for an unreadable
   /// block), in which case [metadata] keeps whatever the package's merged list
-  /// produced. `ARTIST` values are joined because the spec's way to write a
-  /// collaboration is to repeat the field; `ALBUMARTIST` takes the first, since
-  /// an album has one.
+  /// produced. Both fields join their values: the spec's way to write a joint
+  /// credit is to repeat the field, and that is as true of an album credited to
+  /// two artists as of a track. Keeping only the first would drop the rest of
+  /// the credit and group the album under an incomplete name.
   static LocalAudioMetadata _withVorbisArtists(
     LocalAudioMetadata metadata,
     Map<String, List<String>>? fields,
@@ -80,7 +81,7 @@ class FilesystemLocalMetadataReader implements LocalMetadataReader {
     return LocalAudioMetadata(
       title: metadata.title,
       artist: artists.isEmpty ? null : artists.join(', '),
-      albumArtist: albumArtists.firstOrNull,
+      albumArtist: albumArtists.isEmpty ? null : albumArtists.join(', '),
       album: metadata.album,
       albumId: metadata.albumId,
       trackNumber: metadata.trackNumber,

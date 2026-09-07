@@ -24,10 +24,13 @@ import 'dart:typed_data';
 class VorbisCommentFields {
   const VorbisCommentFields._();
 
-  /// A sanity bound on the comment block itself, so a corrupt 24-bit length
-  /// cannot ask for an arbitrary allocation. Real comment blocks are a few KiB;
-  /// this is not a bound on the metadata ahead of it, which is seeked past.
-  static const int _maxCommentBlockBytes = 1 << 20; // 1 MiB
+  /// A sanity bound on a *single* comment, so a corrupt 32-bit length cannot
+  /// ask for an arbitrary allocation. Nothing bounds the block itself: a tagger
+  /// that stores long lyrics or base64 artwork in a comment produces a
+  /// perfectly valid block of many MiB, and rejecting it would lose the short
+  /// artist fields sitting right beside the big value. An oversized entry is
+  /// seeked past; its neighbours are kept.
+  static const int _maxCommentBytes = 1 << 20; // 1 MiB
 
   /// Comments keyed by upper-cased field name, or null when [file] is not a
   /// FLAC whose comment block could be read.
@@ -58,10 +61,9 @@ class VorbisCommentFields {
         final int length = (header[1] << 16) | (header[2] << 8) | header[3];
 
         if (type == _vorbisCommentBlock) {
-          if (length > _maxCommentBlockBytes) return null;
-          final Uint8List block = await handle.read(length);
-          if (block.length < length) return null; // truncated
-          return _parseComments(block);
+          // Awaited, not returned: `finally` closes the handle, and returning
+          // the future directly would close it out from under the read.
+          return await _readComments(handle, length);
         }
         if (isLast) return null; // no comment block in this file
         await handle.setPosition(await handle.position() + length);
@@ -71,6 +73,54 @@ class VorbisCommentFields {
     } finally {
       await handle?.close();
     }
+  }
+
+  /// Reads the entries of a comment block [blockLength] bytes long one at a
+  /// time, so a large block never becomes a large allocation.
+  ///
+  /// Each entry is a 32-bit little-endian length and that many UTF-8 bytes. An
+  /// entry longer than [_maxCommentBytes] is seeked past rather than read, and
+  /// rather than failing the file: a field name is short, so an entry that big
+  /// is never one of the fields this is after, and the entries around it are.
+  static Future<Map<String, List<String>>?> _readComments(
+    RandomAccessFile handle,
+    int blockLength,
+  ) async {
+    final int end = await handle.position() + blockLength;
+
+    Future<int?> readUint32le() async {
+      if (await handle.position() + 4 > end) return null;
+      final Uint8List bytes = await handle.read(4);
+      if (bytes.length < 4) return null;
+      final int value =
+          bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
+      return value < 0 ? null : value;
+    }
+
+    final int? vendorLength = await readUint32le();
+    if (vendorLength == null || await handle.position() + vendorLength > end) {
+      return null;
+    }
+    await handle.setPosition(await handle.position() + vendorLength);
+
+    final int? count = await readUint32le();
+    if (count == null) return null;
+
+    final Map<String, List<String>> fields = <String, List<String>>{};
+    for (int i = 0; i < count; i++) {
+      final int? length = await readUint32le();
+      if (length == null) return null;
+      final int next = await handle.position() + length;
+      if (next > end) return null; // declared past the block
+      if (length > _maxCommentBytes) {
+        await handle.setPosition(next);
+        continue;
+      }
+      final Uint8List raw = await handle.read(length);
+      if (raw.length < length) return null; // truncated
+      _collect(fields, raw);
+    }
+    return fields;
   }
 
   static const int _vorbisCommentBlock = 4;
@@ -143,19 +193,26 @@ class VorbisCommentFields {
       final Uint8List raw =
           Uint8List.sublistView(block, offset, offset + length);
       offset += length;
-      final String comment;
-      try {
-        comment = utf8.decode(raw);
-      } on FormatException {
-        // One unreadable comment must not cost the rest of the block.
-        continue;
-      }
-      final int equals = comment.indexOf('=');
-      if (equals <= 0) continue;
-      final String name = comment.substring(0, equals).toUpperCase();
-      final String value = comment.substring(equals + 1);
-      (fields[name] ??= <String>[]).add(value);
+      _collect(fields, raw);
     }
     return fields;
+  }
+
+  /// Decodes one `FIELD=value` entry into [fields], keyed by upper-cased name.
+  ///
+  /// A comment with no separator, an empty name, or invalid UTF-8 is skipped:
+  /// one unreadable entry must not cost the rest of the block. Everything after
+  /// the first `=` is the value, so a value containing `=` survives.
+  static void _collect(Map<String, List<String>> fields, Uint8List raw) {
+    final String comment;
+    try {
+      comment = utf8.decode(raw);
+    } on FormatException {
+      return;
+    }
+    final int equals = comment.indexOf('=');
+    if (equals <= 0) return;
+    final String name = comment.substring(0, equals).toUpperCase();
+    (fields[name] ??= <String>[]).add(comment.substring(equals + 1));
   }
 }

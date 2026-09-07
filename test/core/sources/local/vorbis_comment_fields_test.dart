@@ -165,6 +165,29 @@ void main() {
       expect(await VorbisCommentFields.read(file), isNull);
     });
 
+    test('a multi-megabyte comment block keeps the fields beside the big one',
+        () async {
+      // A tagger that stores long lyrics or base64 artwork in a comment makes a
+      // perfectly valid block of many MiB. Rejecting it at some size would lose
+      // the short artist fields sitting right next to the big value.
+      final File file = write(
+        'fat-comments.flac',
+        AudioTagFixtures.flacWithRawComments(<String>[
+          'ARTIST=Featured Guest',
+          'LYRICS=${'la ' * 900000}',
+          'ALBUMARTIST=Various Artists',
+        ]),
+      );
+
+      final Map<String, List<String>>? fields =
+          await VorbisCommentFields.read(file);
+
+      expect(fields?['ARTIST'], <String>['Featured Guest']);
+      expect(fields?['ALBUMARTIST'], <String>['Various Artists']);
+      // The oversized entry is seeked past rather than pulled into memory.
+      expect(fields?.containsKey('LYRICS'), isFalse);
+    });
+
     test('a FLAC with no comment block at all is null', () async {
       // STREAMINFO marked as the last block: valid, just untagged.
       final Uint8List bytes = Uint8List.fromList(<int>[
