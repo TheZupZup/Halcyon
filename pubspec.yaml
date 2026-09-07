@@ -107,6 +107,14 @@ dependencies:
   # Play Services. The app never auto-opens anything; every launch is an
   # explicit user tap. See docs/dependency-license-audit.md §"Reporting a bug".
   url_launcher: ^6.3.0
+  # D-Bus client for the Linux MPRIS media session (#397), so GNOME's and KDE's
+  # media controls, `playerctl` and the hardware media keys can drive Linthra.
+  # Already in the tree transitively through bonsoir_linux (Cast discovery);
+  # declared here now that Linthra uses it deliberately. Pure Dart, MPL-2.0,
+  # and Linux-only in practice — MprisMediaSessionBinding is the sole caller
+  # and PlatformMediaSessionBinding only routes to it on Linux. See
+  # docs/dependency-license-audit.md §3.
+  dbus: ^0.7.12
 
 dependency_overrides:
   # Patched locally so headless Linux smoke tests can set libmpv `ao=alsa`

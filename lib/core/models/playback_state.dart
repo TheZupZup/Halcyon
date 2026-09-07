@@ -26,7 +26,8 @@ enum PlaybackStatus {
 
 /// An immutable snapshot of what the player is doing. The UI renders from this
 /// instead of reaching into the audio backend, which keeps playback internals
-/// swappable (just_audio today, audio_service/MPRIS later).
+/// swappable (just_audio today, and read by the audio_service and MPRIS
+/// sessions rather than replaced by them).
 class PlaybackState {
   const PlaybackState({
     this.status = PlaybackStatus.idle,

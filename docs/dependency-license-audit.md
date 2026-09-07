@@ -84,7 +84,7 @@ The specific combinations that need stating rather than assuming:
 
   **No GPL, no LGPL, no proprietary, and no unknown or unverifiable license** in
   the resolved Dart/Flutter set. The single MPL-2.0 package is `dbus 0.7.12`
-  (§3). Counts by dependency kind: 19 direct-main, 3 direct-dev and 133
+  (§3). Counts by dependency kind: 20 direct-main, 3 direct-dev and 132
   transitive hosted packages.
 - **Supersedes the earlier snapshot.** A previous revision of this document
   reported 152 packages against Flutter 3.27.4 and, separately, classified
@@ -136,6 +136,7 @@ published archive (§2).
 | `permission_handler`     | `^11.3.1`    | baseflow.com        | MIT            | Runtime permission requests. |
 | `audio_session`          | `^0.1.25`    | ryanheise.com       | MIT            | Audio-focus / interruption handling. |
 | `media_kit_libs_linux`   | `^1.2.1`     | media-kit.dev       | MIT            | Linux native registration for media_kit; links the **system/Flatpak libmpv** built in §5. Ships no prebuilt binary. |
+| `dbus`                   | `^0.7.12`    | canonical.com       | **MPL-2.0**    | D-Bus client behind the Linux MPRIS media session, so desktop shells and media keys can control Linthra. Already in the tree transitively (via `bonsoir_linux`); now declared directly. Compatible with AGPL-3.0-or-later under MPL-2.0 §3.3 — see §1 and §3. |
 | `just_audio_media_kit`   | (vendored)   | — (see §5)          | Unlicense      | Vendored Linux `just_audio` backend. Third-party code — **not** relicensed (§5). |
 
 > The `http` and `flutter_secure_storage` entries were added with the Jellyfin
@@ -150,17 +151,22 @@ published archive (§2).
 > invoked only on an explicit user tap — the app never opens a link on its own.
 > See §7.
 
-### The one MPL-2.0 transitive dependency (`dbus`)
+### The one MPL-2.0 dependency (`dbus`)
 
 `dbus 0.7.12` (Canonical, **MPL-2.0**) is the only non-permissive package in the
-resolved Dart set. It reaches the tree through exactly one path:
+resolved Dart set. It reaches the tree two ways now:
 
 ```
 bonsoir  ->  bonsoir_linux 5.1.3  ->  dbus 0.7.12
+linthra  ->  dbus 0.7.12                            (declared directly)
 ```
 
-so it is a **Linux-desktop-only** dependency of the mDNS/Cast discovery stack,
-and it *is* in the shipped Linux build path — not a dev-only package.
+It was transitive-only until the Linux MPRIS media session
+([#397](https://github.com/thezupzup/linthra/issues/397)) started using it
+directly. Same package, same version, same license — what changed is that
+Linthra now depends on it deliberately rather than inheriting it. It remains a
+**Linux-desktop-only** dependency (mDNS/Cast discovery, and now MPRIS) and it
+*is* in the shipped Linux build path — not a dev-only package.
 
 It is compatible with AGPL-3.0-or-later under MPL-2.0 §3.3, because it is not
 marked "Incompatible With Secondary Licenses"; see §1 for the clause-by-clause
@@ -399,15 +405,15 @@ The in-app "Report a bug" flow (Settings → Report a bug) is the reason
 
 - **Project license:** AGPL-3.0-or-later (free, F-Droid-accepted). Releases up
   to and including v0.2.4 remain MPL-2.0 (§1).
-- **Direct dependencies:** MIT / BSD-3-Clause / Apache-2.0 — all permissive and
-  AGPL-compatible. No proprietary direct deps.
+- **Direct dependencies:** MIT / BSD-3-Clause / Apache-2.0, plus one MPL-2.0
+  (`dbus`, for MPRIS) — all AGPL-compatible. No proprietary direct deps.
 - **Transitive set:** the full committed lockfile (160 entries) was audited from
   each package's published archive (§2) — 100 BSD-3-Clause, 42 MIT, 6
   Apache-2.0, 6 BSD-2-Clause, 1 MPL-2.0, plus 4 BSD-3-Clause SDK entries and 1
   Unlicense vendored package. **No GPL, no LGPL, no proprietary, no unknown.**
-- **The one MPL-2.0 package** (`dbus`, via `bonsoir_linux`) is not marked
-  "Incompatible With Secondary Licenses", so MPL-2.0 §3.3 permits the AGPL
-  combination (§1, §3).
+- **The one MPL-2.0 package** (`dbus` — now direct, for MPRIS, and still
+  transitive via `bonsoir_linux`) is not marked "Incompatible With Secondary
+  Licenses", so MPL-2.0 §3.3 permits the AGPL combination (§1, §3).
 - **Linux/Flatpak media stack:** FFmpeg `n9.0.1` (no `--enable-gpl`, no
   `--enable-nonfree`), mpv `v0.41.0` (`-Dgpl=false` **with** every GPL-only
   component explicitly disabled), libplacebo LGPL-2.1-or-later, libass ISC —

@@ -26,7 +26,7 @@ class _RecordingBinding implements MediaSessionBinding {
   int attachCalls = 0;
 
   @override
-  Future<bool> attach(
+  Future<MediaSession?> attach(
     PlaybackController controller,
     MusicLibraryRepository library, {
     PlaylistRepository? playlists,
@@ -35,7 +35,7 @@ class _RecordingBinding implements MediaSessionBinding {
     MediaArtworkSource? artwork,
   }) async {
     attachCalls++;
-    return result;
+    return result ? const InertMediaSession() : null;
   }
 }
 
@@ -57,7 +57,7 @@ void main() {
       const MediaSessionBinding binding = UnsupportedMediaSessionBinding();
 
       expect(binding.isSupported, isFalse);
-      expect(await binding.attach(controller, library), isFalse);
+      expect(await binding.attach(controller, library), isNull);
     });
   });
 
@@ -72,55 +72,75 @@ void main() {
       );
 
       expect(binding.isSupported, isTrue);
-      expect(await binding.attach(controller, library), isTrue);
+      expect(await binding.attach(controller, library), isNotNull);
       expect(android.attachCalls, 1);
       expect(fallback.attachCalls, 0);
     });
 
-    test('on Linux, never enters the Android binding', () async {
+    test('on Linux, goes to MPRIS and never enters the Android binding',
+        () async {
       final android = _RecordingBinding(isSupported: true, result: true);
+      final linux = _RecordingBinding(isSupported: true, result: true);
       final fallback = _RecordingBinding(isSupported: false, result: false);
       final binding = PlatformMediaSessionBinding(
         host: HostPlatform.linux,
         androidBinding: android,
+        linuxBinding: linux,
         fallbackBinding: fallback,
       );
 
-      expect(binding.isSupported, isFalse);
-      expect(await binding.attach(controller, library), isFalse);
+      expect(binding.isSupported, isTrue);
+      expect(await binding.attach(controller, library), isNotNull);
       expect(android.attachCalls, 0,
           reason: 'audio_service must not initialise on a platform '
               'that has no implementation for it');
-      expect(fallback.attachCalls, 1);
+      expect(linux.attachCalls, 1);
+      expect(fallback.attachCalls, 0);
     });
 
-    test('every non-Android platform routes to the fallback', () async {
+    test('every platform but Android and Linux routes to the fallback',
+        () async {
       for (final HostPlatform host in HostPlatform.values.where(
-        (HostPlatform p) => p != HostPlatform.android,
+        (HostPlatform p) =>
+            p != HostPlatform.android && p != HostPlatform.linux,
       )) {
         final android = _RecordingBinding(isSupported: true, result: true);
+        final linux = _RecordingBinding(isSupported: true, result: true);
         final binding = PlatformMediaSessionBinding(
           host: host,
           androidBinding: android,
+          linuxBinding: linux,
           fallbackBinding: _RecordingBinding(isSupported: false, result: false),
         );
 
-        expect(await binding.attach(controller, library), isFalse,
+        expect(await binding.attach(controller, library), isNull,
             reason: '${host.label} has no media session');
         expect(android.attachCalls, 0,
             reason: 'the Android binding was entered on ${host.label}');
+        expect(linux.attachCalls, 0,
+            reason: 'MPRIS is a freedesktop interface, not ${host.label}\'s');
       }
     });
 
-    test('the real default routes by the host the suite runs on', () async {
-      // No `host:` override, so this exercises the binding the app itself
-      // constructs. The unit host is never Android, so `audio_service` must not
-      // be touched — if it were, this call would throw or hang instead of
-      // returning false.
-      const binding = PlatformMediaSessionBinding();
-
-      expect(binding.isSupported, isFalse);
-      expect(await binding.attach(controller, library), isFalse);
+    test('the real defaults are the two platforms that have a session', () {
+      // No delegate overrides, so this reads the bindings the app itself
+      // constructs — without attaching, which on Linux would go looking for a
+      // real session bus.
+      expect(
+        const PlatformMediaSessionBinding(host: HostPlatform.android)
+            .isSupported,
+        isTrue,
+      );
+      expect(
+        const PlatformMediaSessionBinding(host: HostPlatform.linux).isSupported,
+        isTrue,
+        reason: 'Linux has MPRIS since #397',
+      );
+      expect(
+        const PlatformMediaSessionBinding(host: HostPlatform.windows)
+            .isSupported,
+        isFalse,
+      );
     });
   });
 }

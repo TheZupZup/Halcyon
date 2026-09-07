@@ -28,9 +28,18 @@ The approved sandbox surface remains:
 --device=dri
 --socket=pulseaudio
 --share=network
+--own-name=org.mpris.MediaPlayer2.linthra
+--own-name=org.mpris.MediaPlayer2.linthra.*
 ```
 
 None of those grants host filesystem access.
+
+The two `--own-name` entries arrived with the MPRIS media session (#397) and are
+the only D-Bus grants. They let Linthra own its own player names so desktop
+shells can find it; they are not `--talk-name`, so they give Linthra no way to
+call any other service, and they are scoped to Linthra's own names, so no other
+player's MPRIS interface becomes reachable. `--socket=session-bus` and an
+`org.mpris.MediaPlayer2.*` wildcard are both still rejected by the allow-list.
 
 ## Why local music still works
 

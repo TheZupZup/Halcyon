@@ -5,6 +5,7 @@ import '../repositories/music_library_repository.dart';
 import '../repositories/playlist_repository.dart';
 import 'linthra_audio_handler.dart';
 import 'media_artwork_source.dart';
+import 'mpris/mpris_media_session.dart';
 import 'playback_controller.dart';
 
 /// Attaches Linthra's playback to the platform's media session — the thing that
@@ -12,8 +13,8 @@ import 'playback_controller.dart';
 ///
 /// The session is a *platform integration*, not a playback engine: whether one
 /// exists says nothing about whether audio can play. Android has one
-/// (`audio_service`, behind [LinthraAudioHandler]); Linux has none yet, and
-/// MPRIS — the desktop equivalent — is a later PR.
+/// (`audio_service`, behind [LinthraAudioHandler]); Linux has MPRIS, the
+/// desktop equivalent, behind [MprisMediaSessionBinding].
 ///
 /// The seam exists so startup can ask for a session without knowing which
 /// platform it is on, and so the Android-only plugin is never *touched* on a
@@ -27,13 +28,13 @@ abstract interface class MediaSessionBinding {
   /// diagnostics; startup does not need to branch on it.
   bool get isSupported;
 
-  /// Attaches the session, returning whether one is now live.
+  /// Attaches the session, returning it when one is now live, else null.
   ///
   /// Best-effort and never throws: a platform without the native setup (or a
-  /// test host with no bindings) reports `false` and the app carries on. The
+  /// test host with no bindings) returns null and the app carries on. The
   /// repositories are what Android Auto browses; they are ignored where there
   /// is no session.
-  Future<bool> attach(
+  Future<MediaSession?> attach(
     PlaybackController controller,
     MusicLibraryRepository library, {
     PlaylistRepository? playlists,
@@ -41,6 +42,27 @@ abstract interface class MediaSessionBinding {
     DownloadRepository? downloads,
     MediaArtworkSource? artwork,
   });
+}
+
+/// A live media session, and the one thing startup needs from it: how to let go.
+///
+/// Android's session belongs to `audio_service`'s foreground service and the
+/// platform, so its detach is a no-op. Linux's is a session-bus connection and a
+/// well-known name that Linthra owns and must give back — a player that exits
+/// still holding `org.mpris.MediaPlayer2.linthra` leaves a ghost in every shell
+/// that was listening.
+abstract interface class MediaSession {
+  /// Releases whatever the session holds. Idempotent, and never throws:
+  /// shutdown runs it best-effort alongside every other teardown step.
+  Future<void> detach();
+}
+
+/// A session that owns nothing releasable.
+class InertMediaSession implements MediaSession {
+  const InertMediaSession();
+
+  @override
+  Future<void> detach() async {}
 }
 
 /// The Android media session, backed by `audio_service`.
@@ -54,7 +76,7 @@ class AudioServiceMediaSessionBinding implements MediaSessionBinding {
   bool get isSupported => true;
 
   @override
-  Future<bool> attach(
+  Future<MediaSession?> attach(
     PlaybackController controller,
     MusicLibraryRepository library, {
     PlaylistRepository? playlists,
@@ -70,17 +92,21 @@ class AudioServiceMediaSessionBinding implements MediaSessionBinding {
       downloads: downloads,
       artwork: artwork,
     );
-    return handler != null;
+    // Inert on purpose: the Android session outlives this app object — it
+    // belongs to `audio_service`'s foreground service and the platform, and the
+    // graceful-shutdown path that would call detach is desktop-only anyway.
+    return handler == null ? null : const InertMediaSession();
   }
 }
 
 /// The explicit "this platform has no media session" binding.
 ///
-/// Used on Linux (and every other desktop) until MPRIS lands. It is deliberately
-/// a real, named class rather than a silent `if`: an inert session is a fact
-/// about the platform that diagnostics can report and tests can assert on, and
-/// it makes the missing desktop integration visible in the code instead of
-/// implied by its absence.
+/// Used on macOS, Windows and anything else: MPRIS is a freedesktop interface,
+/// so it is Linux's alone, and those platforms' own session APIs have no
+/// binding yet. It is deliberately a real, named class rather than a silent
+/// `if`: an inert session is a fact about the platform that diagnostics can
+/// report and tests can assert on, and it makes the missing integration
+/// visible in the code instead of implied by its absence.
 class UnsupportedMediaSessionBinding implements MediaSessionBinding {
   const UnsupportedMediaSessionBinding();
 
@@ -88,7 +114,7 @@ class UnsupportedMediaSessionBinding implements MediaSessionBinding {
   bool get isSupported => false;
 
   @override
-  Future<bool> attach(
+  Future<MediaSession?> attach(
     PlaybackController controller,
     MusicLibraryRepository library, {
     PlaylistRepository? playlists,
@@ -96,7 +122,7 @@ class UnsupportedMediaSessionBinding implements MediaSessionBinding {
     DownloadRepository? downloads,
     MediaArtworkSource? artwork,
   }) async =>
-      false;
+      null;
 }
 
 /// The default [MediaSessionBinding]: the real `audio_service` session on
@@ -111,27 +137,42 @@ class PlatformMediaSessionBinding implements MediaSessionBinding {
     HostPlatform? host,
     MediaSessionBinding androidBinding =
         const AudioServiceMediaSessionBinding(),
+    MediaSessionBinding linuxBinding = const MprisMediaSessionBinding(),
     MediaSessionBinding fallbackBinding =
         const UnsupportedMediaSessionBinding(),
   })  : _host = host,
         _androidBinding = androidBinding,
+        _linuxBinding = linuxBinding,
         _fallbackBinding = fallbackBinding;
 
   // Null means "read the real host". Resolved lazily rather than in the
   // initialiser list so the class stays const-constructible.
   final HostPlatform? _host;
   final MediaSessionBinding _androidBinding;
+  final MediaSessionBinding _linuxBinding;
   final MediaSessionBinding _fallbackBinding;
 
-  MediaSessionBinding get _delegate => (_host ?? HostPlatform.current).isAndroid
-      ? _androidBinding
-      : _fallbackBinding;
+  MediaSessionBinding get _delegate {
+    switch (_host ?? HostPlatform.current) {
+      case HostPlatform.android:
+        return _androidBinding;
+      case HostPlatform.linux:
+        return _linuxBinding;
+      case HostPlatform.ios:
+      case HostPlatform.macOS:
+      case HostPlatform.windows:
+      case HostPlatform.other:
+        // MPRIS is a freedesktop interface, so it is Linux's alone. macOS and
+        // Windows have their own session APIs and no binding for them yet.
+        return _fallbackBinding;
+    }
+  }
 
   @override
   bool get isSupported => _delegate.isSupported;
 
   @override
-  Future<bool> attach(
+  Future<MediaSession?> attach(
     PlaybackController controller,
     MusicLibraryRepository library, {
     PlaylistRepository? playlists,

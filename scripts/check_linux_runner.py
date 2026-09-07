@@ -117,13 +117,21 @@ FLATPAK_TEMPLATE = FLATPAK_DIR / "flatpak-flutter.yml"
 # regression guard against solving provider access with a filesystem or D-Bus
 # grant. Both the authoritative template and generated manifest are checked.
 #
-# There is deliberately no D-Bus entry at all. Secure credential storage (#441)
-# reaches the platform keyring through the xdg-desktop-portal Secret portal,
-# which every Flatpak may talk to without a finish-arg, so
-# --talk-name=org.freedesktop.secrets (and every broader form of it:
-# --socket=session-bus, an org.freedesktop.* wildcard, --own-name, the same
-# name on the system bus) is rejected by this list rather than quietly
-# accepted. See flatpak/flatpak-flutter.yml's finish-args comments.
+# The only D-Bus entries are the two MPRIS names Linthra itself owns (#397).
+# Owning a name is not talking to one: neither grant lets Linthra call any
+# other service, and both are scoped to its own player names, so no other
+# player's MPRIS interface is reachable through them. The base name plus its
+# `.*` form is what the spec's `.instance<pid>` fallback needs for a second
+# window.
+#
+# Everything broader stays rejected by this exact list rather than quietly
+# accepted: --socket=session-bus, an org.mpris.MediaPlayer2.* wildcard that
+# would cover other players, any --talk-name, and the same names on the system
+# bus. In particular secure credential storage (#441) still needs no grant —
+# it reaches the platform keyring through the xdg-desktop-portal Secret
+# portal, which every Flatpak may talk to without a finish-arg, so
+# --talk-name=org.freedesktop.secrets is still not here. See
+# flatpak/flatpak-flutter.yml's finish-args comments.
 EXPECTED_FLATPAK_FINISH_ARGS = {
     "--socket=wayland",
     "--socket=fallback-x11",
@@ -131,6 +139,8 @@ EXPECTED_FLATPAK_FINISH_ARGS = {
     "--device=dri",
     "--socket=pulseaudio",
     "--share=network",
+    "--own-name=org.mpris.MediaPlayer2.linthra",
+    "--own-name=org.mpris.MediaPlayer2.linthra.*",
 }
 
 # Where a Flatpak's desktop entry has to land: flatpak-builder exports what it

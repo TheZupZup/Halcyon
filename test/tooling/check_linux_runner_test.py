@@ -216,6 +216,8 @@ finish-args:
   - --device=dri
   - --socket=pulseaudio
   - --share=network
+  - --own-name=org.mpris.MediaPlayer2.linthra
+  - --own-name=org.mpris.MediaPlayer2.linthra.*
 modules:
   - name: {binary}
     buildsystem: simple
@@ -910,9 +912,12 @@ class FlatpakPermissionTest(CheckoutCase):
                 self.assertIn("unrelated permission", problems[0])
                 self.assertIn(permission, problems[0])
 
-    def test_the_approved_surface_carries_no_dbus_grant(self) -> None:
-        # #543's network grant stands; #441 adds nothing beside it. The
-        # approved surface has no D-Bus entry of any shape.
+    def test_the_approved_surface_talks_to_nothing_on_the_bus(self) -> None:
+        # #543's network grant stands; #441 adds nothing beside it. #397 adds
+        # the two MPRIS names Linthra *owns* — and nothing it may talk to. That
+        # asymmetry is the point: owning a name lets shells call Linthra and
+        # gives Linthra no way to call anything, so the approved surface still
+        # carries no --talk-name of any shape and no whole-bus socket.
         self.assertIn("--share=network", checker.EXPECTED_FLATPAK_FINISH_ARGS)
         self.assertEqual(
             [
@@ -922,7 +927,6 @@ class FlatpakPermissionTest(CheckoutCase):
                     (
                         "--talk-name",
                         "--system-talk-name",
-                        "--own-name",
                         "--system-own-name",
                         "--socket=session-bus",
                         "--socket=system-bus",
@@ -931,6 +935,45 @@ class FlatpakPermissionTest(CheckoutCase):
             ],
             [],
         )
+
+    def test_the_only_owned_names_are_linthras_own_mpris_names(self) -> None:
+        # A wildcard like org.mpris.MediaPlayer2.* would let Linthra take over
+        # any other player's name on the bus. Every owned name must be under
+        # Linthra's own.
+        owned = sorted(
+            permission
+            for permission in checker.EXPECTED_FLATPAK_FINISH_ARGS
+            if permission.startswith("--own-name=")
+        )
+        self.assertEqual(
+            owned,
+            [
+                "--own-name=org.mpris.MediaPlayer2.linthra",
+                "--own-name=org.mpris.MediaPlayer2.linthra.*",
+            ],
+        )
+
+    def test_dropping_an_mpris_grant_is_caught(self) -> None:
+        # Without it the Flatpak starts, plays audio, and is invisible to every
+        # desktop shell — a silence only this check notices.
+        for permission in (
+            "--own-name=org.mpris.MediaPlayer2.linthra",
+            "--own-name=org.mpris.MediaPlayer2.linthra.*",
+        ):
+            with self.subTest(permission=permission):
+                root = self.root / permission.replace("*", "star").replace(
+                    "=", "_"
+                ).replace(".", "_")
+                root.mkdir(parents=True, exist_ok=True)
+                build_checkout(
+                    root,
+                    flatpak_manifest=FLATPAK_MANIFEST.format(
+                        app_id=APP_ID, binary=BINARY
+                    ).replace(f"  - {permission}\n", ""),
+                )
+                problems = checker.check(root)
+                self.assertTrue(problems)
+                self.assertIn(permission, problems[0])
 
     def test_allowed_permission_with_inline_comment_is_recognised(self) -> None:
         manifest = FLATPAK_MANIFEST.format(app_id=APP_ID, binary=BINARY).replace(
