@@ -78,7 +78,7 @@ class MainActivity : AudioServiceActivity() {
                     // Walks the picked tree and returns its audio documents.
                     // The scan itself runs off this (platform) thread — see
                     // PlatformChannelWorker — so this branch only queues it and
-                    // returns; `result` is answered back on the platform thread
+                    // returns; `result` is encoded and answered from the worker
                     // once the walk finishes.
                     "listAudioDocuments" -> {
                         val treeUri = call.argument<String>("treeUri")

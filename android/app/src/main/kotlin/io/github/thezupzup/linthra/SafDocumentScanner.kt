@@ -43,7 +43,7 @@ class SafDocumentScanner(
      * Lists audio documents under [treeUri], reporting back through [result].
      *
      * The walk runs on [PlatformChannelWorker]'s background thread and [result]
-     * is answered on the platform thread, so a real library — thousands of
+     * and the result is encoded and answered there, so a real library — thousands of
      * content-resolver queries plus a [MediaMetadataRetriever] open per file —
      * never blocks the UI (#346). This returns as soon as the work is queued.
      */

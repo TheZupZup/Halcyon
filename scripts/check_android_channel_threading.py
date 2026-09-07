@@ -1,39 +1,12 @@
 #!/usr/bin/env python3
-"""check_android_channel_threading.py — keep the SAF scan off the main thread.
+"""Guard the SAF method-channel threading boundary (#346).
 
-Flutter calls a `MethodChannel` handler on Android's platform (main) thread, and
-`MethodChannel.Result` has to be answered there too. That pairing makes it very
-easy to write a handler that quietly blocks the UI: the code reads like ordinary
-straight-line Kotlin, it compiles, and on the developer's twelve-track test
-folder it returns instantly. It only hurts on a real library, on a slow
-provider, or on an SD card — where it becomes an ANR (#346).
-
-Nothing in the build catches that. Lint has no opinion about how long a channel
-handler runs, and a regression would look like a simplification: delete the
-worker, call `walk()` directly, tests still pass. So the boundary is asserted
-here instead.
-
-Three things have to hold, and each is checked against the sources rather than
-duplicated:
-
-    the worker exists          <- PlatformChannelWorker.kt runs work on an
-                                  Executor and posts replies to the main looper
-    the scan uses it           <- SafDocumentScanner.listAudioDocuments submits
-                                  the walk instead of running it inline
-    nothing answers inline     <- listAudioDocuments contains no direct
-                                  result.success(walk(...)) call
-
-The last one is the shape the bug had before the fix, so it is worth naming
-explicitly rather than inferring from the other two.
-
-This is deliberately a text check, not a parse: it has to run anywhere (no
-Android SDK, no Gradle, no network), the same way check_linux_runner.py does for
-the desktop runner. It is not a substitute for reading the code — it is a
-tripwire for the specific silent regression.
+This is a narrow, offline source tripwire, not a Kotlin compiler or a proof of
+thread safety. It checks that the expensive walk is evaluated inside the work
+lambda submitted to the real background worker, and that result encoding stays
+on that worker. A token appearing somewhere in the same method is not enough.
 
     python3 scripts/check_android_channel_threading.py
-
-Exits 0 when every claim holds, 1 with the failures listed otherwise.
 """
 
 from __future__ import annotations
@@ -55,18 +28,13 @@ KOTLIN = (
     / "thezupzup"
     / "linthra"
 )
-
 WORKER_FILE = "PlatformChannelWorker.kt"
 SCANNER_FILE = "SafDocumentScanner.kt"
-
-# The channel method whose work is heavy enough to matter, and the private
-# function that does that work.
 SCAN_METHOD = "listAudioDocuments"
 SCAN_WORK = "walk"
 
 
 def read(directory: Path, name: str, failures: list[str]) -> str:
-    """Returns the text of ``directory/name``, or "" (recording why) if absent."""
     path = directory / name
     if not path.is_file():
         failures.append(f"{name}: missing (expected at {path})")
@@ -74,113 +42,197 @@ def read(directory: Path, name: str, failures: list[str]) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def strip_comments(source: str) -> str:
-    """Drops // and /* */ comments so a mention in prose is never a match.
+def code_only(source: str) -> str:
+    """Mask comments and Kotlin string/char literals, retaining offsets.
 
-    Every claim below is about code that runs. KDoc on these files talks about
-    `walk`, `result.success` and the main thread by name, so checking the raw
-    text would pass on a file whose comments still describe a fix its code no
-    longer has.
+    Braces, parentheses and fake calls inside prose must not affect nesting.
+    Kotlin block comments can nest, and triple-quoted strings can contain both
+    quotes and braces. This intentionally does not try to parse Kotlin syntax.
     """
-    source = re.sub(r"/\*.*?\*/", "", source, flags=re.DOTALL)
-    return re.sub(r"//[^\n]*", "", source)
+    result = list(source)
+    i = 0
+    n = len(source)
+
+    def mask(start: int, end: int) -> None:
+        for j in range(start, end):
+            if source[j] not in "\r\n":
+                result[j] = " "
+
+    while i < n:
+        start = i
+        if source.startswith("//", i):
+            end = source.find("\n", i)
+            i = n if end < 0 else end
+            mask(start, i)
+        elif source.startswith("/*", i):
+            depth = 1
+            i += 2
+            while i < n and depth:
+                if source.startswith("/*", i):
+                    depth += 1
+                    i += 2
+                elif source.startswith("*/", i):
+                    depth -= 1
+                    i += 2
+                else:
+                    i += 1
+            mask(start, i)
+        elif source.startswith('"""', i):
+            end = source.find('"""', i + 3)
+            i = n if end < 0 else end + 3
+            mask(start, i)
+        elif source[i] in ('"', "'"):
+            quote = source[i]
+            i += 1
+            while i < n:
+                if source[i] == "\\":
+                    i += 2
+                elif source[i] == quote:
+                    i += 1
+                    break
+                else:
+                    i += 1
+            i = min(i, n)
+            mask(start, i)
+        else:
+            i += 1
+    return "".join(result)
 
 
-def function_body(source: str, name: str) -> str | None:
-    """Returns the brace-balanced body of ``fun name(...)``, or None.
-
-    Tolerates a type-parameter list (``fun <T> submit(``), which the worker has.
-    """
-    match = re.search(rf"\bfun\s+(?:<[^>]*>\s*)?{re.escape(name)}\s*\(", source)
-    if match is None:
+def balanced_span(code: str, opening: int) -> tuple[int, int] | None:
+    """Return the inside of one balanced pair, using masked source offsets."""
+    pairs = {"{": "}", "(": ")"}
+    if opening >= len(code) or code[opening] not in pairs:
         return None
-    opening = source.find("{", match.end())
-    if opening == -1:
-        return None
-    depth = 0
-    for index in range(opening, len(source)):
-        char = source[index]
-        if char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return source[opening + 1 : index]
+    stack = [pairs[code[opening]]]
+    for i in range(opening + 1, len(code)):
+        char = code[i]
+        if char in pairs:
+            stack.append(pairs[char])
+        elif stack and char == stack[-1]:
+            stack.pop()
+            if not stack:
+                return opening + 1, i
     return None
 
 
+def function_span(code: str, name: str) -> tuple[int, int] | None:
+    match = re.search(rf"\bfun\s+(?:<[^>]*>\s*)?{re.escape(name)}\s*\(", code)
+    if match is None:
+        return None
+    parameters = balanced_span(code, match.end() - 1)
+    if parameters is None:
+        return None
+    opening = code.find("{", parameters[1] + 1)
+    return balanced_span(code, opening) if opening >= 0 else None
+
+
+def call_span(code: str, name: str) -> tuple[int, int] | None:
+    pattern = re.escape(name).replace(r"\.", r"\s*\.\s*")
+    match = re.search(rf"\b{pattern}\s*\(", code)
+    if match is None:
+        return None
+    return balanced_span(code, match.end() - 1)
+
+
+def lambda_span(code: str, name: str) -> tuple[int, int] | None:
+    match = re.search(rf"\b{re.escape(name)}\s*=\s*\{{", code)
+    if match is None:
+        return None
+    return balanced_span(code, match.end() - 1)
+
+
+def trailing_lambda_span(code: str, name: str) -> tuple[int, int] | None:
+    pattern = re.escape(name).replace(r"\.", r"\s*\.\s*")
+    match = re.search(rf"\b{pattern}\s*\{{", code)
+    if match is None:
+        return None
+    return balanced_span(code, match.end() - 1)
+
+
+def occurrences(code: str, pattern: str) -> list[int]:
+    return [match.start() for match in re.finditer(pattern, code)]
+
+
+def outside(positions: list[int], span: tuple[int, int]) -> bool:
+    return any(not (span[0] <= position < span[1]) for position in positions)
+
+
 def check_worker(directory: Path, failures: list[str]) -> None:
-    """The worker really moves work off the caller and back to the main looper."""
-    source = strip_comments(read(directory, WORKER_FILE, failures))
+    source = code_only(read(directory, WORKER_FILE, failures))
     if not source:
         return
-
     if "java.util.concurrent.Executor" not in source:
-        failures.append(
-            f"{WORKER_FILE}: no Executor import — work has to leave the caller's "
-            "thread on something"
-        )
-    if "Looper.getMainLooper()" not in source or "handler.post(" not in source:
-        failures.append(
-            f"{WORKER_FILE}: replies are not posted to the main looper "
-            "(Handler(Looper.getMainLooper()) + post), which Flutter requires "
-            "for MethodChannel.Result"
-        )
-
-    body = function_body(source, "submit")
-    if body is None:
+        failures.append(f"{WORKER_FILE}: no Executor import")
+    if not re.search(r"background\s*:\s*Executor\s*=\s*SHARED_BACKGROUND", source):
+        failures.append(f"{WORKER_FILE}: production must use the background executor")
+    if not re.search(r"Executors\s*\.\s*newSingleThreadExecutor\s*\{", source):
+        failures.append(f"{WORKER_FILE}: no real background thread factory")
+    span = function_span(source, "submit")
+    if span is None:
         failures.append(f"{WORKER_FILE}: no submit() to hand work to")
         return
-    if "background.execute" not in body:
+    body = source[span[0] : span[1]]
+    task = trailing_lambda_span(body, "background.execute")
+    if task is None:
         failures.append(
-            f"{WORKER_FILE}: submit() does not run its work on the background executor"
+            f"{WORKER_FILE}: submit() does not run on the background executor"
         )
-    if "platform.execute" not in body:
+        return
+    work_calls = occurrences(body, r"\bwork\s*\(\s*\)")
+    if not work_calls or outside(work_calls, task):
         failures.append(
-            f"{WORKER_FILE}: submit() does not deliver its callbacks on the "
-            "platform executor"
+            f"{WORKER_FILE}: work() is evaluated outside the background executor"
         )
+    for callback in ("onSuccess", "onFailure"):
+        calls = occurrences(body, rf"\b{callback}\s*\(")
+        if not calls or outside(calls, task):
+            failures.append(
+                f"{WORKER_FILE}: callbacks must stay inside the background executor "
+                "so MethodChannel encoding cannot stall the platform thread"
+            )
+            break
 
 
 def check_scanner(directory: Path, failures: list[str]) -> None:
-    """The scan is submitted to the worker, and never answered inline."""
-    source = strip_comments(read(directory, SCANNER_FILE, failures))
+    source = code_only(read(directory, SCANNER_FILE, failures))
     if not source:
         return
-
     if "PlatformChannelWorker" not in source:
-        failures.append(
-            f"{SCANNER_FILE}: does not use PlatformChannelWorker, so the walk "
-            "runs on whichever thread calls it"
-        )
-
-    body = function_body(source, SCAN_METHOD)
-    if body is None:
+        failures.append(f"{SCANNER_FILE}: does not use PlatformChannelWorker")
+    span = function_span(source, SCAN_METHOD)
+    if span is None:
         failures.append(f"{SCANNER_FILE}: no {SCAN_METHOD}() to check")
         return
-
-    if "worker.submit(" not in body:
+    body = source[span[0] : span[1]]
+    submit = call_span(body, "worker.submit")
+    if submit is None:
         failures.append(
-            f"{SCANNER_FILE}: {SCAN_METHOD}() does not submit its work to the "
-            "worker — the walk is back on the platform thread (#346)"
+            f"{SCANNER_FILE}: {SCAN_METHOD}() does not submit its work to the worker"
         )
-
-    # The pre-fix shape: the whole walk evaluated as the argument to a reply,
-    # i.e. on the caller's thread. Whitespace-tolerant so reformatting the call
-    # does not hide it.
-    inline = re.compile(
-        rf"result\s*\.\s*success\s*\(\s*{re.escape(SCAN_WORK)}\s*\(",
-        re.DOTALL,
-    )
-    if inline.search(body):
+        return
+    arguments = body[submit[0] : submit[1]]
+    work = lambda_span(arguments, "work")
+    if work is None:
         failures.append(
-            f"{SCANNER_FILE}: {SCAN_METHOD}() answers with {SCAN_WORK}() inline, "
-            "which runs the whole library walk on the platform thread (#346)"
+            f"{SCANNER_FILE}: submitted work must contain the scan invocation"
         )
+        return
+    work_in_body = (submit[0] + work[0], submit[0] + work[1])
+    walk_calls = occurrences(body, rf"\b{re.escape(SCAN_WORK)}\s*\(")
+    if not walk_calls or outside(walk_calls, work_in_body):
+        failures.append(
+            f"{SCANNER_FILE}: {SCAN_WORK}() must be evaluated inside the submitted "
+            "work lambda, never eagerly on the platform thread (#346)"
+        )
+    # A second reply or another submission cannot hide an eager walk.
+    if outside(occurrences(body, r"\bresult\s*\.\s*success\s*\("), submit):
+        failures.append(f"{SCANNER_FILE}: result.success() must not answer inline")
+    if len(occurrences(body, r"\bworker\s*\.\s*submit\s*\(")) != 1:
+        failures.append(f"{SCANNER_FILE}: expected exactly one worker submission")
 
 
 def check(directory: Path) -> list[str]:
-    """Runs every claim against the Kotlin in [directory]. Empty list = passing."""
     failures: list[str] = []
     check_worker(directory, failures)
     check_scanner(directory, failures)

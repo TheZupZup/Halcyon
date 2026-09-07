@@ -77,8 +77,8 @@ read a user-chosen folder is the **Storage Access Framework (SAF)**:
    not fatal; a totally unreadable selected folder surfaces a clear error rather
    than a silent empty result.
 4. That walk runs **off the platform (main) thread**, on `PlatformChannelWorker`'s
-   single background thread, and the method-channel reply is posted back to the
-   platform thread where Flutter needs it. A real library means thousands of
+   single background thread, and the method-channel reply is encoded and sent
+   there too. A real library means thousands of
    content-resolver queries plus a `MediaMetadataRetriever` open per file, so
    scanning inline would freeze the UI and eventually trip an ANR. Two scans
    queue rather than run at once. `scripts/check_android_channel_threading.py`
