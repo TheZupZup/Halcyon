@@ -124,10 +124,13 @@ is an ordinary `dart:io` walk. What differs is where the path comes from:
 
    Two honest gaps on Linux today: **embedded cover art is not extracted yet**
    ([#408](https://github.com/thezupzup/linthra/issues/408)), so local tracks
-   keep the placeholder; and **album artist** is only available where the format
-   keeps it separate from the track artist (ID3's TPE2, APEv2's ALBUMARTIST).
-   FLAC and OGG report one merged artist field, so a compilation may group by
-   the artist rather than the album artist there.
+   keep the placeholder; and **album artist** depends on the container. ID3
+   (TPE2), APEv2 and FLAC report a real one, so a compilation groups under the
+   album artist. OGG and Opus do not: the tag reader Linthra uses folds their
+   `ARTIST` and `ALBUMARTIST` comments into one list and loses which was which,
+   and guessing would be worse than reporting none, so those group by album and
+   artist instead. FLAC avoids that because Linthra reads its comment block
+   itself and keeps the field names.
 
 ## Local music vs Offline downloads vs Cache
 
