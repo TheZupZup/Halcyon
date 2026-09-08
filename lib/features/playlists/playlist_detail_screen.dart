@@ -165,9 +165,20 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
     );
   }
 
+  /// Ties the three list variants below to one saved scroll offset.
+  ///
+  /// Entering selection swaps a ReorderableListView for a plain ListView, which
+  /// mounts a fresh Scrollable and would otherwise drop the user back at the top
+  /// of a long playlist (#582). They are different widgets on purpose (a drag
+  /// handle has no place in selection mode), so the position is carried across
+  /// by PageStorage rather than by keeping one widget alive.
+  static const PageStorageKey<String> _listPosition =
+      PageStorageKey<String>('playlist_tracks');
+
   /// The plain checkbox list shown while selecting (no drag-to-reorder).
   Widget _selectionList(List<Track> tracks) {
     return ListView.builder(
+      key: _listPosition,
       itemCount: tracks.length,
       itemBuilder: (context, index) {
         final Track track = tracks[index];
@@ -207,6 +218,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
 
     if (!canReorder) {
       return ListView.builder(
+        key: _listPosition,
         itemCount: tracks.length,
         itemBuilder: (context, index) =>
             _trackRow(playlist, tracks, index, draggable: false),
@@ -214,6 +226,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
     }
 
     return ReorderableListView.builder(
+      key: _listPosition,
       buildDefaultDragHandles: false,
       itemCount: tracks.length,
       onReorderItem: (int oldIndex, int newIndex) {
