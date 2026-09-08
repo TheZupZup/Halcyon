@@ -23,6 +23,24 @@ void main() {
     expect(workflow, contains('--force-clean'));
   });
 
+  // A single bad response from a source host used to fail the whole run: main
+  // died on libplacebo when code.videolan.org answered the archive request
+  // with an error page and the sha256 did not match. The prefetch retries the
+  // downloads without becoming a gate of its own — it must never fail the job,
+  // so the build step stays the one place a real source problem is reported.
+  test('Flatpak CI retries source downloads without gating on them', () {
+    expect(workflow, contains('--download-only'));
+    expect(workflow, contains('for attempt in 1 2 3; do'));
+    expect(
+      workflow,
+      contains(
+        'echo "::warning::Prefetch did not complete; '
+        'the build step downloads the rest."',
+      ),
+      reason: 'a failed prefetch must warn and carry on, not fail the job',
+    );
+  });
+
   test(
     'Flatpak CI installs manifest dependencies and builds the real package',
     () {
