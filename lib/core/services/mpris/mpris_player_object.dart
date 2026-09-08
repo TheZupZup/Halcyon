@@ -293,13 +293,28 @@ class MprisPlayerObject extends DBusObject {
     final Object? track = _state.currentTrack;
     final Duration? last = _lastPosition;
     final Object? lastTrack = _lastPositionTrack;
+    final bool wasStalled = _wasStalled;
     _lastPosition = position;
     _lastPositionTrack = track;
+    _wasStalled = _state.isBuffering;
 
     // A new track restarts the timeline; that is not a seek.
     if (last == null || !identical(track, lastTrack) && track != lastTrack) {
       return;
     }
+
+    // Coming out of a stall. PlaybackStatus stays Playing through buffering and
+    // reconnecting (so the card does not flicker, and so the toggle pauses),
+    // which means shells kept extrapolating Position the whole time the engine
+    // was frozen. Their bar is now ahead by the length of the stall, and the
+    // ticks resuming afterwards are ordinary steps that the tolerance below
+    // would never notice. Announcing the real position is the only thing that
+    // pulls them back.
+    if (wasStalled && !_state.isBuffering) {
+      await _announceSeek(position);
+      return;
+    }
+
     if ((position - last).abs() <= _seekTolerance) return;
     await _announceSeek(position);
   }
@@ -315,6 +330,10 @@ class MprisPlayerObject extends DBusObject {
 
   Duration? _lastPosition;
   Object? _lastPositionTrack;
+
+  /// Whether the last state seen was buffering or reconnecting, so the return
+  /// to playing can be recognised as the end of a stall.
+  bool _wasStalled = false;
 
   // ---------------------------------------------------------------- properties
 

@@ -200,8 +200,25 @@ class MediaArtworkCache implements MediaArtworkSource {
   static String _cacheKey(Uri reference) =>
       sha256.convert(utf8.encode(reference.toString())).toString();
 
+  /// Where cover files live, which differs by platform because two different
+  /// consumers have to be able to open them.
+  ///
+  /// Android keeps `getTemporaryDirectory()` (`Context.getCacheDir()`): the
+  /// media-artwork FileProvider is declared against exactly that path in
+  /// `res/xml/media_artwork_paths.xml`, so moving it would stop every
+  /// `content://` cover resolving.
+  ///
+  /// Everywhere else, the consumer is a desktop shell reading `mpris:artUrl`
+  /// (see [cachedFileUri]), and it runs outside Linthra's mount namespace. In a
+  /// Flatpak `getTemporaryDirectory()` is `/tmp`, private to the sandbox, so a
+  /// `file:` URI into it points at the host's unrelated `/tmp` and the cover
+  /// silently fails to load. The application cache directory is
+  /// `~/.var/app/<app-id>/cache` there, which is a real host path visible at the
+  /// same location inside and out.
   static Future<Directory> _defaultDirectory() async {
-    final Directory base = await getTemporaryDirectory();
+    final Directory base = Platform.isAndroid
+        ? await getTemporaryDirectory()
+        : await getApplicationCacheDirectory();
     return Directory(p.join(base.path, 'media_session_artwork'));
   }
 

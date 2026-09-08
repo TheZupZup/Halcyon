@@ -397,6 +397,48 @@ void main() {
           DBusInt64(const Duration(minutes: 2).inMicroseconds));
     });
 
+    test('leaving a stall resyncs the shell with a Seeked', () async {
+      // PlaybackStatus stays Playing through a stall so the card does not
+      // flicker, which means shells extrapolated Position the whole time the
+      // engine was frozen. The ticks resuming afterwards are ordinary steps the
+      // tolerance would never notice, so without this the bar stays ahead by
+      // the length of the stall until the next track.
+      controller.emit(PlaybackState(
+        status: PlaybackStatus.playing,
+        currentTrack: _track('a'),
+        duration: const Duration(minutes: 5),
+        position: const Duration(seconds: 30),
+      ));
+      await pumpEventQueue();
+      controller.emit(PlaybackState(
+        status: PlaybackStatus.buffering,
+        currentTrack: _track('a'),
+        duration: const Duration(minutes: 5),
+        position: const Duration(seconds: 30),
+      ));
+      await pumpEventQueue();
+      final int before =
+          bus.signals.where((_Signal s) => s.name == 'Seeked').length;
+
+      // Recovery: the engine resumes from where it froze, one ordinary tick on.
+      controller.emit(PlaybackState(
+        status: PlaybackStatus.playing,
+        currentTrack: _track('a'),
+        duration: const Duration(minutes: 5),
+        position: const Duration(seconds: 30, milliseconds: 250),
+      ));
+      await pumpEventQueue();
+
+      final List<_Signal> seeked =
+          bus.signals.where((_Signal s) => s.name == 'Seeked').toList();
+      expect(seeked, hasLength(before + 1),
+          reason: 'the shell has to be pulled back to the real position');
+      expect(
+          seeked.last.values.single,
+          DBusInt64(
+              const Duration(seconds: 30, milliseconds: 250).inMicroseconds));
+    });
+
     test('ordinary progress is not mistaken for a seek', () async {
       // Position ticks while playing. Announcing every one of those as a seek
       // would be exactly the chatter Seeked exists to avoid.
