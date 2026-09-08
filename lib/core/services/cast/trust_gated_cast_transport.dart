@@ -72,9 +72,9 @@ class TrustGatedCastTransport implements CastTransport {
   Future<CastSessionHandle> connect(CastDevice device) async {
     final CastSessionHandle session = await _delegate.connect(device);
 
-    final CastReceiverIdentity identity;
+    final _Authentication proof;
     try {
-      identity = await _authenticate(device, session);
+      proof = await _authenticate(device, session);
     } catch (_) {
       // Every failure path closes the session it was handed. A connected but
       // unauthenticated receiver is exactly what must not survive this method,
@@ -83,7 +83,7 @@ class TrustGatedCastTransport implements CastTransport {
       rethrow;
     }
 
-    if (!identity.matches(device, session)) {
+    if (!proof.identity.matches(device, session)) {
       await _close(session);
       throw const CastReceiverTrustException(
         "Linthra couldn't confirm that this is the device you picked, so it "
@@ -92,12 +92,18 @@ class TrustGatedCastTransport implements CastTransport {
       );
     }
 
-    return _TrustedCastSession(session, identity);
+    // The readiness seen during the handshake is carried over deliberately: the
+    // wrapper subscribes a moment later, and if the session went ready and then
+    // dropped in between, all the wrapper is replayed is that latest `false`.
+    // Without knowing the session had been up, it would read that as "not ready
+    // yet" and keep trusting a connection that is already gone.
+    return _TrustedCastSession(session, proof.identity,
+        wasReady: proof.wasReady);
   }
 
   /// Races the receiver's proof against the session ending and the clock, so an
   /// authentication that cannot conclude fails instead of waiting forever.
-  Future<CastReceiverIdentity> _authenticate(
+  Future<_Authentication> _authenticate(
     CastDevice device,
     CastSessionHandle session,
   ) async {
@@ -140,31 +146,37 @@ class TrustGatedCastTransport implements CastTransport {
       () => fail(CastTrustFailureKind.incomplete, _incompleteMessage),
     );
 
-    unawaited(
-      _authenticator.authenticate(device, session).then(
-        (CastReceiverIdentity identity) {
-          if (!race.isCompleted) race.complete(identity);
-        },
-        onError: (Object error, StackTrace stack) {
-          if (race.isCompleted) return;
-          // A trust failure is passed through as itself; anything else — a
-          // socket error, a bug in an implementation — becomes a refusal too,
-          // because "the check threw" is never "the check passed".
-          race.completeError(
-            error is CastReceiverTrustException
-                ? error
-                : const CastReceiverTrustException(
-                    _rejectedMessage,
-                    kind: CastTrustFailureKind.rejected,
-                  ),
-            stack,
-          );
-        },
-      ),
-    );
-
     try {
-      return await race.future;
+      // Future.sync, inside the try: an implementation is free to throw before
+      // it ever returns a future, and that must land on the same refusal and
+      // the same cleanup as any other failed check — not escape past the timer
+      // and the subscription that are already running.
+      unawaited(
+        Future<CastReceiverIdentity>.sync(
+          () => _authenticator.authenticate(device, session),
+        ).then(
+          (CastReceiverIdentity identity) {
+            if (!race.isCompleted) race.complete(identity);
+          },
+          onError: (Object error, StackTrace stack) {
+            if (race.isCompleted) return;
+            // A trust failure is passed through as itself; anything else — a
+            // socket error, a bug in an implementation — becomes a refusal too,
+            // because "the check threw" is never "the check passed".
+            race.completeError(
+              error is CastReceiverTrustException
+                  ? error
+                  : const CastReceiverTrustException(
+                      _rejectedMessage,
+                      kind: CastTrustFailureKind.rejected,
+                    ),
+              stack,
+            );
+          },
+        ),
+      );
+
+      return _Authentication(await race.future, wasReady: wasReady);
     } finally {
       expiry.cancel();
       await ended.cancel();
@@ -194,7 +206,11 @@ class TrustGatedCastTransport implements CastTransport {
 /// apart from one that has not — and so the media handoff has its own refusal
 /// rather than relying on nobody ever holding on to a session that has ended.
 class _TrustedCastSession implements CastSessionHandle {
-  _TrustedCastSession(this._session, this.identity) {
+  _TrustedCastSession(
+    this._session,
+    this.identity, {
+    required bool wasReady,
+  }) : _wasReady = wasReady {
     // Trust belongs to the connection the proof was made over, so it ends when
     // that connection does — not when someone gets around to calling [close].
     // Without this, a track resolution that started before the receiver dropped
@@ -220,7 +236,11 @@ class _TrustedCastSession implements CastSessionHandle {
   final CastReceiverIdentity identity;
 
   StreamSubscription<bool>? _lifetime;
-  bool _wasReady = false;
+
+  /// Whether this session has been ready — seeded with what the handshake saw,
+  /// so a drop in the gap between the two subscriptions is not read as "not
+  /// ready yet".
+  bool _wasReady;
 
   /// Trust does not survive the session. Once the connection it was proved over
   /// has ended — dropped by the receiver, or closed from here — this handle
@@ -228,9 +248,20 @@ class _TrustedCastSession implements CastSessionHandle {
   /// a new receiver to prove.
   bool _trusted = true;
 
+  /// Readiness as the app should see it: false once trust is gone, and an error
+  /// on the delegate's stream turned into a clean "not ready" rather than passed
+  /// on. A readiness error escaping here would reach the service as an unhandled
+  /// async error instead of its ordinary session-lost teardown.
   @override
-  Stream<bool> get readyStream =>
-      _session.readyStream.map((bool ready) => ready && _trusted);
+  Stream<bool> get readyStream => _session.readyStream
+          .map((bool ready) => ready && _trusted)
+          .transform(StreamTransformer<bool, bool>.fromHandlers(
+        handleError: (Object error, StackTrace stack, EventSink<bool> sink) {
+          _trusted = false;
+          sink.add(false);
+          sink.close();
+        },
+      ));
 
   @override
   Stream<CastPlaybackStatus> get statusStream => _session.statusStream;
@@ -278,4 +309,13 @@ class _TrustedCastSession implements CastSessionHandle {
     _lifetime = null;
     await _session.close();
   }
+}
+
+/// What a completed check yields: the proof, plus whether the session had been
+/// ready while it ran. Both matter to the wrapper the caller gets.
+class _Authentication {
+  const _Authentication(this.identity, {required this.wasReady});
+
+  final CastReceiverIdentity identity;
+  final bool wasReady;
 }

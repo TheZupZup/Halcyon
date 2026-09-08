@@ -150,6 +150,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # A manual run targeting an existing release tag must build *that
+          # tag's* commit. The dispatch's own `--ref` only says which copy of
+          # this workflow file to run (publish-stable-release.yml dispatches
+          # with `--ref main`), so without this the artifacts would come from
+          # whatever `main` is at that moment — which is not necessarily the
+          # reviewed, tagged commit the Release claims to be built from.
+          # Empty for every other trigger, which is checkout's own default: the
+          # pushed tag for a tag build, the dispatched branch for a plain
+          # manual one.
+          ref: ${{ inputs.release_tag }}
 
       # Decide, in one place, how this run should sign, whether the tag is a
       # pre-release, and how to label/name the artifacts.

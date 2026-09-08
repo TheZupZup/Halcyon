@@ -137,6 +137,10 @@ jobs:
             --json databaseId \
             --jq '.[].databaseId' > "$before"
 
+          # --ref selects which copy of the workflow file runs; what it builds
+          # is decided by release_tag, which that workflow checks out. That is
+          # what makes the digests recorded below attributable to the tagged
+          # commit rather than to main's tip at dispatch time.
           gh workflow run android-release-build.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref main \

@@ -212,6 +212,22 @@ void main() {
       expect(transport.session.loaded, isEmpty);
     });
 
+    test('an authenticator that throws before returning a future is refused',
+        () async {
+      // A method satisfying the interface may throw synchronously. That has to
+      // land on the same refusal, and the same cleanup, as any other failure.
+      final _FakeTransport transport = _FakeTransport();
+
+      final CastReceiverTrustException error = await refusal(
+        transport,
+        authenticator: const _SynchronouslyThrowingAuthenticator(),
+      );
+
+      expect(error.kind, CastTrustFailureKind.rejected);
+      expect(transport.session.closed, isTrue);
+      expect(transport.session.loaded, isEmpty);
+    });
+
     test('an authenticator that throws something else is still a refusal',
         () async {
       final _FakeTransport transport = _FakeTransport();
@@ -310,6 +326,47 @@ void main() {
         )),
       );
       expect(transport.session.loaded, isEmpty);
+    });
+
+    test('a drop between the check and the handoff still revokes trust',
+        () async {
+      // The handshake sees the session go ready; it drops in the gap before the
+      // wrapper subscribes, so all the wrapper is replayed is that latest
+      // `false`. Read naively that looks like "not ready yet" — it is not.
+      final _FakeTransport transport = _FakeTransport();
+
+      final CastSessionHandle session = await gate(
+        transport,
+        authenticator: _AcceptingAuthenticator(
+          after: const Duration(milliseconds: 5),
+        ),
+      ).connect(speaker);
+      transport.session.dropSilently();
+      await pumpEventQueue();
+
+      await expectLater(
+        session.loadMedia(media),
+        throwsA(isA<CastReceiverTrustException>()),
+      );
+      expect(transport.session.loaded, isEmpty);
+    });
+
+    test('a readiness error ends the session instead of escaping', () async {
+      // An error on the delegate's readiness stream must not reach the service
+      // as an unhandled async error: it becomes a clean "not ready" so the
+      // ordinary session-lost teardown runs.
+      final _FakeTransport transport = _FakeTransport();
+
+      final CastSessionHandle session = await gate(transport).connect(speaker);
+      final Future<List<bool>> readiness = session.readyStream.toList();
+      await pumpEventQueue();
+      transport.session.failReadiness(StateError('socket blew up'));
+
+      expect(await readiness, <bool>[true, false]);
+      await expectLater(
+        session.loadMedia(media),
+        throwsA(isA<CastReceiverTrustException>()),
+      );
     });
 
     test('trust does not survive the session being closed', () async {
@@ -477,6 +534,15 @@ class _FakeHandle implements CastSessionHandle {
     if (!_ready.isClosed) _ready.add(false);
   }
 
+  /// Drops without emitting, so only a later listener's replay carries it —
+  /// the receiver going away between two subscriptions.
+  void dropSilently() => _last = false;
+
+  /// Fails the readiness stream, the way a broken socket does.
+  void failReadiness(Object error) {
+    if (!_ready.isClosed) _ready.addError(error);
+  }
+
   /// Ends the session the way a receiver that went away entirely does.
   void end() {
     _last = false;
@@ -533,9 +599,13 @@ class _FakeHandle implements CastSessionHandle {
 /// [as] / over [over] to model a device answering for another one, or a proof
 /// made on a different connection.
 class _AcceptingAuthenticator implements CastReceiverAuthenticator {
-  _AcceptingAuthenticator({this.as, this.over});
+  _AcceptingAuthenticator({this.as, this.over, this.after});
 
   final CastDevice? as;
+
+  /// When set, the check takes this long, so a test can be sure the handshake
+  /// observed the session's readiness before it completes.
+  final Duration? after;
 
   /// When set, the proof names this session instead of the one being
   /// authenticated — a receiver proved over some other connection.
@@ -550,6 +620,7 @@ class _AcceptingAuthenticator implements CastReceiverAuthenticator {
     CastSessionHandle session,
   ) async {
     calls.add(device.id);
+    if (after != null) await Future<void>.delayed(after!);
     return CastReceiverIdentity(
       deviceId: (as ?? device).id,
       connection: over ?? session,
@@ -586,6 +657,18 @@ class _ExplodingAuthenticator implements CastReceiverAuthenticator {
   ) async {
     throw StateError('challenge nonce-4711 rejected by peer certificate');
   }
+}
+
+/// Throws before it ever returns a future.
+class _SynchronouslyThrowingAuthenticator implements CastReceiverAuthenticator {
+  const _SynchronouslyThrowingAuthenticator();
+
+  @override
+  Future<CastReceiverIdentity> authenticate(
+    CastDevice device,
+    CastSessionHandle session,
+  ) =>
+      throw StateError('no trust anchors configured');
 }
 
 /// Never answers, the way a receiver that accepts a socket and then goes quiet
