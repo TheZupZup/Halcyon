@@ -354,6 +354,130 @@ void main() {
         expect(state.controls, isNot(contains(audio.MediaControl.pause)));
       });
 
+      // #499 — the battery-optimal half of the same policy: with
+      // `androidStopForegroundOnPause: true`, `playing` is the only lever that
+      // keeps the service (and its wake lock) up, so a pause caused by another
+      // app's transient focus must still report playing while a user pause must
+      // not.
+      test('a transient-focus pause keeps the service foreground', () async {
+        await controller.playTracks(<Track>[_track('a')]);
+        await _settle();
+
+        controller.emit(controller.state.copyWith(
+          status: PlaybackStatus.paused,
+          interruptedByTransientFocus: true,
+        ));
+        await _settle();
+
+        final state = handler.playbackState.value;
+        expect(state.playing, isTrue,
+            reason: 'the isolate must survive to process the AUDIOFOCUS_GAIN');
+        expect(state.processingState, audio.AudioProcessingState.ready);
+      });
+
+      test('the service is demoted once the focus hold is released', () async {
+        await controller.playTracks(<Track>[_track('a')]);
+        await _settle();
+
+        controller.emit(controller.state.copyWith(
+          status: PlaybackStatus.paused,
+          interruptedByTransientFocus: true,
+        ));
+        await _settle();
+        expect(handler.playbackState.value.playing, isTrue);
+
+        controller.emit(controller.state.copyWith(
+          interruptedByTransientFocus: false,
+        ));
+        await _settle();
+
+        expect(handler.playbackState.value.playing, isFalse,
+            reason: 'a pause with no focus to recover from holds no wake lock');
+      });
+
+      test('a focus hold freezes the position every consumer displays',
+          () async {
+        // The session says `playing` through the hold so the service stays up,
+        // and platform consumers extrapolate the position from speed while it
+        // does. At 1.0 a car's progress bar would run minutes ahead of the audio
+        // during a call and snap back on the resume.
+        await controller.playTracks(<Track>[_track('a')]);
+        await _settle();
+        expect(handler.playbackState.value.speed, 1.0);
+
+        controller.emit(controller.state.copyWith(
+          status: PlaybackStatus.paused,
+          interruptedByTransientFocus: true,
+        ));
+        await _settle();
+
+        final state = handler.playbackState.value;
+        expect(state.playing, isTrue);
+        expect(state.speed, 0.0,
+            reason: 'the audio is stopped, so the displayed position must be');
+        expect(state.position, state.updatePosition,
+            reason: 'a frozen speed means no extrapolation past the real spot');
+      });
+
+      test('entering the hold is pushed even though the controls do not change',
+          () async {
+        // The hold keeps `playing`, the processing state and the controls
+        // identical, so the speed is the only thing that moves — if the push
+        // filter ignored it the platform would never learn the audio stopped.
+        await controller.playTracks(<Track>[_track('a')]);
+        await _settle();
+        final pushed = <audio.PlaybackState>[];
+        final sub = handler.playbackState.listen(pushed.add);
+        addTearDown(sub.cancel);
+
+        controller.emit(controller.state.copyWith(
+          status: PlaybackStatus.paused,
+          interruptedByTransientFocus: true,
+        ));
+        await _settle();
+
+        expect(pushed.last.speed, 0.0);
+        expect(pushed.length, greaterThan(1),
+            reason: 'the speed drop must reach the platform session');
+      });
+
+      test('the speed returns to 1.0 when the interruption ends', () async {
+        await controller.playTracks(<Track>[_track('a')]);
+        await _settle();
+        controller.emit(controller.state.copyWith(
+          status: PlaybackStatus.paused,
+          interruptedByTransientFocus: true,
+        ));
+        await _settle();
+
+        controller.emit(controller.state.copyWith(
+          status: PlaybackStatus.playing,
+          interruptedByTransientFocus: false,
+        ));
+        await _settle();
+
+        expect(handler.playbackState.value.speed, 1.0);
+      });
+
+      test('a focus hold never revives a stopped or errored session', () async {
+        await controller.playTracks(<Track>[_track('a')]);
+        await _settle();
+
+        for (final status in <PlaybackStatus>[
+          PlaybackStatus.idle,
+          PlaybackStatus.completed,
+          PlaybackStatus.error,
+        ]) {
+          controller.emit(controller.state.copyWith(
+            status: status,
+            interruptedByTransientFocus: true,
+          ));
+          await _settle();
+          expect(handler.playbackState.value.playing, isFalse,
+              reason: '$status is not a pause worth holding the service for');
+        }
+      });
+
       test('completion and error report not-playing', () async {
         await controller.playTracks(<Track>[_track('a')]);
         await _settle();

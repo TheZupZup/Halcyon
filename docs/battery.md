@@ -20,9 +20,19 @@ cache/pre-cache behaviour in [docs/offline-cache.md](./offline-cache.md).
 - **The foreground service runs only while audio is actually working.**
   `audio_service`'s media service (and the CPU/Wi-Fi wake locks it holds) is
   promoted to the foreground while the session reports `playing` and demoted on a
-  real pause (`androidStopForegroundOnPause: true`). A paused track holds no wake
-  lock. See `connectMediaSession` in
+  real pause (`androidStopForegroundOnPause: true`). A track you paused yourself
+  holds no wake lock. See `connectMediaSession` in
   `lib/core/services/linthra_audio_handler.dart`.
+- **One exception: a pause caused by another app.** When a call, a navigation
+  prompt, or a voice assistant takes audio focus, Linthra keeps the service
+  foreground for that pause only, and drops it again the moment focus comes back
+  (or after a bounded window if the other app never hands focus back). This is
+  what makes playback resume on its own when the interruption ends: the audio
+  focus handling runs in the Flutter isolate, and a demoted service lets the OS
+  freeze that isolate, so the "focus regained" signal would never be seen and
+  music would only come back when you reopened the app. See
+  `PlaybackState.interruptedByTransientFocus` and
+  `JustAudioPlaybackController.focusHoldTimeout`.
 - **A mid-stream re-buffer or a track transition never drops the service.**
   The session is reported as `playing` while the engine is actively working
   toward sound — steadily playing, re-buffering, or loading the next track — so

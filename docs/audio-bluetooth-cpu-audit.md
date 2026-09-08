@@ -74,10 +74,9 @@ routes them to `LinthraAudioHandler`, which forwards to the single
   only when a previous track exists, `skipToNext` only when one is queued, so no
   dead button is shown. This invariant is now locked by a test (see §5).
 - **Lock screen / notification.** Driven by the same `playbackState`/`mediaItem`
-  the handler publishes; the notification is configured ongoing while playing
-  (`androidNotificationOngoing: true`, `androidStopForegroundOnPause: true` at
-  `:482`). `MediaButtonReceiver` in the manifest (`:95`) handles hardware/Bluetooth
-  `MEDIA_BUTTON` intents.
+  the handler publishes (`androidNotificationOngoing: false`,
+  `androidStopForegroundOnPause: true`). `MediaButtonReceiver` in the manifest
+  (`:95`) handles hardware/Bluetooth `MEDIA_BUTTON` intents.
 
 ### Metadata sent to Bluetooth / lock screen / car
 
@@ -231,6 +230,7 @@ now-playing screen. Those rebuilds happen only while that screen is foregrounded
 | Local playback | CPU is busy decoding regardless; the ~4 Hz flush + ≤1 Hz session push are negligible on top. |
 | Streaming playback | As local, plus network buffering tuned for resilience (`_streamBuffering`); preload warms only the immediate next track, sequentially. |
 | Paused playback | Engine idle; flush timer stopped; foreground service demoted (`androidStopForegroundOnPause`); wake locks released. |
+| Paused by another app's focus | As above, except the service is kept foreground until focus returns (bounded by `focusHoldTimeout`), so the isolate can process the focus regain and resume by itself (#499). |
 | Bluetooth playback | Same as local/streaming; routing is OS-level, no extra app work. |
 | Cast playback | Local engine suspended (silent); ~1 Hz receiver poll + 250 ms position ticker, both gated to *playing* (#142). |
 
