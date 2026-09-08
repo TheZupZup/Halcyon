@@ -284,6 +284,25 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Checked out first, and at the exact tag being released, for the
+      # containment verification below: the script and the message it compares
+      # against both live in the repository, and checkout cleans the workspace,
+      # so it has to run before the bundle is downloaded into it.
+      - name: Checkout the released tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build-linux.outputs.release_tag }}
+
+      # Same split as the Android release build: the tag supplies the expected
+      # containment message, this workflow's own revision supplies the script
+      # that looks for it, so rebuilding an older tag is still verified.
+      - name: Check out the release tooling from this workflow's revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tooling
+          sparse-checkout: scripts
+
       # The artifact upload above stores the *contents* of
       # build/linux/x64/release/bundle at its root (linthra, lib/, data/, ...),
       # so downloading it directly into the archive's staging directory already
@@ -351,6 +370,34 @@ jobs:
           head -5 "$archive_list"
 
           echo "archive_file=${archive_file}" >> "$GITHUB_ENV"
+
+      # Casting is withheld from shipped builds while a reported security issue
+      # is resolved (lib/core/services/cast/cast_containment.dart). The Android
+      # release build makes the same check on its APK/AAB before uploading them;
+      # this is the Linux half, and it runs *before* the upload on purpose —
+      # the Release is already public by this point, so an artifact that failed
+      # the check must never become downloadable from it. Fails closed; see the
+      # script's docstring for what it can and cannot see.
+      - name: Verify the archive carries the Cast containment
+        env:
+          ARCHIVE_FILE: ${{ env.archive_file }}
+        run: |
+          set -euo pipefail
+
+          source_file="lib/core/services/cast/cast_containment.dart"
+
+          # Only a tag from before the containment existed has nothing to
+          # check; everything else is verified with the script from this
+          # workflow's revision against that tag's own message, so an old tag
+          # is never a way to attach an unverified asset.
+          if [ ! -f "$source_file" ] || ! grep -q 'static const String userMessage' "$source_file"; then
+            echo "::warning::This tag predates the Cast containment, so its archive carries nothing to check. See docs/release-artifact-verification.md."
+            exit 0
+          fi
+
+          python3 .release-tooling/scripts/verify_release_containment.py \
+            --containment-source "$source_file" \
+            "$ARCHIVE_FILE"
 
       - name: Attach archive to GitHub Release
         env:

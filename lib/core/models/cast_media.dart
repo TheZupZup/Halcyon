@@ -1,14 +1,20 @@
+import '../services/cast/cast_media_access.dart';
+
 /// A track resolved into something a cast receiver (e.g. a Chromecast) can
 /// fetch and play. The receiver pulls the bytes itself over the network, so
 /// [url] must be a reachable `http`/`https` URL — never a `file://` path, which
 /// is why on-device files cannot be cast.
 ///
-/// Security: [url] may embed a short-lived access token in its query (a
-/// Jellyfin stream URL does). It is resolved on demand at cast time, handed
-/// straight to the cast session, and never persisted. [toString] redacts the
-/// query and any userinfo so the URL cannot leak into a log or error message —
-/// only the host and path survive, mirroring how [JellyfinSession] redacts its
-/// token.
+/// Security: [url] may embed an access token in its query (a Jellyfin stream URL
+/// does). It is resolved on demand at cast time, handed straight to the cast
+/// session, and never persisted. [toString] redacts the query and any userinfo
+/// so the URL cannot leak into a log or error message — only the host and path
+/// survive, mirroring how [JellyfinSession] redacts its token.
+///
+/// [access] says what that URL actually delegates: a capability for this one
+/// item, or an account credential the receiver could reuse. It is the source's
+/// own declaration, so the handoff can be described honestly rather than assumed
+/// harmless (see [CastMediaAccess] and docs/cast-media-access.md).
 class CastMedia {
   const CastMedia({
     required this.url,
@@ -18,6 +24,7 @@ class CastMedia {
     this.album,
     this.duration,
     this.artworkUrl,
+    this.access = CastMediaAccess.undeclared,
   });
 
   /// The reachable media URL the receiver fetches. May carry an access token in
@@ -36,6 +43,11 @@ class CastMedia {
   /// length immediately instead of waiting to probe the stream. Null (or zero)
   /// when unknown, in which case the receiver derives it from the stream.
   final Duration? duration;
+
+  /// What handing [url] to a receiver delegates, as declared by the source that
+  /// minted it. Defaults to [CastMediaAccess.undeclared] — the widest reading —
+  /// so a source that says nothing is never mistaken for a safe one.
+  final CastMediaAccess access;
 
   /// A token-free artwork URL for the receiver to show while playing, or null.
   /// Jellyfin's primary-image URL needs no auth, so it is safe to send as-is.
