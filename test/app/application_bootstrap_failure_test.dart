@@ -20,6 +20,7 @@ import 'package:path/path.dart' as p;
 
 import '../support/counting_audio_player.dart';
 import '../support/lifecycle_test_graph.dart';
+import '../support/recording_media_session.dart';
 import '../support/recording_remote_control_receiver.dart';
 
 /// The failure injected into a real `bootstrapApplication()` run. A distinct
@@ -49,6 +50,16 @@ Override _failLate(_BootstrapFailure failure) =>
       (Ref<PlaybackSessionPersistence?> ref) => throw failure,
     );
 
+/// A media session that attaches immediately and owns nothing.
+///
+/// Bootstrap's default binding reads the real host, so on a Linux machine
+/// these tests would reach the real MPRIS session bus — a connection attempt
+/// whose duration is the machine's business, not the test's, and long enough
+/// on a loaded runner to leave bootstrap still in attach when a test that
+/// times cleanup looks at it.
+RecordingMediaSessionBinding _attachedSession() =>
+    RecordingMediaSessionBinding(session: RecordingMediaSession());
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -69,14 +80,22 @@ void main() {
       );
       final LinthraDatabase database = container.read(linthraDatabaseProvider);
       await openDatabase(database);
+      final RecordingMediaSession session = RecordingMediaSession();
 
       await expectLater(
-        bootstrapApplication(container, installPersistentArtworkCache: false),
+        bootstrapApplication(
+          container,
+          installPersistentArtworkCache: false,
+          mediaSessionBinding: RecordingMediaSessionBinding(session: session),
+        ),
         throwsA(same(failure)),
       );
 
       expect(player.disposeCount, 1);
       expect(player.disposeFinished, isTrue);
+      expect(session.detachCount, 1,
+          reason: 'a failed startup gives the media session back too — on '
+              'Linux that is the MPRIS bus name');
       // The failure lands before the remote-control providers are read, so the
       // receiver was never built — and cleanup does not conjure it up in order
       // to dispose it.
@@ -114,6 +133,7 @@ void main() {
         bootstrapApplication(
           container,
           artworkCacheDirectory: cacheDirectory,
+          mediaSessionBinding: _attachedSession(),
         ),
         throwsA(same(failure)),
       );
@@ -152,6 +172,7 @@ void main() {
       final Future<void> attempt = bootstrapApplication(
         container,
         installPersistentArtworkCache: false,
+        mediaSessionBinding: _attachedSession(),
       )
           .then<void>(
             (ApplicationHandle _) {},
@@ -188,8 +209,11 @@ void main() {
       await openDatabase(firstDatabase);
 
       await expectLater(
-        bootstrapApplication(firstContainer,
-            installPersistentArtworkCache: false),
+        bootstrapApplication(
+          firstContainer,
+          installPersistentArtworkCache: false,
+          mediaSessionBinding: _attachedSession(),
+        ),
         throwsA(same(failure)),
       );
 
@@ -201,6 +225,7 @@ void main() {
       final ApplicationHandle handle = await bootstrapApplication(
         secondContainer,
         installPersistentArtworkCache: false,
+        mediaSessionBinding: _attachedSession(),
       );
 
       expect(await isDatabaseOpen(firstDatabase), isFalse);

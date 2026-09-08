@@ -24,19 +24,29 @@ import 'package:path/path.dart' as p;
 
 import '../support/counting_audio_player.dart';
 import '../support/lifecycle_test_graph.dart';
+import '../support/recording_media_session.dart';
 import '../support/recording_remote_control_receiver.dart';
 
 /// Builds the Linux provider graph the way `main()` wires it, without
 /// `runApp`, so shutdown cycles can be exercised deterministically.
+///
+/// The media session is a test double for the same reason the audio player is:
+/// bootstrap's default binding reads the real host, so on a Linux machine this
+/// would attach over the real MPRIS session bus. A shutdown suite has no
+/// business opening one, and how long that takes is the machine's answer, not
+/// a deterministic one.
 Future<ApplicationHandle> _bootstrap(
   ProviderContainer container, {
   bool installPersistentArtworkCache = false,
   Directory? artworkCacheDirectory,
+  RecordingMediaSessionBinding? mediaSessionBinding,
 }) {
   return bootstrapApplication(
     container,
     installPersistentArtworkCache: installPersistentArtworkCache,
     artworkCacheDirectory: artworkCacheDirectory,
+    mediaSessionBinding: mediaSessionBinding ??
+        RecordingMediaSessionBinding(session: RecordingMediaSession()),
   );
 }
 
@@ -114,6 +124,43 @@ void main() {
 
       expect(player.disposeCount, 1);
       expect(player.playCount, 0);
+    });
+
+    test('shutdown gives the media session back', () async {
+      final RecordingMediaSession session = RecordingMediaSession();
+      final ProviderContainer container = ProviderContainer(
+        overrides: linuxLifecycleOverrides(audioPlayer: CountingAudioPlayer()),
+      );
+
+      final ApplicationHandle handle = await _bootstrap(
+        container,
+        mediaSessionBinding: RecordingMediaSessionBinding(session: session),
+      );
+      expect(session.detachCount, 0,
+          reason: 'the session is live for as long as the app is');
+
+      await handle.shutdown();
+
+      // On Linux that detach is what releases org.mpris.MediaPlayer2.linthra:
+      // a player that exits still holding it leaves a ghost in every shell
+      // that was listening.
+      expect(session.detachCount, 1);
+    });
+
+    test('a host with no media session still shuts down cleanly', () async {
+      final CountingAudioPlayer player = CountingAudioPlayer();
+      final ProviderContainer container = ProviderContainer(
+        overrides: linuxLifecycleOverrides(audioPlayer: player),
+      );
+      final RecordingMediaSessionBinding binding =
+          RecordingMediaSessionBinding();
+
+      final ApplicationHandle handle =
+          await _bootstrap(container, mediaSessionBinding: binding);
+      await handle.shutdown();
+
+      expect(binding.attachCount, 1);
+      expect(player.disposeCount, 1);
     });
 
     test('shutdown stops playback that is still running', () async {

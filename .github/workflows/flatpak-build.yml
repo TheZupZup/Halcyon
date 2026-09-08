@@ -130,15 +130,50 @@ jobs:
             flatpak-builder-ci \
             io.github.thezupzup.linthra.yml
 
+      # Fetch the manifest's declared sources before the build, with retries,
+      # because one bad response from a source host fails the whole run.
+      #
+      # That is not hypothetical: run 34173146020 on main died on libplacebo
+      # with "Wrong sha256 checksum ... was 150e307c..." after
+      # code.videolan.org answered with 3857 bytes — an error page, not the
+      # 10 MB tarball. The manifest was fine; it had built on the previous 40+
+      # runs and on the feature branch 14 minutes earlier.
+      #
+      # flatpak-builder only moves a download into its cache once the checksum
+      # verifies, so a bad response is never cached and a retry really does
+      # re-fetch. This never fails the job: an attempt that keeps failing is a
+      # warning and the build step below downloads what is missing and reports
+      # the real error, exactly as it does today. It is a retry, not a new gate.
+      - name: Prefetch manifest sources
+        working-directory: flatpak
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            if flatpak-builder \
+                 --user \
+                 --download-only \
+                 --force-clean \
+                 flatpak-builder-prefetch \
+                 io.github.thezupzup.linthra.yml; then
+              echo "Sources downloaded on attempt $attempt."
+              exit 0
+            fi
+            echo "::warning::Source download attempt $attempt failed."
+            sleep "$((attempt * 15))"
+          done
+          echo "::warning::Prefetch did not complete; the build step downloads the rest."
+
       # Do not restore a module cache here. The CI contract is that the checked
       # in manifest and its declared sources are sufficient on a clean runner.
+      # The prefetch above only retries downloads within this same run on this
+      # same clean runner, so it changes nothing about that contract.
       # --disable-rofiles-fuse avoids depending on FUSE support in the hosted
       # runner while preserving flatpak-builder's normal sandbox/build model.
       - name: Build Flatpak
         working-directory: flatpak
         run: |
           set -euo pipefail
-          rm -rf -- flatpak-builder-ci repo-ci
+          rm -rf -- flatpak-builder-ci flatpak-builder-prefetch repo-ci
           flatpak-builder \
             --user \
             --force-clean \

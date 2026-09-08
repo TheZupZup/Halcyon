@@ -178,6 +178,7 @@ Future<ApplicationHandle> bootstrapApplication(
   ProviderContainer container, {
   bool installPersistentArtworkCache = true,
   Directory? artworkCacheDirectory,
+  MediaSessionBinding mediaSessionBinding = const PlatformMediaSessionBinding(),
 }) async {
   final ApplicationHandle handle = ApplicationHandle(container: container);
   try {
@@ -185,8 +186,14 @@ Future<ApplicationHandle> bootstrapApplication(
     // the real `audio_service` session, Linux gets MPRIS, and every other
     // platform gets the inert binding so `audio_service` is never initialised
     // where it has no implementation.
-    final MediaSession? session =
-        await const PlatformMediaSessionBinding().attach(
+    //
+    // Injectable for the same reason `MprisMediaSessionBinding` takes a D-Bus
+    // client factory: the default reads the real host, so a bootstrap test run
+    // on a Linux machine reaches the real session bus. That is not this
+    // suite's business, and it is not deterministic either — how long the
+    // connection attempt takes decides how far bootstrap has got by the time
+    // the test looks, which is what made the failure-cleanup test flaky.
+    final MediaSession? session = await mediaSessionBinding.attach(
       container.read(playbackControllerProvider),
       container.read(musicLibraryRepositoryProvider),
       playlists: container.read(playlistRepositoryProvider),
