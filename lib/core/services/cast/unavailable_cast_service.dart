@@ -4,19 +4,32 @@ import '../../models/cast_playback_status.dart';
 import '../../models/cast_state.dart';
 import 'cast_service.dart';
 
-/// The shipped [CastService]: casting is **not implemented** in this build, so
-/// it honestly reports [CastAvailability.unavailable] and no-ops every command.
+/// The shipped [CastService]: casting is not reachable in this build, so it
+/// honestly reports [CastAvailability.unavailable] and no-ops every command.
 ///
 /// It exists so the now-playing screen can show a real cast button backed by a
-/// real (if inert) service today, and so swapping in a Chromecast/Cast SDK
-/// implementation later is a one-line provider change with no UI edits. It never
-/// invents devices or pretends to connect.
+/// real (if inert) service, and so swapping in a live backend later is a
+/// provider change with no UI edits. It never invents devices or pretends to
+/// connect.
+///
+/// Two situations produce it, told apart by [message]:
+///  - the platform has no cast backend (Linux and every non-mobile target),
+///    which needs no explanation beyond the UI's own platform copy; and
+///  - the security containment ([CastContainment]), which passes
+///    [CastContainment.userMessage] so the sheet can say casting is *temporarily*
+///    off rather than unsupported here.
 class UnavailableCastService implements CastService {
+  UnavailableCastService({this.message});
+
+  /// A calm, secret-free explanation for the cast sheet, or null to let the UI
+  /// use its own platform wording. Never carries security detail.
+  final String? message;
+
   final StreamController<CastState> _states =
       StreamController<CastState>.broadcast();
 
   @override
-  CastState get state => CastState.unavailable;
+  CastState get state => CastState(message: message);
 
   @override
   Stream<CastState> get stateStream =>

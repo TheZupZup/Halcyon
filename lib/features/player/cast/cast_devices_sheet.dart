@@ -11,9 +11,10 @@ import 'cast_providers.dart';
 
 /// The cast target picker, opened from the now-playing [CastButton].
 ///
-/// It renders honestly from [castStateProvider]: when casting is unavailable
-/// (the shipped default — no cast backend wired yet) it shows a calm
-/// foundation/"coming soon" state rather than an empty or fake device list.
+/// It renders honestly from [castStateProvider]: when casting is unavailable it
+/// shows a calm explanation rather than an empty or fake device list — the
+/// platform has no backend, or (with a [CastState.message]) casting is
+/// temporarily withheld by the security containment.
 /// When a real backend lands, the same sheet lists discovered devices and lets
 /// the user connect/disconnect — no UI changes needed. Discovery is started
 /// while the sheet is open and stopped when it closes.
@@ -100,13 +101,21 @@ class _Body extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     if (!state.isAvailable) {
-      return const Padding(
+      // A carried message means casting is off for a reason of its own (the
+      // security containment) rather than unsupported by the platform, so it
+      // replaces the platform copy: telling an Android user to "try a supported
+      // platform" would be untrue and unhelpful.
+      final String? reason = state.message;
+      return Padding(
         padding: _pad,
         child: EmptyState(
           icon: Icons.cast,
-          title: 'Casting isn\'t available here',
-          message: 'Streaming to Chromecast needs Android or iOS. The control '
-              'is here; pick a device on a supported platform to cast.',
+          title: reason != null
+              ? 'Casting is temporarily unavailable'
+              : 'Casting isn\'t available here',
+          message: reason ??
+              'Streaming to Chromecast needs Android or iOS. The control '
+                  'is here; pick a device on a supported platform to cast.',
         ),
       );
     }

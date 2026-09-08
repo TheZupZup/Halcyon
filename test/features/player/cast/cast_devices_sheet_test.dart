@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/cast_state.dart';
+import 'package:linthra/core/services/cast/cast_containment.dart';
 import 'package:linthra/features/player/cast/cast_devices_sheet.dart';
 import 'package:linthra/features/player/cast/cast_providers.dart';
 
@@ -23,6 +24,40 @@ Future<void> _pumpSheet(WidgetTester tester, FakeCastService service) async {
 const _device = CastDevice(id: 'd1', name: 'Living Room');
 
 void main() {
+  group('CastDevicesSheet security containment', () {
+    testWidgets('says casting is temporarily off, not unsupported here',
+        (tester) async {
+      await _pumpSheet(
+        tester,
+        FakeCastService(initial: CastContainment.state),
+      );
+
+      expect(find.text('Casting is temporarily unavailable'), findsOneWidget);
+      expect(find.text(CastContainment.userMessage), findsOneWidget);
+      // The platform copy would be wrong on the phones this actually affects.
+      expect(find.textContaining('needs Android or iOS'), findsNothing);
+    });
+
+    testWidgets('starts no discovery while contained', (tester) async {
+      final service = FakeCastService(initial: CastContainment.state);
+      await _pumpSheet(tester, service);
+      await tester.pump(const Duration(seconds: 1));
+
+      // Opening the picker is the UI's one chance to kick off a scan; an
+      // unavailable service must never get that call.
+      expect(service.discoveryStarts, 0);
+      expect(service.connectRequests, isEmpty);
+    });
+
+    testWidgets('offers no device to connect to', (tester) async {
+      final service = FakeCastService(initial: CastContainment.state);
+      await _pumpSheet(tester, service);
+
+      expect(find.byType(ListTile), findsNothing);
+      expect(find.text('Search again'), findsNothing);
+    });
+  });
+
   group('CastDevicesSheet states', () {
     testWidgets('searching: shows a spinner and a friendly message',
         (tester) async {
