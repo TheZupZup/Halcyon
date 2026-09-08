@@ -442,6 +442,23 @@ void main() {
       expect(transport.session.closed, isTrue);
     });
 
+    test('closing returns even when the receiver stalls', () async {
+      // Teardown that never finishes would keep DefaultCastService from
+      // reaching its idle state, so the next connection could never start.
+      final _FakeTransport transport = _FakeTransport();
+
+      final CastSessionHandle session = await gate(transport).connect(speaker);
+      transport.session.closeHangs = true;
+
+      await session.close();
+
+      expect(transport.session.closed, isTrue);
+      await expectLater(
+        session.loadMedia(media),
+        throwsA(isA<CastReceiverTrustException>()),
+      );
+    });
+
     test('trust does not survive the session being closed', () async {
       final _FakeTransport transport = _FakeTransport();
 

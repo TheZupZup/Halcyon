@@ -374,6 +374,12 @@ class _TrustedCastSession implements CastSessionHandle {
 
   /// Teardown is never gated: closing an untrusted session is exactly what the
   /// caller should still be able to do.
+  ///
+  /// Both halves are bounded. A receiver that stalls while closing — its socket
+  /// subscriptions winding down, say — would otherwise hold the service's own
+  /// teardown open, so a disconnect would never reach the idle state and the
+  /// next connection would never start. The delegate is free to finish closing
+  /// in its own time; nothing here waits on it.
   @override
   Future<void> close() async {
     _trusted = false;
@@ -382,7 +388,7 @@ class _TrustedCastSession implements CastSessionHandle {
     if (lifetime != null) {
       await settleWithin(lifetime.cancel(), _cleanupTimeout);
     }
-    await _session.close();
+    await settleWithin(_session.close(), _cleanupTimeout);
   }
 }
 
