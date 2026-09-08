@@ -191,6 +191,34 @@ void main() {
       expect(_currentTab(tester), 0);
     });
 
+    testWidgets(
+        'a restore landing mid long-press does not strand the selection',
+        (tester) async {
+      final _ManualLibraryTabStore store = _ManualLibraryTabStore();
+      await _pump(tester, store);
+
+      // Pointer down, but the recognizer has not fired yet: at this instant
+      // neither the selection flag nor the user-interaction flag is set, so
+      // guarding the restore alone would let it move the tab under the gesture.
+      final TestGesture gesture =
+          await tester.startGesture(tester.getCenter(find.text('Song A')));
+      store.completeWith('albums');
+      await tester.pump();
+
+      // Hold past the long-press timeout, then let go.
+      await tester.pump(const Duration(milliseconds: 600));
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(find.text('1 selected'), findsOneWidget);
+
+      // Selection came from the songs list, so that is what it must be sitting
+      // on when it ends.
+      await tester.tap(find.byTooltip('Cancel selection'));
+      await tester.pumpAndSettle();
+      expect(_currentTab(tester), 0);
+    });
+
     testWidgets('a storage failure leaves the screen usable', (tester) async {
       await _pump(tester, _FailingLibraryTabStore());
 

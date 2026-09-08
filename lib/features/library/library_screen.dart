@@ -70,9 +70,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// restore landing after that would move them somewhere they just left.
   bool _userChangedTab = false;
 
-  /// Set only while [_restoreTab] drives the controller, so the one code path
-  /// that handles a tab change can tell a restore from a tap.
-  bool _restoringTab = false;
+  /// Set while the app itself drives the controller, so the one handler for a
+  /// tab change can tell that from a tap: it is neither a choice to remember
+  /// nor a reason to stop a pending restore.
+  bool _programmaticTabChange = false;
 
   /// Pending debounce timer. Cancelled and restarted on every keystroke so the
   /// filter re-runs only once the user pauses typing, not on every character.
@@ -115,9 +116,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // an in-progress search exactly as any other tab change does. Assigning
     // _lastTabIndex first would make the shared handler return early and carry
     // a query typed in Songs into Albums.
-    _restoringTab = true;
+    _programmaticTabChange = true;
     _tabController.index = index;
-    _restoringTab = false;
+    _programmaticTabChange = false;
   }
 
   /// Persists the current tab, swallowing a storage failure.
@@ -147,7 +148,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// when entering/leaving Folders, where the catalog search field is hidden.
   void _onTabChanged() {
     if (_tabController.index == _lastTabIndex) return;
-    if (!_restoringTab) _userChangedTab = true;
+    if (!_programmaticTabChange) _userChangedTab = true;
     _debounce?.cancel();
     setState(() {
       _lastTabIndex = _tabController.index;
@@ -164,7 +165,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // A restore is replaying what is already stored, so there is nothing new to
     // write back. Otherwise fire and forget: where the user is reading is not
     // worth blocking a tab change on.
-    if (_restoringTab) return;
+    if (_programmaticTabChange) return;
     unawaited(_persistTab());
   }
 
@@ -460,6 +461,17 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         ..clear()
         ..add(track.uri);
     });
+    // Selection is only reachable from the songs list, so that is the list it
+    // must show. Guarding the restore is not enough on its own: a long press
+    // holds the pointer for half a second before firing, and a restore landing
+    // inside that window sees no selection yet and moves the tab underneath the
+    // gesture. Coming back here closes it from the other end, whatever the
+    // timing was.
+    if (_tabController.index != 0) {
+      _programmaticTabChange = true;
+      _tabController.index = 0;
+      _programmaticTabChange = false;
+    }
   }
 
   void _toggle(Track track) {
