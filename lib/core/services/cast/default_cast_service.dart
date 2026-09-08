@@ -7,6 +7,7 @@ import '../../models/cast_volume.dart';
 import '../../models/playback_state.dart';
 import '../../models/track.dart';
 import 'cast_media_resolver.dart';
+import 'cast_receiver_trust.dart';
 import 'cast_service.dart';
 import 'cast_transport.dart';
 
@@ -198,6 +199,16 @@ class DefaultCastService implements CastService {
     final CastSessionHandle handle;
     try {
       handle = await _transport.connect(device);
+    } on CastReceiverTrustException catch (error) {
+      // A receiver that could not prove who it is failed for a reason worth
+      // saying: "couldn't connect" would read as a flaky network and invite the
+      // user to try again. The message is secret-free by contract.
+      _emit(CastState(
+        availability: CastAvailability.error,
+        devices: _state.devices,
+        message: error.message,
+      ));
+      return;
     } catch (_) {
       _emit(CastState(
         availability: CastAvailability.error,
@@ -294,6 +305,13 @@ class DefaultCastService implements CastService {
     if (_handle != handle) return;
     try {
       await handle.loadMedia(media);
+    } on CastReceiverTrustException catch (error) {
+      // The handoff refused because trust in this receiver ended. Same reason
+      // as above to say so plainly rather than blame playback.
+      _castingTrackUri = null;
+      _emitPlayback(CastPlaybackStatus.idle);
+      _emit(_connected(device, message: error.message));
+      return;
     } catch (_) {
       _castingTrackUri = null;
       _emitPlayback(CastPlaybackStatus.idle);

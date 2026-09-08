@@ -148,6 +148,14 @@ runs in CI, is a much weaker tripwire on top of that — it matches source patte
 and only catches the obvious removals it knows about. Its limitations are written
 down in the script itself; it is not evidence that casting cannot be reached.
 
+Both of those look at the source tree. A release also has to answer a different
+question — is the safeguard in the file people actually install? — so
+`scripts/verify_release_containment.py` reads the compiled Dart inside the built
+APK/AAB/tarball, and the release workflows run it before an artifact is uploaded
+and again on the published assets. The shipped `v0.2.6` artifacts and their
+SHA-256 digests are recorded in
+[release-artifact-verification.md](release-artifact-verification.md).
+
 In the app, the cast button stays visible but muted and the sheet says casting is
 temporarily unavailable — it does not claim the platform is unsupported, which
 would be untrue on the phones this affects.
@@ -159,6 +167,12 @@ tracked publicly in [#575](https://github.com/TheZupZup/Linthra/issues/575), and
 in detail in the private advisory, which is where that work is reviewed before
 anything is restored. [#576](https://github.com/TheZupZup/Linthra/issues/576) is
 an additional layer, not a substitute for it.
+
+The trust model, the contract already in the tree (`CastReceiverAuthenticator`
+and the fail-closed `TrustGatedCastTransport`), the implementation options and
+the test matrix are in
+[cast-receiver-trust.md](cast-receiver-trust.md). What a handoff delegates to a
+receiver, per server, is in [cast-media-access.md](cast-media-access.md).
 
 The reviewed restoration updates `CastContainment`, the production wiring, the
 transport guards, and `scripts/check_cast_containment.py` in one pull request.
@@ -191,6 +205,13 @@ freshly minted URL that never lands in `Track`, the catalog, a log, or app state
 - **Artwork follows the same rule**: a tokenised cover-art URL is never sent.
   Jellyfin's cover art is token-free (sent); Subsonic's needs the credential
   (omitted).
+
+How much authority that one field carries is a property of the server, not a
+choice: neither Jellyfin nor Subsonic issues a per-item capability, so the URL a
+receiver is given is backed by an account credential. Each source declares that
+in code (`CastMediaAccess`), so it can be stated rather than assumed — see
+[cast-media-access.md](cast-media-access.md) for the per-server matrix and what
+would have to change.
 
 ## Resilience while casting
 

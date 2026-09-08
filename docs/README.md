@@ -30,7 +30,7 @@ The full index of Linthra's docs. New to the project? Start with the
 | Streaming, buffering & recovery | [streaming.md](./streaming.md) |
 | Queue / Up Next | [queue.md](./queue.md) |
 | Offline cache & downloads | [offline-cache.md](./offline-cache.md) |
-| Cast / Chromecast | [cast.md](./cast.md) |
+| Cast / Chromecast | [cast.md](./cast.md) · [receiver trust](./cast-receiver-trust.md) · [what a handoff delegates](./cast-media-access.md) |
 | Remote control (drive Linthra from another app) | [remote-control.md](./remote-control.md) |
 | Android Auto | [android-auto.md](./android-auto.md) |
 | Playlists & safe removal | [playlists-and-delete.md](./playlists-and-delete.md) |
@@ -45,7 +45,7 @@ The full index of Linthra's docs. New to the project? Start with the
 | --- | --- |
 | Reporting a bug | [reporting-bugs.md](./reporting-bugs.md) |
 | Manual QA checklist | [manual-test-checklist.md](./manual-test-checklist.md) |
-| Release process & signing | [release-process.md](./release-process.md) · [signing](./release-signing.md) |
+| Release process & signing | [release-process.md](./release-process.md) · [signing](./release-signing.md) · [artifact verification](./release-artifact-verification.md) |
 | Dependency update bots | [dependency-updates.md](./dependency-updates.md) |
 | PR security surface guard | [pr-security-guard.md](./pr-security-guard.md) |
 | F-Droid readiness | [fdroid-readiness.md](./fdroid-readiness.md) |

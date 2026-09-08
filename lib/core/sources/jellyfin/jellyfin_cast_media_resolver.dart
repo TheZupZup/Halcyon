@@ -1,5 +1,6 @@
 import '../../models/cast_media.dart';
 import '../../models/track.dart';
+import '../../services/cast/cast_media_access.dart';
 import '../../services/cast/cast_media_resolver.dart';
 import '../../services/playback_diagnostics.dart';
 import 'jellyfin_exception.dart';
@@ -33,9 +34,42 @@ class JellyfinCastMediaResolver implements CastMediaResolver {
   /// transcoded cast profile for exotic codecs is a documented follow-up.
   static const String _defaultContentType = 'audio/mpeg';
 
+  /// What casting a Jellyfin track hands over.
+  ///
+  /// Jellyfin authenticates a stream request with the session's access token —
+  /// the same token the app uses for everything else — carried in the URL's
+  /// `api_key`, because that is the only authentication its stream endpoint
+  /// accepts for a client that is not sending headers. There is no per-item
+  /// signed URL, no scoped download token, and no server-side expiry to ask for
+  /// in the stable API, so a receiver handed this URL is handed account-level
+  /// access.
+  ///
+  /// How long that access lasts is not the app's to say. Signing out of
+  /// Jellyfin in Linthra forgets the token on this device; it does not ask the
+  /// server to invalidate it, so a receiver that kept the URL keeps working
+  /// until the user revokes that device in Jellyfin, or the server expires it
+  /// on its own terms. Recording the lifetime as "until the user signs out"
+  /// would be the comfortable answer and the wrong one.
+  ///
+  /// Declaring that plainly is the point: pretending a token in a query string
+  /// is a capability would be inventing a restriction the server does not
+  /// enforce. What Jellyfin would need for [CastMediaDelegation.scopedCapability]
+  /// is in docs/cast-media-access.md.
+  static const CastMediaAccess access = CastMediaAccess(
+    delegation: CastMediaDelegation.accountCredential,
+    scope: CastMediaScope.account,
+    summary: 'The receiver is given a Jellyfin stream URL carrying the session '
+        'access token, which reaches the whole account and keeps working until '
+        'the server revokes it.',
+  );
+
   @override
   bool canCast(Track track) =>
       track.uri.startsWith(JellyfinTrackMapper.uriScheme);
+
+  @override
+  CastMediaAccess accessFor(Track track) =>
+      canCast(track) ? access : CastMediaAccess.none;
 
   @override
   Future<CastMedia> resolve(Track track) async {
@@ -77,6 +111,7 @@ class JellyfinCastMediaResolver implements CastMediaResolver {
       duration: track.duration > Duration.zero ? track.duration : null,
       // Token-free per JellyfinEndpoints.primaryImage, so safe to send as-is.
       artworkUrl: track.artworkUri,
+      access: access,
     );
   }
 

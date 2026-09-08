@@ -150,6 +150,29 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # A manual run targeting an existing release tag must build *that
+          # tag's* commit. The dispatch's own `--ref` only says which copy of
+          # this workflow file to run (publish-stable-release.yml dispatches
+          # with `--ref main`), so without this the artifacts would come from
+          # whatever `main` is at that moment — which is not necessarily the
+          # reviewed, tagged commit the Release claims to be built from.
+          # Empty for every other trigger, which is checkout's own default: the
+          # pushed tag for a tag build, the dispatched branch for a plain
+          # manual one.
+          ref: ${{ inputs.release_tag }}
+
+      # The release tooling from the revision that is RUNNING, kept beside the
+      # build source rather than replacing it. A run rebuilding an older tag
+      # checks that tag's tree out above, which may predate the containment
+      # verifier; the check still has to happen, so the script comes from here
+      # and the expected message from the tag's own cast_containment.dart.
+      - name: Check out the release tooling from this workflow's revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tooling
+          sparse-checkout: scripts
 
       # Decide, in one place, how this run should sign, whether the tag is a
       # pre-release, and how to label/name the artifacts.
@@ -470,6 +493,35 @@ jobs:
           done
 
           echo "Verified: all APK versions match the tag-derived version."
+
+      # Casting is withheld from shipped builds while a reported security issue
+      # is resolved (see lib/core/services/cast/cast_containment.dart). The
+      # source tripwire and the containment tests both run against the tree; this
+      # reads the compiled Dart inside the artifacts this job is about to upload,
+      # so a build that lost containment somewhere between the checkout and the
+      # APK never becomes a Release asset. It also prints each artifact's SHA-256
+      # for the release record. Fails closed — see the script's docstring for
+      # what it can and cannot see.
+      - name: Verify the built artifacts carry the Cast containment
+        run: |
+          set -euo pipefail
+
+          source_file="lib/core/services/cast/cast_containment.dart"
+
+          # The one case with nothing to check: a tag from before the
+          # containment existed. Then there is no message to look for, and the
+          # documented rebuild path for such a tag must not fail on its absence.
+          # Anything else is checked — with the verifier from this workflow's
+          # revision, against the built tree's own message — because "the tag is
+          # old" must never become a way to replace public assets unverified.
+          if [ ! -f "$source_file" ] || ! grep -q 'static const String userMessage' "$source_file"; then
+            echo "::warning::This tag predates the Cast containment, so its artifacts carry nothing to check. See docs/release-artifact-verification.md."
+            exit 0
+          fi
+
+          python3 .release-tooling/scripts/verify_release_containment.py \
+            --containment-source "$source_file" \
+            dist/*.apk dist/*.aab
 
       - name: Upload release APK
         uses: actions/upload-artifact@v7
