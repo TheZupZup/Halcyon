@@ -63,9 +63,12 @@ protocol rather than about the app's plumbing:
   refusal back); every outbound operation — the media handoff and the transport
   controls alike — refuses again on its own; and trust ends with the connection
   it was proved over, whether that is a close from here or the receiver
-  dropping. Only teardown stays ungated. `DefaultCastService` surfaces a refusal's own message
-  rather than a generic "couldn't connect", so a security refusal does not read
-  as a flaky network.
+  dropping. Only teardown stays ungated. The gate also owns the wording: a
+  refusal keeps its `CastTrustFailureKind` and nothing else, so nothing an
+  authenticator wrote into a message — possibly built from what the receiver
+  said — can reach the sheet. `DefaultCastService` surfaces that message rather
+  than a generic "couldn't connect", so a security refusal does not read as a
+  flaky network.
 
 Neither is wired into production, and neither restores casting. Containment
 still comes first in every path: the gate authenticates over a connection the

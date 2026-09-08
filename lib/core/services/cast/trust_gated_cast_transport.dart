@@ -22,6 +22,11 @@ import 'cast_transport.dart';
 /// finishes, a session that dies mid-handshake or after it) is a unit test
 /// rather than a code review.
 ///
+/// It also owns what the user is told. A refusal keeps its
+/// [CastTrustFailureKind] and nothing else: the message the sheet shows is
+/// written here, so no message an authenticator produces — which may have been
+/// built from something the receiver said — can reach the UI.
+///
 /// **This does not restore casting.** Nothing in production builds a live
 /// transport while the security containment holds, and the shipped
 /// [UnverifiedCastReceiverAuthenticator] refuses every receiver anyway. This is
@@ -85,9 +90,8 @@ class TrustGatedCastTransport implements CastTransport {
 
     if (!proof.identity.matches(device, session)) {
       await _close(session);
-      throw const CastReceiverTrustException(
-        "Linthra couldn't confirm that this is the device you picked, so it "
-        'stopped.',
+      throw CastReceiverTrustException(
+        _messageFor(CastTrustFailureKind.identityMismatch),
         kind: CastTrustFailureKind.identityMismatch,
       );
     }
@@ -160,16 +164,21 @@ class TrustGatedCastTransport implements CastTransport {
           },
           onError: (Object error, StackTrace stack) {
             if (race.isCompleted) return;
-            // A trust failure is passed through as itself; anything else — a
-            // socket error, a bug in an implementation — becomes a refusal too,
-            // because "the check threw" is never "the check passed".
+            // Every failure becomes a refusal — "the check threw" is never
+            // "the check passed" — and every refusal gets *this class's* copy.
+            // A typed failure keeps only its kind: an implementation that wrote
+            // a fingerprint or a challenge into its message would otherwise
+            // have it published in CastState.message, and one natural
+            // error-wrapping mistake should not be able to do that.
             race.completeError(
-              error is CastReceiverTrustException
-                  ? error
-                  : const CastReceiverTrustException(
-                      _rejectedMessage,
-                      kind: CastTrustFailureKind.rejected,
-                    ),
+              CastReceiverTrustException(
+                _messageFor(error is CastReceiverTrustException
+                    ? error.kind
+                    : CastTrustFailureKind.rejected),
+                kind: error is CastReceiverTrustException
+                    ? error.kind
+                    : CastTrustFailureKind.rejected,
+              ),
               stack,
             );
           },
@@ -180,6 +189,24 @@ class TrustGatedCastTransport implements CastTransport {
     } finally {
       expiry.cancel();
       await ended.cancel();
+    }
+  }
+
+  /// The only wording a refusal ever reaches the user with. Owned here, chosen
+  /// by [CastTrustFailureKind] alone, so nothing an implementation writes into
+  /// an exception can travel to the cast sheet.
+  static String _messageFor(CastTrustFailureKind kind) {
+    switch (kind) {
+      case CastTrustFailureKind.unsupported:
+        return "Linthra can't verify this device yet, so it won't send your "
+            'music to it.';
+      case CastTrustFailureKind.rejected:
+        return _rejectedMessage;
+      case CastTrustFailureKind.identityMismatch:
+        return "Linthra couldn't confirm that this is the device you picked, "
+            'so it stopped.';
+      case CastTrustFailureKind.incomplete:
+        return _incompleteMessage;
     }
   }
 

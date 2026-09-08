@@ -228,6 +228,22 @@ void main() {
       expect(transport.session.loaded, isEmpty);
     });
 
+    test('a typed failure keeps its kind but not its words', () async {
+      // An authenticator could build its message from something the receiver
+      // said. The gate owns the wording, so only the kind survives.
+      final _FakeTransport transport = _FakeTransport();
+
+      final CastReceiverTrustException error = await refusal(
+        transport,
+        authenticator: const _LeakyAuthenticator(),
+      );
+
+      expect(error.kind, CastTrustFailureKind.rejected);
+      expect(error.message, isNot(contains('sha256:de:ad:be:ef')));
+      expect(error.message, isNot(contains('CN=Some Receiver')));
+      expect(transport.session.closed, isTrue);
+    });
+
     test('an authenticator that throws something else is still a refusal',
         () async {
       final _FakeTransport transport = _FakeTransport();
@@ -433,6 +449,7 @@ void main() {
         const UnverifiedCastReceiverAuthenticator(),
         const _RefusingAuthenticator(),
         const _ExplodingAuthenticator(),
+        const _LeakyAuthenticator(),
         _AcceptingAuthenticator(as: other),
         _HangingAuthenticator(),
       ]) {
@@ -696,6 +713,23 @@ class _ExplodingAuthenticator implements CastReceiverAuthenticator {
     CastSessionHandle session,
   ) async {
     throw StateError('challenge nonce-4711 rejected by peer certificate');
+  }
+}
+
+/// Refuses with handshake material in its message — the mistake the gate has to
+/// make harmless.
+class _LeakyAuthenticator implements CastReceiverAuthenticator {
+  const _LeakyAuthenticator();
+
+  @override
+  Future<CastReceiverIdentity> authenticate(
+    CastDevice device,
+    CastSessionHandle session,
+  ) async {
+    throw const CastReceiverTrustException(
+      'Chain rejected: CN=Some Receiver, fingerprint sha256:de:ad:be:ef',
+      kind: CastTrustFailureKind.rejected,
+    );
   }
 }
 

@@ -373,6 +373,18 @@ jobs:
           ARCHIVE_FILE: ${{ env.archive_file }}
         run: |
           set -euo pipefail
+
+          # A run rebuilding an OLD release tag checks out that tag's tree,
+          # which may predate this script (and the containment it looks for).
+          # That path is documented and must keep working, so say plainly that
+          # nothing was checked rather than failing the rebuild — after the
+          # whole build — on a file the tag never had. Same handling as the
+          # Android release build.
+          if [ ! -f scripts/verify_release_containment.py ]; then
+            echo "::warning::This tag predates scripts/verify_release_containment.py, so the archive was not checked for the Cast containment. Verify the published asset by hand if the tag is expected to carry it (see docs/release-artifact-verification.md)."
+            exit 0
+          fi
+
           python3 scripts/verify_release_containment.py "$ARCHIVE_FILE"
 
       - name: Attach archive to GitHub Release
