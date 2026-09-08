@@ -354,6 +354,66 @@ void main() {
         expect(state.controls, isNot(contains(audio.MediaControl.pause)));
       });
 
+      // #499 — the battery-optimal half of the same policy: with
+      // `androidStopForegroundOnPause: true`, `playing` is the only lever that
+      // keeps the service (and its wake lock) up, so a pause caused by another
+      // app's transient focus must still report playing while a user pause must
+      // not.
+      test('a transient-focus pause keeps the service foreground', () async {
+        await controller.playTracks(<Track>[_track('a')]);
+        await _settle();
+
+        controller.emit(controller.state.copyWith(
+          status: PlaybackStatus.paused,
+          interruptedByTransientFocus: true,
+        ));
+        await _settle();
+
+        final state = handler.playbackState.value;
+        expect(state.playing, isTrue,
+            reason: 'the isolate must survive to process the AUDIOFOCUS_GAIN');
+        expect(state.processingState, audio.AudioProcessingState.ready);
+      });
+
+      test('the service is demoted once the focus hold is released', () async {
+        await controller.playTracks(<Track>[_track('a')]);
+        await _settle();
+
+        controller.emit(controller.state.copyWith(
+          status: PlaybackStatus.paused,
+          interruptedByTransientFocus: true,
+        ));
+        await _settle();
+        expect(handler.playbackState.value.playing, isTrue);
+
+        controller.emit(controller.state.copyWith(
+          interruptedByTransientFocus: false,
+        ));
+        await _settle();
+
+        expect(handler.playbackState.value.playing, isFalse,
+            reason: 'a pause with no focus to recover from holds no wake lock');
+      });
+
+      test('a focus hold never revives a stopped or errored session', () async {
+        await controller.playTracks(<Track>[_track('a')]);
+        await _settle();
+
+        for (final status in <PlaybackStatus>[
+          PlaybackStatus.idle,
+          PlaybackStatus.completed,
+          PlaybackStatus.error,
+        ]) {
+          controller.emit(controller.state.copyWith(
+            status: status,
+            interruptedByTransientFocus: true,
+          ));
+          await _settle();
+          expect(handler.playbackState.value.playing, isFalse,
+              reason: '$status is not a pause worth holding the service for');
+        }
+      });
+
       test('completion and error report not-playing', () async {
         await controller.playTracks(<Track>[_track('a')]);
         await _settle();

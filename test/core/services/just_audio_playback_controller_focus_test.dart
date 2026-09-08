@@ -500,4 +500,194 @@ void main() {
       expect(p.volumes.last, 1.0);
     });
   });
+
+  // #499 — battery-optimal audio-focus mode. The foreground media service (and
+  // the CPU wake lock audio_service holds with it) is kept alive *only* while a
+  // transient-focus pause is outstanding, instead of across every pause as #244
+  // left it. The controller publishes that as
+  // `PlaybackState.interruptedByTransientFocus`, which the media session turns
+  // into the `playing` flag audio_service promotes the service on.
+  group('the foreground hold covers a transient-focus pause only (#499)', () {
+    test('a sustained transient loss holds it, and the regain releases it',
+        () async {
+      final p = _RecordingPlayer();
+      final controller = JustAudioPlaybackController(player: p);
+      addTearDown(controller.dispose);
+      controller.focusPauseDebounce = _testDebounce;
+      controller.handleEngineState(PlayerState(true, ProcessingState.ready));
+      expect(controller.state.interruptedByTransientFocus, isFalse,
+          reason: 'normal playback needs no hold — it is already foreground');
+
+      controller.onAudioInterruption(_begin(AudioInterruptionType.pause));
+      await _pastDebounce();
+
+      expect(controller.state.interruptedByTransientFocus, isTrue,
+          reason: 'the isolate must stay alive to see the AUDIOFOCUS_GAIN');
+      expect(p.pauseCalls, 1);
+
+      controller.onAudioInterruption(_end(AudioInterruptionType.pause));
+      await _settle();
+
+      expect(p.playCalls, 1, reason: 'the regain still resumes playback');
+      expect(controller.state.interruptedByTransientFocus, isFalse,
+          reason: 'focus is back: playing keeps the service up on its own');
+    });
+
+    test('the hold reaches listeners on the state stream', () async {
+      final p = _RecordingPlayer();
+      final controller = JustAudioPlaybackController(player: p);
+      addTearDown(controller.dispose);
+      controller.focusPauseDebounce = _testDebounce;
+      final held = <bool>[];
+      final sub = controller.stateStream
+          .listen((s) => held.add(s.interruptedByTransientFocus));
+      addTearDown(sub.cancel);
+      controller.handleEngineState(PlayerState(true, ProcessingState.ready));
+
+      controller.onAudioInterruption(_begin(AudioInterruptionType.pause));
+      await _pastDebounce();
+      controller.onAudioInterruption(_end(AudioInterruptionType.pause));
+      await _settle();
+
+      expect(held, contains(true),
+          reason: 'the media session is driven by the stream, not by polling');
+      expect(held.last, isFalse);
+    });
+
+    test('a brief blip absorbed by the regain leaves no hold behind', () async {
+      final p = _RecordingPlayer();
+      final controller = JustAudioPlaybackController(player: p);
+      addTearDown(controller.dispose);
+      controller.focusPauseDebounce = _testDebounce;
+      controller.handleEngineState(PlayerState(true, ProcessingState.ready));
+
+      controller.onAudioInterruption(_begin(AudioInterruptionType.pause));
+      controller.onAudioInterruption(_end(AudioInterruptionType.pause));
+      await _pastDebounce();
+
+      expect(p.pauseCalls, 0);
+      expect(controller.state.interruptedByTransientFocus, isFalse);
+    });
+
+    test('a permanent loss never holds it (another app owns audio now)',
+        () async {
+      final p = _RecordingPlayer();
+      final controller = JustAudioPlaybackController(player: p);
+      addTearDown(controller.dispose);
+      controller.handleEngineState(PlayerState(true, ProcessingState.ready));
+
+      controller.onAudioInterruption(_begin(AudioInterruptionType.unknown));
+      await _settle();
+
+      expect(controller.state.interruptedByTransientFocus, isFalse,
+          reason: 'nothing to recover, so nothing to keep the service up for');
+    });
+
+    test('a transient loss over an already-paused track never holds it',
+        () async {
+      final p = _RecordingPlayer();
+      final controller = JustAudioPlaybackController(player: p);
+      addTearDown(controller.dispose);
+      controller.focusPauseDebounce = _testDebounce;
+      controller.handleEngineState(PlayerState(false, ProcessingState.ready));
+
+      controller.onAudioInterruption(_begin(AudioInterruptionType.pause));
+      await _pastDebounce();
+
+      expect(controller.state.interruptedByTransientFocus, isFalse,
+          reason: 'a user-paused track has no playback to protect');
+    });
+
+    test('a user pause during a transient hold demotes the service', () async {
+      // The battery case the #244 configuration could not express: the user
+      // pauses while another app still holds focus, so there is no longer
+      // anything to resume — the wake lock must be dropped straight away.
+      final p = _RecordingPlayer();
+      final controller = JustAudioPlaybackController(player: p);
+      addTearDown(controller.dispose);
+      controller.focusPauseDebounce = _testDebounce;
+      controller.handleEngineState(PlayerState(true, ProcessingState.ready));
+
+      controller.onAudioInterruption(_begin(AudioInterruptionType.pause));
+      await _pastDebounce();
+      expect(controller.state.interruptedByTransientFocus, isTrue);
+
+      await controller.pause();
+      await _settle();
+
+      expect(controller.state.interruptedByTransientFocus, isFalse);
+
+      controller.onAudioInterruption(_end(AudioInterruptionType.pause));
+      await _settle();
+      expect(p.playCalls, 0,
+          reason: 'a user pause still wins over the later regain');
+    });
+
+    test('a stop releases the hold', () async {
+      final p = _RecordingPlayer();
+      final controller = JustAudioPlaybackController(player: p);
+      addTearDown(controller.dispose);
+      controller.focusPauseDebounce = _testDebounce;
+      controller.handleEngineState(PlayerState(true, ProcessingState.ready));
+
+      controller.onAudioInterruption(_begin(AudioInterruptionType.pause));
+      await _pastDebounce();
+      expect(controller.state.interruptedByTransientFocus, isTrue);
+
+      await controller.stop();
+
+      expect(controller.state.interruptedByTransientFocus, isFalse);
+    });
+
+    test('the hold is bounded when the focus gain never arrives', () async {
+      // An app that grabbed focus and died never sends AUDIOFOCUS_GAIN. Without
+      // a bound that would hold the wake lock for as long as the track stays
+      // paused — the very cost #499 is about.
+      final p = _RecordingPlayer();
+      final controller = JustAudioPlaybackController(player: p);
+      addTearDown(controller.dispose);
+      controller.focusPauseDebounce = _testDebounce;
+      controller.focusHoldTimeout = const Duration(milliseconds: 60);
+      controller.handleEngineState(PlayerState(true, ProcessingState.ready));
+
+      controller.onAudioInterruption(_begin(AudioInterruptionType.pause));
+      await _pastDebounce();
+      expect(controller.state.interruptedByTransientFocus, isTrue);
+
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+
+      expect(controller.state.interruptedByTransientFocus, isFalse,
+          reason: 'the hold must expire on its own, not linger indefinitely');
+
+      // Recovery is given up only as a battery tradeoff: if the isolate is still
+      // alive when focus does come back, playback still resumes.
+      controller.onAudioInterruption(_end(AudioInterruptionType.pause));
+      await _settle();
+      expect(p.playCalls, 1);
+    });
+
+    test('a repeated voice-session loss keeps the hold through to the regain',
+        () async {
+      final p = _RecordingPlayer();
+      final controller = JustAudioPlaybackController(player: p);
+      addTearDown(controller.dispose);
+      controller.focusPauseDebounce = _testDebounce;
+      controller.handleEngineState(PlayerState(true, ProcessingState.ready));
+
+      controller.onAudioInterruption(_begin(AudioInterruptionType.pause));
+      await _pastDebounce();
+      controller.onAudioInterruption(_begin(AudioInterruptionType.pause));
+      await _pastDebounce();
+
+      expect(controller.state.interruptedByTransientFocus, isTrue,
+          reason:
+              'the second loss of one voice session must not drop the hold');
+
+      controller.onAudioInterruption(_end(AudioInterruptionType.pause));
+      await _settle();
+
+      expect(p.playCalls, 1);
+      expect(controller.state.interruptedByTransientFocus, isFalse);
+    });
+  });
 }
