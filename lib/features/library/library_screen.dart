@@ -136,39 +136,41 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         if (_selectedUris.contains(track.uri)) track,
     ];
 
-    if (_selecting) {
-      return PopScope(
-        canPop: false,
-        onPopInvokedWithResult: (bool didPop, _) {
-          if (!didPop) _exitSelection();
-        },
-        child: Scaffold(
-          appBar: _selectionAppBar(selected),
-          body: _songsList(_filteredSongs(songs)),
-        ),
-      );
-    }
-
     // A connected folder-capable server is browseable before (or even without)
     // a flat catalog sync, so it is enough to show the Library tabs on its own.
-    final bool browsing = state.status == LibraryStatus.loaded &&
-        (songs.isNotEmpty || hasFolderSources);
+    // Selecting implies rows to select, so it always browses.
+    final bool browsing = _selecting ||
+        (state.status == LibraryStatus.loaded &&
+            (songs.isNotEmpty || hasFolderSources));
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Library'),
-        actions: <Widget>[
-          IconButton(
-            icon: const Icon(Icons.create_new_folder_outlined),
-            tooltip: 'Select music folder',
-            onPressed: _pickAndScan,
-          ),
-        ],
-        bottom: browsing ? _tabBar() : null,
+    // Selection changes the app bar, not the screen. Returning a *different*
+    // widget tree here (a bare Scaffold holding the list) would unmount the
+    // list, and with it the ScrollController that AlphabetTrackList owns, so
+    // long-pressing a row halfway down the catalog jumped back to the top
+    // (#582). Everything below therefore stays in the same slot in both modes.
+    return PopScope(
+      canPop: !_selecting,
+      onPopInvokedWithResult: (bool didPop, _) {
+        if (!didPop && _selecting) _exitSelection();
+      },
+      child: Scaffold(
+        appBar: _selecting
+            ? _selectionAppBar(selected)
+            : AppBar(
+                title: const Text('Library'),
+                actions: <Widget>[
+                  IconButton(
+                    icon: const Icon(Icons.create_new_folder_outlined),
+                    tooltip: 'Select music folder',
+                    onPressed: _pickAndScan,
+                  ),
+                ],
+                bottom: browsing ? _tabBar() : null,
+              ),
+        body: browsing
+            ? _browseBody(songs, syncingSources)
+            : _statusBody(state, selectedFolder.valueOrNull, syncingSources),
       ),
-      body: browsing
-          ? _browseBody(songs, syncingSources)
-          : _statusBody(state, selectedFolder.valueOrNull, syncingSources),
     );
   }
 
@@ -230,23 +232,34 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     final String? syncHeadline = syncingHeadline(syncingSources);
     return Column(
       children: <Widget>[
-        // The box is a text input, not content: on a wide window it stops
-        // growing and stays left-aligned under the tabs rather than running
-        // the width of a monitor.
-        Align(
-          alignment: AlignmentDirectional.centerStart,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: _searchFieldMaxWidth),
-            child: LibrarySearchField(
-              controller: _searchController,
-              onChanged: _onQueryChanged,
-              onClear: _clearSearch,
+        // Selection hides the search box, but the slot keeps exactly one child
+        // either way: dropping it would move the Expanded below to index 0, and
+        // an unkeyed Column re-inflates a child whose index changed — which is
+        // the scroll position we are here to preserve (#582).
+        if (_selecting)
+          const SizedBox.shrink()
+        else
+          // The box is a text input, not content: on a wide window it stops
+          // growing and stays left-aligned under the tabs rather than running
+          // the width of a monitor.
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: _searchFieldMaxWidth),
+              child: LibrarySearchField(
+                controller: _searchController,
+                onChanged: _onQueryChanged,
+                onClear: _clearSearch,
+              ),
             ),
           ),
-        ),
         Expanded(
           child: TabBarView(
             controller: _tabController,
+            // The tab bar is hidden while selecting, so a swipe would be an
+            // undocumented way out of selection mode (and onto rows the count
+            // in the app bar does not describe).
+            physics: _selecting ? const NeverScrollableScrollPhysics() : null,
             children: <Widget>[
               _songsTab(songs, syncHeadline),
               _albumsTab(syncHeadline),
