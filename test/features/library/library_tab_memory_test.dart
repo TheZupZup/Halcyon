@@ -38,13 +38,16 @@ class _SlowLibraryTabStore implements LibraryTabStore {
 class _ManualLibraryTabStore implements LibraryTabStore {
   final Completer<String?> _read = Completer<String?>();
 
+  /// The value left in the store, so a test can check what a tap wrote back.
+  String? stored;
+
   void completeWith(String? tabName) => _read.complete(tabName);
 
   @override
   Future<String?> read() => _read.future;
 
   @override
-  Future<void> write(String? tabName) async {}
+  Future<void> write(String? tabName) async => stored = tabName;
 }
 
 /// A store whose first write is slow and later ones instant, the shape that
@@ -292,6 +295,9 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(_currentTab(tester), 0);
+      // Keeping the screen on Songs is only half of it: leaving Artists stored
+      // would reopen there next launch, on a tab the user had just rejected.
+      expect(store.stored, 'songs');
     });
 
     testWidgets('a storage failure leaves the screen usable', (tester) async {

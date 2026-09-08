@@ -277,10 +277,19 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       key: const Key('library_tabs'),
       controller: _tabController,
       // Tapping the tab you are already on is still you choosing a tab, but it
-      // leaves the controller index untouched, so the listener never runs and
-      // _userChangedTab would stay false. A restore still in flight would then
-      // move you off the tab you just asked for.
-      onTap: (_) => _userChangedTab = true,
+      // leaves the controller index untouched, so the listener never runs: it
+      // would neither mark the choice nor store it. A restore still in flight
+      // would move you off the tab you just asked for, and the next cold launch
+      // would open on the tab you had just rejected.
+      //
+      // TabBar calls animateTo before onTap, so the index is already current
+      // here. A tap that did change tabs therefore queues the same value the
+      // listener just queued, which is a harmless second write of a value that
+      // is already stored.
+      onTap: (_) {
+        _userChangedTab = true;
+        _persistTab();
+      },
       indicatorColor: theme.colorScheme.secondary,
       indicatorSize: TabBarIndicatorSize.label,
       labelColor: theme.colorScheme.secondary,
