@@ -36,17 +36,28 @@ GoRouter _router() {
   );
 }
 
+/// A playlist long enough to scroll, as in the report behind #582.
+final List<Track> _long = <Track>[
+  for (int i = 0; i < 60; i++)
+    Track(
+      id: 'song-$i',
+      title: 'Song ${i.toString().padLeft(2, '0')}',
+      uri: 'file:///song-$i.mp3',
+    ),
+];
+
 Future<void> _pump(
   WidgetTester tester, {
   required InMemoryPlaylistStore store,
   required FakePlaybackController controller,
+  List<Track> tracks = _tracks,
 }) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: <Override>[
         playlistStoreProvider.overrideWithValue(store),
         musicLibraryRepositoryProvider
-            .overrideWithValue(FakeMusicLibraryRepository(tracks: _tracks)),
+            .overrideWithValue(FakeMusicLibraryRepository(tracks: tracks)),
         playbackControllerProvider.overrideWithValue(controller),
       ],
       child: MaterialApp.router(routerConfig: _router()),
@@ -89,6 +100,39 @@ Future<void> _dragToEnd(WidgetTester tester, {required int from}) async {
 }
 
 void main() {
+  testWidgets('entering selection keeps the playlist where it was (#582)',
+      (tester) async {
+    final InMemoryPlaylistStore store = await _seededStore(
+      trackIds: <String>[for (final Track track in _long) track.uri],
+    );
+    await _pump(
+      tester,
+      store: store,
+      controller: FakePlaybackController(),
+      tracks: _long,
+    );
+
+    final Finder scrollable = find.byType(Scrollable).last;
+    await tester.drag(scrollable, const Offset(0, -900));
+    await tester.pumpAndSettle();
+    final double before =
+        tester.state<ScrollableState>(scrollable).position.pixels;
+    expect(before, greaterThan(0), reason: 'the drag should have scrolled');
+
+    // Long-press a visible row to enter selection. The list widget changes
+    // here (no drag handles while selecting), so the offset has to be carried
+    // across rather than kept in one Scrollable.
+    await tester.longPress(find.byType(ListTile).hitTestable().first);
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+
+    final Finder selectionScrollable = find.byType(Scrollable).last;
+    expect(
+      tester.state<ScrollableState>(selectionScrollable).position.pixels,
+      before,
+    );
+  });
+
   testWidgets('renders the playlist tracks', (tester) async {
     await _pump(
       tester,
