@@ -260,6 +260,23 @@ void main() {
       expect(error.message, isNot(contains('nonce-')));
     });
 
+    test('a subscription that will not cancel still lets the refusal out',
+        () async {
+      // Cancelling a subscription can wait on the stream's own teardown. If the
+      // delegate stalls there, the refusal must still come back rather than
+      // leaving the caller connecting forever.
+      final _FakeTransport transport = _FakeTransport()
+        ..session.cancelHangs = true;
+
+      final CastReceiverTrustException error = await refusal(
+        transport,
+        authenticator: const _RefusingAuthenticator(),
+      );
+
+      expect(error.kind, CastTrustFailureKind.rejected);
+      expect(transport.session.loaded, isEmpty);
+    });
+
     test('a receiver that will not close at all still gets refused', () async {
       // Cleanup is best-effort on a path that has already failed: a receiver
       // that accepts the close and then goes quiet must not leave the caller
@@ -578,6 +595,10 @@ class _FakeHandle implements CastSessionHandle {
   /// and then says nothing.
   bool closeHangs = false;
 
+  /// When true, cancelling a [readyStream] subscription never completes — a
+  /// stream whose own teardown stalls.
+  bool cancelHangs = false;
+
   /// Reports the receiver's media app as up.
   void becomeReady() {
     _last = true;
@@ -610,7 +631,17 @@ class _FakeHandle implements CastSessionHandle {
   }
 
   @override
-  Stream<bool> get readyStream async* {
+  Stream<bool> get readyStream {
+    if (!cancelHangs) return _replayed();
+    final StreamController<bool> stalling = StreamController<bool>();
+    stalling.onListen = () {
+      if (_last != null) stalling.add(_last!);
+    };
+    stalling.onCancel = () => Completer<void>().future;
+    return stalling.stream;
+  }
+
+  Stream<bool> _replayed() async* {
     if (_last != null) yield _last!;
     yield* _ready.stream;
   }

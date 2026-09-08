@@ -102,7 +102,7 @@ class TrustGatedCastTransport implements CastTransport {
     // Without knowing the session had been up, it would read that as "not ready
     // yet" and keep trusting a connection that is already gone.
     return _TrustedCastSession(session, proof.identity,
-        wasReady: proof.wasReady);
+        wasReady: proof.wasReady, cleanupTimeout: _cleanupTimeout);
   }
 
   /// Races the receiver's proof against the session ending and the clock, so an
@@ -188,7 +188,10 @@ class TrustGatedCastTransport implements CastTransport {
       return _Authentication(await race.future, wasReady: wasReady);
     } finally {
       expiry.cancel();
-      await ended.cancel();
+      // Bounded for the same reason closing is: cancelling a subscription can
+      // wait on the stream's own teardown, and a delegate that stalls there
+      // would hold the refusal — and the session's close with it — forever.
+      await settleWithin(ended.cancel(), _cleanupTimeout);
     }
   }
 
@@ -217,15 +220,21 @@ class TrustGatedCastTransport implements CastTransport {
   static const String _rejectedMessage =
       "Linthra couldn't verify that device, so it didn't send anything to it.";
 
-  Future<void> _close(CastSessionHandle session) async {
-    // Bounded and swallowed: the refusal above is what the caller needs, and a
-    // receiver that will not close — or will not answer at all — must not be
-    // able to turn a refusal into a hang or an unhandled error.
-    try {
-      await session.close().timeout(_cleanupTimeout);
-    } catch (_) {
-      // Intentionally ignored.
-    }
+  Future<void> _close(CastSessionHandle session) =>
+      // Bounded and swallowed: the refusal above is what the caller needs, and
+      // a receiver that will not close — or will not answer at all — must not
+      // be able to turn a refusal into a hang or an unhandled error.
+      settleWithin(session.close(), _cleanupTimeout);
+}
+
+/// Waits for best-effort cleanup, but never on it: [work] is given [limit] to
+/// finish, and whether it times out or throws, the caller carries on. Used for
+/// every teardown on a path whose real result is a refusal already in hand.
+Future<void> settleWithin(Future<void> work, Duration limit) async {
+  try {
+    await work.timeout(limit);
+  } catch (_) {
+    // Intentionally ignored: cleanup is not the outcome anyone is waiting for.
   }
 }
 
@@ -237,7 +246,9 @@ class _TrustedCastSession implements CastSessionHandle {
     this._session,
     this.identity, {
     required bool wasReady,
-  }) : _wasReady = wasReady {
+    required Duration cleanupTimeout,
+  })  : _wasReady = wasReady,
+        _cleanupTimeout = cleanupTimeout {
     // Trust belongs to the connection the proof was made over, so it ends when
     // that connection does — not when someone gets around to calling [close].
     // Without this, a track resolution that started before the receiver dropped
@@ -261,6 +272,9 @@ class _TrustedCastSession implements CastSessionHandle {
 
   /// The verified receiver this session is bound to.
   final CastReceiverIdentity identity;
+
+  /// How long teardown gets before it is left to finish on its own.
+  final Duration _cleanupTimeout;
 
   StreamSubscription<bool>? _lifetime;
 
@@ -363,8 +377,11 @@ class _TrustedCastSession implements CastSessionHandle {
   @override
   Future<void> close() async {
     _trusted = false;
-    await _lifetime?.cancel();
+    final StreamSubscription<bool>? lifetime = _lifetime;
     _lifetime = null;
+    if (lifetime != null) {
+      await settleWithin(lifetime.cancel(), _cleanupTimeout);
+    }
     await _session.close();
   }
 }
