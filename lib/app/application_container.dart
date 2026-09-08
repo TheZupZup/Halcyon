@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/models/theme_mode_preference.dart';
 import '../core/platform/host_platform.dart';
 import '../data/repositories/app_icon_variant_store_provider.dart';
+import '../data/repositories/audiobookshelf_session_store_provider.dart';
 import '../data/repositories/default_provider_store_provider.dart';
 import '../data/repositories/download_repository_provider.dart';
 import '../data/repositories/favorites_repository_provider.dart';
@@ -69,6 +70,9 @@ List<Override> productionApplicationOverrides({
     sharedPreferencesSubsonicAutoSyncStoreOverride,
     securePlexSessionStoreOverride,
     sharedPreferencesPlexSyncCacheStoreOverride,
+    // The audiobook seam's own credential, stored the same encrypted way as
+    // the music providers' but entirely separate from them.
+    secureAudiobookshelfSessionStoreOverride,
     sharedPreferencesFavoritesStoreOverride,
     remoteFavoritesSyncOverride,
     sharedPreferencesPlaylistStoreOverride,

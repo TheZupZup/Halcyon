@@ -6,10 +6,10 @@ import '../../core/repositories/secure_storage_exception.dart';
 /// The one door between Linthra's provider credentials and platform secure
 /// storage.
 ///
-/// Used by the Jellyfin, Navidrome/Subsonic and Plex session stores, which are
-/// the credential path this class exists to hold to one set of rules. (The
-/// GitHub Sponsors token store calls `flutter_secure_storage` directly and is
-/// separate work; it stores no provider credential.)
+/// Used by the Jellyfin, Navidrome/Subsonic, Plex and Audiobookshelf session
+/// stores, which are the credential path this class exists to hold to one set
+/// of rules. (The GitHub Sponsors token store calls `flutter_secure_storage`
+/// directly and is separate work; it stores no provider credential.)
 ///
 /// The rules, stated once:
 ///
