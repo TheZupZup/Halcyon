@@ -40,6 +40,7 @@ class PlaybackState {
     this.source,
     this.shuffleEnabled = false,
     this.repeatMode = RepeatMode.off,
+    this.interruptedByTransientFocus = false,
     this.errorMessage,
   });
 
@@ -82,6 +83,23 @@ class PlaybackState {
   /// button from; the controller consults it when a track finishes.
   final RepeatMode repeatMode;
 
+  /// Whether playback is paused *only* because another app is holding a
+  /// transient audio focus (a call, a navigation prompt, a voice interaction)
+  /// and Linthra intends to resume the moment focus comes back.
+  ///
+  /// This is the signal the Android media session uses to keep its foreground
+  /// service (and the CPU wake lock that comes with it) alive across such a
+  /// pause: the on-device focus handling runs in the Flutter isolate, so a
+  /// demoted service can be frozen by the OS and never see the `AUDIOFOCUS_GAIN`
+  /// that ends the interruption. It is set only while a transient loss that
+  /// interrupted *active* playback is outstanding, and cleared on the regain, on
+  /// a permanent loss, on any explicit user transport, and once the controller's
+  /// bounded hold window expires — so an ordinary user pause still demotes the
+  /// service and holds no wake lock. See
+  /// `JustAudioPlaybackController._armTransientResume` and
+  /// `LinthraAudioHandler._isSessionPlaying`.
+  final bool interruptedByTransientFocus;
+
   /// A friendly, secret-free explanation shown when [status] is
   /// [PlaybackStatus.error]. Deliberately *not* carried by [copyWith]: it is set
   /// only on a freshly built error state and clears on the next state change, so
@@ -120,6 +138,7 @@ class PlaybackState {
     PlaybackSource? source,
     bool? shuffleEnabled,
     RepeatMode? repeatMode,
+    bool? interruptedByTransientFocus,
   }) {
     return PlaybackState(
       status: status ?? this.status,
@@ -132,6 +151,32 @@ class PlaybackState {
       source: source ?? this.source,
       shuffleEnabled: shuffleEnabled ?? this.shuffleEnabled,
       repeatMode: repeatMode ?? this.repeatMode,
+      interruptedByTransientFocus:
+          interruptedByTransientFocus ?? this.interruptedByTransientFocus,
+    );
+  }
+
+  /// Returns this state with [interruptedByTransientFocus] set to [value].
+  ///
+  /// Unlike [copyWith] this preserves [errorMessage], because it re-stamps a
+  /// state the controller has *already* built rather than deriving a new one:
+  /// the focus hold is orthogonal to why playback stopped, so an error state
+  /// must keep its message when the flag is stamped onto it.
+  PlaybackState withTransientFocusInterruption(bool value) {
+    if (value == interruptedByTransientFocus) return this;
+    return PlaybackState(
+      status: status,
+      currentTrack: currentTrack,
+      upNext: upNext,
+      previous: previous,
+      hasPrevious: hasPrevious,
+      position: position,
+      duration: duration,
+      source: source,
+      shuffleEnabled: shuffleEnabled,
+      repeatMode: repeatMode,
+      interruptedByTransientFocus: value,
+      errorMessage: errorMessage,
     );
   }
 
@@ -149,6 +194,7 @@ class PlaybackState {
           other.source == source &&
           other.shuffleEnabled == shuffleEnabled &&
           other.repeatMode == repeatMode &&
+          other.interruptedByTransientFocus == interruptedByTransientFocus &&
           other.errorMessage == errorMessage);
 
   @override
@@ -164,6 +210,7 @@ class PlaybackState {
       source,
       shuffleEnabled,
       repeatMode,
+      interruptedByTransientFocus,
       errorMessage,
     );
   }

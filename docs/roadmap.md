@@ -46,8 +46,9 @@ changes.
   reopening Linthra).
 
 The one intentional follow-up it left behind — a *battery-optimal* audio-focus
-mode that keeps the service alive **only during a transient-focus pause** — rolls
-into Phase 1.
+mode that keeps the service alive **only during a transient-focus pause** — landed
+in Phase 1 ([#499](https://github.com/thezupzup/linthra/issues/499)), so a track
+you pause yourself no longer holds a wake lock.
 
 ## Phase 1 — v0.1.7 stabilization pass
 
@@ -59,10 +60,11 @@ Focus areas, with the existing issues they map to:
 
 - **Background playback reliability** — keep the gains from #244 solid across
   Doze, screen-off, and long pauses.
-- **Audio-focus regressions** — guard the #244 behaviour with the deterministic
-  focus tests already in place, and land the **battery-optimal follow-up** (keep
-  `stopForegroundOnPause: true`, hold the service only across a transient-focus
-  pause). See [docs/battery.md](./battery.md) → *Possible future work*.
+- **Audio-focus regressions** — ✅ the #244 behaviour is guarded by the
+  deterministic focus tests, and the **battery-optimal follow-up** has landed
+  (`stopForegroundOnPause: true`, with the service held only across a
+  transient-focus pause). See [docs/battery.md](./battery.md) → *Playback service
+  & wake locks*.
 - **Screen-lock playback** — no pause/mute on a brief screen-off focus blip.
 - **Android Auto sanity** — real head-unit and Desktop-Head-Unit passes
   ([#82](https://github.com/thezupzup/linthra/issues/82)).
