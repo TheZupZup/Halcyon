@@ -233,6 +233,22 @@ class _SourceRootsSection extends ConsumerWidget {
   }
 }
 
+/// Re-reads [request] for a pull-to-refresh gesture.
+///
+/// The failure is swallowed on purpose. RefreshIndicator drives this from a
+/// gesture and does not handle a rejected future, so letting a dropped server
+/// connection through would surface it as an unhandled async error on top of
+/// the error state the provider already renders. The watched AsyncValue is what
+/// tells the user; this future only has to end so the spinner retracts.
+Future<void> _refresh(WidgetRef ref, FolderBrowseRequest request) async {
+  ref.invalidate(folderListingProvider(request));
+  try {
+    await ref.read(folderListingProvider(request).future);
+  } catch (_) {
+    // Rendered by the provider's error state, not by the indicator.
+  }
+}
+
 class _FolderContents extends ConsumerWidget {
   const _FolderContents({
     required this.location,
@@ -285,49 +301,66 @@ class _FolderContents extends ConsumerWidget {
               onRetry: () => ref.invalidate(folderListingProvider(request)),
             ),
             data: (MusicFolderListing data) {
-              if (data.isEmpty) {
-                return const EmptyState(
-                  icon: Icons.folder_open_outlined,
-                  title: 'This folder is empty',
-                  message: 'No child folders or playable songs were found.',
-                );
-              }
-              // Pull to refresh is the way out of the cache above: the level
-              // is held for a few minutes, so a folder you just changed on the
+              // Pull to refresh is the way out of the cache above: the level is
+              // held for a few minutes, so a folder you just changed on the
               // server needs a deliberate way to be re-read (#581).
+              //
+              // The empty state lives *inside* the refreshable scrollable, and
+              // the physics are always-scrollable, because those are exactly
+              // the folders that need it most: a folder that is empty or has
+              // three entries cannot overscroll on clamping physics, so an
+              // indicator wrapped around content alone would be unreachable in
+              // the one case where the user knows the server has changed.
               return RefreshIndicator(
-                onRefresh: () async {
-                  ref.invalidate(folderListingProvider(request));
-                  await ref.read(folderListingProvider(request).future);
-                },
-                child: ListView.builder(
-                  key: const Key('folder_browser_contents'),
-                  itemCount: data.folders.length + data.tracks.length,
-                  itemBuilder: (BuildContext context, int index) {
-                    if (index < data.folders.length) {
-                      final MusicFolder folder = data.folders[index];
-                      return ListTile(
-                        key: ValueKey<String>('folder_child_${folder.id}'),
-                        leading: const Icon(Icons.folder_outlined),
-                        title: Text(
-                          folder.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        trailing: const Icon(Icons.chevron_right),
-                        onTap: () => onOpen(folder),
-                      );
-                    }
-                    final int trackIndex = index - data.folders.length;
-                    return TrackTile(
-                      key: ValueKey<String>(
-                        'folder_track_${data.tracks[trackIndex].uri}',
+                onRefresh: () => _refresh(ref, request),
+                child: data.isEmpty
+                    ? ListView(
+                        key: const Key('folder_browser_contents'),
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: <Widget>[
+                          SizedBox(
+                            height: MediaQuery.sizeOf(context).height * 0.5,
+                            child: const EmptyState(
+                              icon: Icons.folder_open_outlined,
+                              title: 'This folder is empty',
+                              message:
+                                  'No child folders or playable songs were '
+                                  'found.',
+                            ),
+                          ),
+                        ],
+                      )
+                    : ListView.builder(
+                        key: const Key('folder_browser_contents'),
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        itemCount: data.folders.length + data.tracks.length,
+                        itemBuilder: (BuildContext context, int index) {
+                          if (index < data.folders.length) {
+                            final MusicFolder folder = data.folders[index];
+                            return ListTile(
+                              key: ValueKey<String>(
+                                'folder_child_${folder.id}',
+                              ),
+                              leading: const Icon(Icons.folder_outlined),
+                              title: Text(
+                                folder.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () => onOpen(folder),
+                            );
+                          }
+                          final int trackIndex = index - data.folders.length;
+                          return TrackTile(
+                            key: ValueKey<String>(
+                              'folder_track_${data.tracks[trackIndex].uri}',
+                            ),
+                            tracks: data.tracks,
+                            index: trackIndex,
+                          );
+                        },
                       ),
-                      tracks: data.tracks,
-                      index: trackIndex,
-                    );
-                  },
-                ),
               );
             },
           ),

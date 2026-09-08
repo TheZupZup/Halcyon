@@ -62,15 +62,32 @@ final folderBrowsableSourcesProvider =
 /// on the server shows up again quickly.
 const Duration folderListingCacheDuration = Duration(minutes: 5);
 
-/// Holds this provider's value past its last listener for
-/// [folderListingCacheDuration], then lets it dispose as usual.
+/// Holds this provider's value for [folderListingCacheDuration] *after its last
+/// listener leaves*, then lets it dispose as usual.
+///
+/// The window deliberately starts on [Ref.onCancel] rather than at fetch time.
+/// Measuring from the fetch would expire the cache while the user is still
+/// looking at the folder, so opening a child after reading a long track list and
+/// coming straight back would re-fetch the level they never left — exactly the
+/// walk this exists to make instant. Returning within the window cancels the
+/// timer through [Ref.onResume], so the level is kept for as long as it stays in
+/// use.
 ///
 /// Applied only after a successful fetch: caching a failure would keep an error
 /// on screen for minutes, and the retry path invalidates anyway.
 void _cacheBriefly(Ref ref) {
   final KeepAliveLink link = ref.keepAlive();
-  final Timer timer = Timer(folderListingCacheDuration, link.close);
-  ref.onDispose(timer.cancel);
+  Timer? expiry;
+
+  ref.onCancel(() {
+    expiry?.cancel();
+    expiry = Timer(folderListingCacheDuration, link.close);
+  });
+  ref.onResume(() {
+    expiry?.cancel();
+    expiry = null;
+  });
+  ref.onDispose(() => expiry?.cancel());
 }
 
 /// Loads the top-level folders for one connected provider.
