@@ -10,8 +10,10 @@ import '../../app/routes.dart';
 import '../../core/models/album.dart';
 import '../../core/models/artist.dart';
 import '../../core/models/track.dart';
+import '../../core/repositories/library_tab_store.dart';
 import '../../core/services/bulk_track_actions.dart';
 import '../../core/sources/local/folder_location.dart';
+import '../../data/repositories/library_tab_store_provider.dart';
 import '../../shared/layout/adaptive_layout.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../playlists/widgets/add_to_playlist_sheet.dart';
@@ -52,6 +54,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// Widest the search box gets on a desktop window.
   static const double _searchFieldMaxWidth = 520;
 
+  /// Tab order, as stored names rather than indices, so the persisted choice
+  /// survives a tab being added or reordered later.
+  static const List<String> _tabNames = <String>['songs', 'albums', 'artists'];
+
   final Set<String> _selectedUris = <String>{};
   bool _selecting = false;
 
@@ -60,6 +66,16 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   String _query = '';
   int _lastTabIndex = 0;
 
+  /// Whether the user has picked a tab themselves. The current index cannot
+  /// answer that: Songs to Albums and back leaves it at zero again, and a
+  /// restore landing after that would move them somewhere they just left.
+  bool _userChangedTab = false;
+
+  /// Set while the app itself drives the controller, so the one handler for a
+  /// tab change can tell that from a tap: it is neither a choice to remember
+  /// nor a reason to stop a pending restore.
+  bool _programmaticTabChange = false;
+
   /// Pending debounce timer. Cancelled and restarted on every keystroke so the
   /// filter re-runs only once the user pauses typing, not on every character.
   Timer? _debounce;
@@ -67,8 +83,84 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: _tabNames.length, vsync: this);
     _tabController.addListener(_onTabChanged);
+    unawaited(_restoreTab());
+  }
+
+  /// Reopens Library on the tab last used, instead of always on Songs.
+  ///
+  /// Reading is async, so the controller starts on the first tab and moves once
+  /// the value arrives. In practice that is not visible: the tabs only appear
+  /// once the catalog has loaded, which takes longer than a key/value read. The
+  /// guard matters anyway, because a user who switched tabs in the meantime has
+  /// said something more recent than the stored value.
+  Future<void> _restoreTab() async {
+    final String? stored;
+    try {
+      stored = await ref.read(libraryTabStoreProvider).read();
+    } catch (_) {
+      // A storage or plugin failure means no remembered tab, which is the
+      // behaviour before this existed. It must not reach the zone as an
+      // uncaught async error.
+      return;
+    }
+    // Selection is a modal state: it replaces the app bar, hides the tab bar
+    // and blocks swiping. Moving the tab underneath it would leave the song
+    // selection bar sitting over Albums with no visible way back.
+    // A swipe in progress has not moved the index yet, so _userChangedTab is
+    // still false while the user is very much choosing a tab. TabController
+    // reports the drag as a non-zero offset, which is the one signal available
+    // before the gesture settles.
+    if (!mounted ||
+        stored == null ||
+        _userChangedTab ||
+        _selecting ||
+        _tabController.offset != 0) {
+      return;
+    }
+    final int index = _tabNames.indexOf(stored);
+    if (index < 0) return; // A tab that no longer exists: stay on the first.
+    if (index == _tabController.index) return;
+
+    // Driven through the controller rather than around it, so a restore clears
+    // an in-progress search exactly as any other tab change does. Assigning
+    // _lastTabIndex first would make the shared handler return early and carry
+    // a query typed in Songs into Albums.
+    _programmaticTabChange = true;
+    _tabController.index = index;
+    _programmaticTabChange = false;
+  }
+
+  /// Queues the tab writes so they cannot overtake each other.
+  ///
+  /// Switching Albums then Artists faster than the store can write would
+  /// otherwise leave two writes racing, and a slow first one landing last would
+  /// store the tab the user had already left. The queue is FIFO, so the value
+  /// queued last is the value written last.
+  Future<void> _persistQueue = Future<void>.value();
+
+  /// Persists the current tab, swallowing a storage failure.
+  ///
+  /// Losing this preference only means the next launch opens on Songs, which is
+  /// not worth surfacing to someone who was just browsing.
+  ///
+  /// Both the store and the tab name are read here, synchronously, rather than
+  /// inside the queued write. Leaving the screen while a slow write is in
+  /// flight would otherwise strand every newer write behind a disposed
+  /// [State]: the queue would drop them and the older, already-superseded tab
+  /// would be what stayed stored. The write itself needs nothing from the
+  /// widget, so it does not have to outlive it to finish correctly.
+  void _persistTab() {
+    final LibraryTabStore store = ref.read(libraryTabStoreProvider);
+    final String tabName = _tabNames[_tabController.index];
+    _persistQueue = _persistQueue.then((_) async {
+      try {
+        await store.write(tabName);
+      } catch (_) {
+        // Nothing to recover: the next launch simply opens on the first tab.
+      }
+    });
   }
 
   @override
@@ -84,14 +176,25 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// when entering/leaving Folders, where the catalog search field is hidden.
   void _onTabChanged() {
     if (_tabController.index == _lastTabIndex) return;
+    if (!_programmaticTabChange) _userChangedTab = true;
     _debounce?.cancel();
     setState(() {
       _lastTabIndex = _tabController.index;
-      if (_query.isNotEmpty) {
+      // The field is the source of truth, not [_query]: typing only reaches
+      // _query after the 300ms debounce, so between a keystroke and that timer
+      // the box holds text while _query is still empty. Testing _query alone
+      // left that text visible on the tab we just moved to, filtering nothing,
+      // and the next keystroke would then apply the whole thing there.
+      if (_query.isNotEmpty || _searchController.text.isNotEmpty) {
         _query = '';
         _searchController.clear();
       }
     });
+    // A restore is replaying what is already stored, so there is nothing new to
+    // write back. Otherwise fire and forget: where the user is reading is not
+    // worth blocking a tab change on.
+    if (_programmaticTabChange) return;
+    _persistTab();
   }
 
   void _onQueryChanged(String value) {
@@ -179,6 +282,20 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     return TabBar(
       key: const Key('library_tabs'),
       controller: _tabController,
+      // Tapping the tab you are already on is still you choosing a tab, but it
+      // leaves the controller index untouched, so the listener never runs: it
+      // would neither mark the choice nor store it. A restore still in flight
+      // would move you off the tab you just asked for, and the next cold launch
+      // would open on the tab you had just rejected.
+      //
+      // TabBar calls animateTo before onTap, so the index is already current
+      // here. A tap that did change tabs therefore queues the same value the
+      // listener just queued, which is a harmless second write of a value that
+      // is already stored.
+      onTap: (_) {
+        _userChangedTab = true;
+        _persistTab();
+      },
       indicatorColor: theme.colorScheme.secondary,
       indicatorSize: TabBarIndicatorSize.label,
       labelColor: theme.colorScheme.secondary,
@@ -386,6 +503,17 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         ..clear()
         ..add(track.uri);
     });
+    // Selection is only reachable from the songs list, so that is the list it
+    // must show. Guarding the restore is not enough on its own: a long press
+    // holds the pointer for half a second before firing, and a restore landing
+    // inside that window sees no selection yet and moves the tab underneath the
+    // gesture. Coming back here closes it from the other end, whatever the
+    // timing was.
+    if (_tabController.index != 0) {
+      _programmaticTabChange = true;
+      _tabController.index = 0;
+      _programmaticTabChange = false;
+    }
   }
 
   void _toggle(Track track) {
