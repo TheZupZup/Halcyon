@@ -10,6 +10,7 @@ import '../../app/routes.dart';
 import '../../core/models/album.dart';
 import '../../core/models/artist.dart';
 import '../../core/models/track.dart';
+import '../../core/repositories/library_tab_store.dart';
 import '../../core/services/bulk_track_actions.dart';
 import '../../core/sources/local/folder_location.dart';
 import '../../data/repositories/library_tab_store_provider.dart';
@@ -135,22 +136,27 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   ///
   /// Switching Albums then Artists faster than the store can write would
   /// otherwise leave two writes racing, and a slow first one landing last would
-  /// store the tab the user had already left. Each queued write also reads the
-  /// index when it *runs* rather than when it was queued, so the latest tab
-  /// wins even if several pile up.
+  /// store the tab the user had already left. The queue is FIFO, so the value
+  /// queued last is the value written last.
   Future<void> _persistQueue = Future<void>.value();
 
   /// Persists the current tab, swallowing a storage failure.
   ///
   /// Losing this preference only means the next launch opens on Songs, which is
   /// not worth surfacing to someone who was just browsing.
+  ///
+  /// Both the store and the tab name are read here, synchronously, rather than
+  /// inside the queued write. Leaving the screen while a slow write is in
+  /// flight would otherwise strand every newer write behind a disposed
+  /// [State]: the queue would drop them and the older, already-superseded tab
+  /// would be what stayed stored. The write itself needs nothing from the
+  /// widget, so it does not have to outlive it to finish correctly.
   void _persistTab() {
+    final LibraryTabStore store = ref.read(libraryTabStoreProvider);
+    final String tabName = _tabNames[_tabController.index];
     _persistQueue = _persistQueue.then((_) async {
-      if (!mounted) return;
       try {
-        await ref
-            .read(libraryTabStoreProvider)
-            .write(_tabNames[_tabController.index]);
+        await store.write(tabName);
       } catch (_) {
         // Nothing to recover: the next launch simply opens on the first tab.
       }

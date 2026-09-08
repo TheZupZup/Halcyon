@@ -69,6 +69,22 @@ class _RacyWriteLibraryTabStore implements LibraryTabStore {
   }
 }
 
+/// A store whose writes all take a moment, so a test can unmount the screen
+/// while one is still in flight and see what the queue does with the rest.
+class _SlowWriteLibraryTabStore implements LibraryTabStore {
+  /// The value left in the store once everything has settled.
+  String? stored;
+
+  @override
+  Future<String?> read() async => null;
+
+  @override
+  Future<void> write(String? tabName) async {
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    stored = tabName;
+  }
+}
+
 /// A store that fails the way a missing platform plugin or a full disk would.
 class _FailingLibraryTabStore implements LibraryTabStore {
   @override
@@ -298,6 +314,26 @@ void main() {
       // Keeping the screen on Songs is only half of it: leaving Artists stored
       // would reopen there next launch, on a tab the user had just rejected.
       expect(store.stored, 'songs');
+    });
+
+    testWidgets('leaving the screen does not strand a queued write',
+        (tester) async {
+      final _SlowWriteLibraryTabStore store = _SlowWriteLibraryTabStore();
+      await _pump(tester, store);
+
+      // Two tabs in quick succession, so the second write is queued behind the
+      // first and still waiting when the screen goes away.
+      await tester.tap(find.text('Albums'));
+      await tester.pump();
+      await tester.tap(find.text('Artists'));
+      await tester.pump();
+
+      await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+      await tester.pump(const Duration(seconds: 1));
+
+      // Artists is where the user actually left off. Dropping the queued write
+      // would leave Albums stored and reopen there.
+      expect(store.stored, 'artists');
     });
 
     testWidgets('a storage failure leaves the screen usable', (tester) async {
