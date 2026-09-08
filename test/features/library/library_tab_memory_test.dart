@@ -277,6 +277,23 @@ void main() {
       expect(_currentTab(tester), 0);
     });
 
+    testWidgets('tapping the tab you are already on beats a late restore',
+        (tester) async {
+      final _ManualLibraryTabStore store = _ManualLibraryTabStore();
+      await _pump(tester, store);
+
+      // Songs is already selected, so this tap moves no index and the
+      // controller listener never runs. It is still the user choosing a tab.
+      await tester.tap(find.text('Songs'));
+      await tester.pumpAndSettle();
+
+      store.completeWith('artists');
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      expect(_currentTab(tester), 0);
+    });
+
     testWidgets('a storage failure leaves the screen usable', (tester) async {
       await _pump(tester, _FailingLibraryTabStore());
 

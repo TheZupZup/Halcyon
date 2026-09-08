@@ -276,6 +276,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     return TabBar(
       key: const Key('library_tabs'),
       controller: _tabController,
+      // Tapping the tab you are already on is still you choosing a tab, but it
+      // leaves the controller index untouched, so the listener never runs and
+      // _userChangedTab would stay false. A restore still in flight would then
+      // move you off the tab you just asked for.
+      onTap: (_) => _userChangedTab = true,
       indicatorColor: theme.colorScheme.secondary,
       indicatorSize: TabBarIndicatorSize.label,
       labelColor: theme.colorScheme.secondary,
