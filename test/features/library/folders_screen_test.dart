@@ -32,12 +32,32 @@ class _FakeFolderSource implements FolderBrowsableMusicSource {
   final List<MusicFolder> roots;
   final Map<String, MusicFolderListing> children;
 
-  @override
-  Future<List<MusicFolder>> fetchRootFolders() async => roots;
+  /// How many times each folder id was actually asked of the "server", so a
+  /// test can tell a cache hit from a round trip.
+  final Map<String, int> folderFetches = <String, int>{};
+
+  /// How many times the root list was asked of the "server".
+  int rootFetches = 0;
 
   @override
-  Future<MusicFolderListing> fetchFolder(String folderId) async =>
-      children[folderId] ?? MusicFolderListing.empty;
+  Future<List<MusicFolder>> fetchRootFolders() async {
+    rootFetches++;
+    return roots;
+  }
+
+  /// When true, the next fetchFolder throws, standing in for a server that
+  /// dropped mid-refresh.
+  bool failNextFolderFetch = false;
+
+  @override
+  Future<MusicFolderListing> fetchFolder(String folderId) async {
+    folderFetches[folderId] = (folderFetches[folderId] ?? 0) + 1;
+    if (failNextFolderFetch) {
+      failNextFolderFetch = false;
+      throw StateError('server unavailable');
+    }
+    return children[folderId] ?? MusicFolderListing.empty;
+  }
 }
 
 /// The screen registers a [BackButtonListener] while it is inside a folder, so
@@ -135,6 +155,182 @@ void main() {
 
       expect(find.text('Music'), findsOneWidget);
       expect(find.byKey(const Key('folder_browser_header')), findsNothing);
+    });
+
+    testWidgets('walking back up does not re-ask the server (#581)',
+        (tester) async {
+      final _FakeFolderSource source = _FakeFolderSource(
+        id: 'subsonic',
+        displayName: 'Navidrome',
+        roots: const <MusicFolder>[MusicFolder(id: 'r1', name: 'Music')],
+        children: const <String, MusicFolderListing>{
+          'r1': MusicFolderListing(
+            folders: <MusicFolder>[MusicFolder(id: 'c1', name: 'Live Sets')],
+          ),
+        },
+      );
+      await _pump(tester, sources: <FolderBrowsableMusicSource>[source]);
+
+      await tester.tap(find.text('Music'));
+      await tester.pumpAndSettle();
+      expect(source.folderFetches['r1'], 1);
+
+      await tester.tap(find.byTooltip('Back to previous folder'));
+      await tester.pumpAndSettle();
+
+      // Coming back to a level that was on screen a moment ago used to re-fetch
+      // it, which is what made going up feel slow on a remote library.
+      await tester.tap(find.text('Music'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Live Sets'), findsOneWidget);
+      expect(source.folderFetches['r1'], 1);
+    });
+
+    testWidgets('pull to refresh re-reads the folder (#581)', (tester) async {
+      final _FakeFolderSource source = _FakeFolderSource(
+        id: 'subsonic',
+        displayName: 'Navidrome',
+        roots: const <MusicFolder>[MusicFolder(id: 'r1', name: 'Music')],
+        children: const <String, MusicFolderListing>{
+          'r1': MusicFolderListing(
+            folders: <MusicFolder>[MusicFolder(id: 'c1', name: 'Live Sets')],
+          ),
+        },
+      );
+      await _pump(tester, sources: <FolderBrowsableMusicSource>[source]);
+
+      await tester.tap(find.text('Music'));
+      await tester.pumpAndSettle();
+      expect(source.folderFetches['r1'], 1);
+
+      // The deliberate way past the cache, for a folder changed on the server.
+      await tester.fling(
+        find.byKey(const Key('folder_browser_contents')),
+        const Offset(0, 300),
+        1000,
+      );
+      await tester.pumpAndSettle();
+
+      expect(source.folderFetches['r1'], 2);
+    });
+
+    testWidgets(
+        'the cache window starts when the level is left, not when it '
+        'was fetched (#581)', (tester) async {
+      final _FakeFolderSource source = _FakeFolderSource(
+        id: 'subsonic',
+        displayName: 'Navidrome',
+        roots: const <MusicFolder>[MusicFolder(id: 'r1', name: 'Music')],
+        children: const <String, MusicFolderListing>{
+          'r1': MusicFolderListing(
+            folders: <MusicFolder>[MusicFolder(id: 'c1', name: 'Live Sets')],
+          ),
+          'c1': MusicFolderListing(
+            tracks: <Track>[Track(id: 't1', title: 'Opener', uri: 'sub:t1')],
+          ),
+        },
+      );
+      await _pump(tester, sources: <FolderBrowsableMusicSource>[source]);
+
+      await tester.tap(find.text('Music'));
+      await tester.pumpAndSettle();
+      expect(source.folderFetches['r1'], 1);
+
+      // Reading a long track list for longer than the cache window. Measuring
+      // the window from the fetch would expire it right here, while the folder
+      // is still on screen.
+      await tester.pump(folderListingCacheDuration * 2);
+
+      await tester.tap(find.text('Live Sets'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Back to previous folder'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Live Sets'), findsOneWidget);
+      expect(source.folderFetches['r1'], 1);
+    });
+
+    testWidgets('an empty folder can still be pulled to refresh (#581)',
+        (tester) async {
+      final _FakeFolderSource source = _FakeFolderSource(
+        id: 'subsonic',
+        displayName: 'Navidrome',
+        roots: const <MusicFolder>[MusicFolder(id: 'r1', name: 'Music')],
+        // No children and no tracks: nothing to overscroll against, which is
+        // exactly the folder someone refreshes after filling it server-side.
+        children: const <String, MusicFolderListing>{},
+      );
+      await _pump(tester, sources: <FolderBrowsableMusicSource>[source]);
+
+      await tester.tap(find.text('Music'));
+      await tester.pumpAndSettle();
+      expect(find.text('This folder is empty'), findsOneWidget);
+      expect(source.folderFetches['r1'], 1);
+
+      await tester.fling(
+        find.byKey(const Key('folder_browser_contents')),
+        const Offset(0, 300),
+        1000,
+      );
+      await tester.pumpAndSettle();
+
+      expect(source.folderFetches['r1'], 2);
+    });
+
+    testWidgets('a refresh that fails shows the error, not a crash (#581)',
+        (tester) async {
+      final _FakeFolderSource source = _FakeFolderSource(
+        id: 'subsonic',
+        displayName: 'Navidrome',
+        roots: const <MusicFolder>[MusicFolder(id: 'r1', name: 'Music')],
+        children: const <String, MusicFolderListing>{
+          'r1': MusicFolderListing(
+            folders: <MusicFolder>[MusicFolder(id: 'c1', name: 'Live Sets')],
+          ),
+        },
+      );
+      await _pump(tester, sources: <FolderBrowsableMusicSource>[source]);
+
+      await tester.tap(find.text('Music'));
+      await tester.pumpAndSettle();
+
+      source.failNextFolderFetch = true;
+      await tester.fling(
+        find.byKey(const Key('folder_browser_contents')),
+        const Offset(0, 300),
+        1000,
+      );
+      await tester.pumpAndSettle();
+
+      // The provider's error state is what the user sees. The gesture's future
+      // must not also surface the same failure as an unhandled async error,
+      // which the test binding would report as a failure.
+      expect(find.text('Could not open this folder.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('the root list can be pulled to refresh too (#581)',
+        (tester) async {
+      final _FakeFolderSource source = _FakeFolderSource(
+        id: 'subsonic',
+        displayName: 'Navidrome',
+        roots: const <MusicFolder>[MusicFolder(id: 'r1', name: 'Music')],
+      );
+      await _pump(tester, sources: <FolderBrowsableMusicSource>[source]);
+      expect(source.rootFetches, 1);
+
+      // Roots are cached like any other level, so a top-level folder added on
+      // the server needs the same deliberate way past it.
+      await tester.fling(
+        find.byKey(const Key('folder_browser_roots')),
+        const Offset(0, 300),
+        1000,
+      );
+      await tester.pumpAndSettle();
+
+      expect(source.rootFetches, 2);
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('signing the source out returns to the roots', (tester) async {

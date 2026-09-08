@@ -123,7 +123,7 @@ class _FoldersScreenState extends ConsumerState<FoldersScreen> {
   }
 }
 
-class _FolderRoots extends StatelessWidget {
+class _FolderRoots extends ConsumerWidget {
   const _FolderRoots({required this.sources, required this.onOpen});
 
   final List<FolderBrowsableMusicSource> sources;
@@ -131,7 +131,7 @@ class _FolderRoots extends StatelessWidget {
       onOpen;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     if (sources.isEmpty) {
       return const EmptyState(
         icon: Icons.folder_off_outlined,
@@ -141,19 +141,51 @@ class _FolderRoots extends StatelessWidget {
       );
     }
 
-    return ListView(
-      key: const Key('folder_browser_roots'),
-      padding: const EdgeInsets.only(bottom: AppSpacing.xl),
-      children: <Widget>[
-        for (final FolderBrowsableMusicSource source in sources)
-          _SourceRootsSection(
-            key: ValueKey<String>('folder_source_${source.id}'),
-            source: source,
-            onOpen: (folder) => onOpen(source, folder),
-          ),
-      ],
+    // Roots are cached like any other level, so they need the same deliberate
+    // way past it: a top-level folder added or renamed on the server would
+    // otherwise stay hidden behind the cached list. Always-scrollable for the
+    // usual reason, a couple of servers do not fill a screen.
+    return RefreshIndicator(
+      onRefresh: () => _refreshRoots(ref, sources),
+      child: ListView(
+        key: const Key('folder_browser_roots'),
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.only(bottom: AppSpacing.xl),
+        children: <Widget>[
+          for (final FolderBrowsableMusicSource source in sources)
+            _SourceRootsSection(
+              key: ValueKey<String>('folder_source_${source.id}'),
+              source: source,
+              onOpen: (folder) => onOpen(source, folder),
+            ),
+        ],
+      ),
     );
   }
+}
+
+/// Re-reads every connected source's root list for one pull-to-refresh.
+///
+/// Failures are swallowed for the same reason as [_refresh]: each section shows
+/// its own error state, and a gesture-driven future that rejects would surface
+/// the same failure a second time as an unhandled async error. One slow or
+/// broken server must not stop the others from refreshing, so these are awaited
+/// together rather than in sequence.
+Future<void> _refreshRoots(
+  WidgetRef ref,
+  List<FolderBrowsableMusicSource> sources,
+) async {
+  await Future.wait<void>(<Future<void>>[
+    for (final FolderBrowsableMusicSource source in sources)
+      () async {
+        ref.invalidate(folderRootFoldersProvider(source.id));
+        try {
+          await ref.read(folderRootFoldersProvider(source.id).future);
+        } catch (_) {
+          // Rendered by the section's own error state.
+        }
+      }(),
+  ]);
 }
 
 class _SourceRootsSection extends ConsumerWidget {
@@ -233,6 +265,22 @@ class _SourceRootsSection extends ConsumerWidget {
   }
 }
 
+/// Re-reads [request] for a pull-to-refresh gesture.
+///
+/// The failure is swallowed on purpose. RefreshIndicator drives this from a
+/// gesture and does not handle a rejected future, so letting a dropped server
+/// connection through would surface it as an unhandled async error on top of
+/// the error state the provider already renders. The watched AsyncValue is what
+/// tells the user; this future only has to end so the spinner retracts.
+Future<void> _refresh(WidgetRef ref, FolderBrowseRequest request) async {
+  ref.invalidate(folderListingProvider(request));
+  try {
+    await ref.read(folderListingProvider(request).future);
+  } catch (_) {
+    // Rendered by the provider's error state, not by the indicator.
+  }
+}
+
 class _FolderContents extends ConsumerWidget {
   const _FolderContents({
     required this.location,
@@ -285,40 +333,66 @@ class _FolderContents extends ConsumerWidget {
               onRetry: () => ref.invalidate(folderListingProvider(request)),
             ),
             data: (MusicFolderListing data) {
-              if (data.isEmpty) {
-                return const EmptyState(
-                  icon: Icons.folder_open_outlined,
-                  title: 'This folder is empty',
-                  message: 'No child folders or playable songs were found.',
-                );
-              }
-              return ListView.builder(
-                key: const Key('folder_browser_contents'),
-                itemCount: data.folders.length + data.tracks.length,
-                itemBuilder: (BuildContext context, int index) {
-                  if (index < data.folders.length) {
-                    final MusicFolder folder = data.folders[index];
-                    return ListTile(
-                      key: ValueKey<String>('folder_child_${folder.id}'),
-                      leading: const Icon(Icons.folder_outlined),
-                      title: Text(
-                        folder.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+              // Pull to refresh is the way out of the cache above: the level is
+              // held for a few minutes, so a folder you just changed on the
+              // server needs a deliberate way to be re-read (#581).
+              //
+              // The empty state lives *inside* the refreshable scrollable, and
+              // the physics are always-scrollable, because those are exactly
+              // the folders that need it most: a folder that is empty or has
+              // three entries cannot overscroll on clamping physics, so an
+              // indicator wrapped around content alone would be unreachable in
+              // the one case where the user knows the server has changed.
+              return RefreshIndicator(
+                onRefresh: () => _refresh(ref, request),
+                child: data.isEmpty
+                    ? ListView(
+                        key: const Key('folder_browser_contents'),
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: <Widget>[
+                          SizedBox(
+                            height: MediaQuery.sizeOf(context).height * 0.5,
+                            child: const EmptyState(
+                              icon: Icons.folder_open_outlined,
+                              title: 'This folder is empty',
+                              message:
+                                  'No child folders or playable songs were '
+                                  'found.',
+                            ),
+                          ),
+                        ],
+                      )
+                    : ListView.builder(
+                        key: const Key('folder_browser_contents'),
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        itemCount: data.folders.length + data.tracks.length,
+                        itemBuilder: (BuildContext context, int index) {
+                          if (index < data.folders.length) {
+                            final MusicFolder folder = data.folders[index];
+                            return ListTile(
+                              key: ValueKey<String>(
+                                'folder_child_${folder.id}',
+                              ),
+                              leading: const Icon(Icons.folder_outlined),
+                              title: Text(
+                                folder.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () => onOpen(folder),
+                            );
+                          }
+                          final int trackIndex = index - data.folders.length;
+                          return TrackTile(
+                            key: ValueKey<String>(
+                              'folder_track_${data.tracks[trackIndex].uri}',
+                            ),
+                            tracks: data.tracks,
+                            index: trackIndex,
+                          );
+                        },
                       ),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => onOpen(folder),
-                    );
-                  }
-                  final int trackIndex = index - data.folders.length;
-                  return TrackTile(
-                    key: ValueKey<String>(
-                      'folder_track_${data.tracks[trackIndex].uri}',
-                    ),
-                    tracks: data.tracks,
-                    index: trackIndex,
-                  );
-                },
               );
             },
           ),

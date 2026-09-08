@@ -5,6 +5,8 @@ import 'package:linthra/core/models/track.dart';
 import 'package:linthra/data/repositories/download_repository_provider.dart';
 import 'package:linthra/data/repositories/music_library_repository_provider.dart';
 import 'package:linthra/features/library/library_screen.dart';
+import 'package:linthra/features/library/widgets/alphabet_track_list.dart';
+import 'package:linthra/features/library/widgets/track_tile.dart';
 
 import 'fake_music_library_repository.dart';
 import 'fake_remote_track_downloader.dart';
@@ -12,6 +14,19 @@ import 'fake_remote_track_downloader.dart';
 const List<Track> _mixed = <Track>[
   Track(id: 'a', title: 'Song A', uri: 'file:///a.mp3'),
   Track(id: 'b', title: 'Song B', uri: 'jellyfin:b'),
+];
+
+// Enough rows that the list scrolls well past a phone screen, which is the
+// precondition in #582 ("more than 7 songs was enough on my phone").
+final List<Track> _long = <Track>[
+  for (int i = 0; i < 60; i++)
+    Track(
+      id: 'song-$i',
+      // Zero-padded so the visual order matches the index and a row can be
+      // found by name after scrolling.
+      title: 'Song ${i.toString().padLeft(2, '0')}',
+      uri: 'jellyfin:song-$i',
+    ),
 ];
 
 // Two unrelated songs that share a bare server-side id across providers.
@@ -42,6 +57,72 @@ Future<FakeMusicLibraryRepository> _pump(
 
 void main() {
   group('Library multi-select', () {
+    testWidgets('entering selection keeps the list where it was (#582)',
+        (tester) async {
+      await _pump(tester, tracks: _long);
+
+      final Finder scrollable = find
+          .descendant(
+            of: find.byType(AlphabetTrackList),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+
+      // Scroll away from the top, the way someone with a large library does
+      // before long-pressing a row.
+      await tester.drag(scrollable, const Offset(0, -900));
+      await tester.pumpAndSettle();
+      final double before =
+          tester.state<ScrollableState>(scrollable).position.pixels;
+      expect(before, greaterThan(0), reason: 'the drag should have scrolled');
+
+      // Long-press whichever row is now under the finger, not a fixed title:
+      // what matters is that selection starts from a scrolled list.
+      final Finder row = find.byType(TrackTile).first;
+      await tester.longPress(row);
+      await tester.pumpAndSettle();
+      expect(find.text('1 selected'), findsOneWidget);
+
+      // The regression: the list used to be rebuilt from scratch here, so the
+      // offset went back to 0 and the user lost their place.
+      final double after =
+          tester.state<ScrollableState>(scrollable).position.pixels;
+      expect(after, before);
+    });
+
+    testWidgets('leaving selection also keeps the position (#582)',
+        (tester) async {
+      await _pump(tester, tracks: _long);
+
+      final Finder scrollable = find
+          .descendant(
+            of: find.byType(AlphabetTrackList),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+
+      await tester.drag(scrollable, const Offset(0, -900));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.byType(TrackTile).first);
+      await tester.pumpAndSettle();
+      final double selecting =
+          tester.state<ScrollableState>(scrollable).position.pixels;
+
+      await tester.tap(find.byTooltip('Cancel selection'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('1 selected'), findsNothing);
+      // Both halves matter. Without the greaterThan, a reset on the way *in*
+      // would make the equality below trivially true (0 == 0) and this test
+      // would guard nothing.
+      expect(selecting, greaterThan(0));
+      expect(
+        tester.state<ScrollableState>(scrollable).position.pixels,
+        selecting,
+      );
+    });
+
     testWidgets('long-press enters selection mode and shows the count',
         (tester) async {
       await _pump(tester);
