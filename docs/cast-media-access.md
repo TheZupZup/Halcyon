@@ -44,8 +44,8 @@ its server does not issue.
 
 | Source | How a stream request is authenticated | Scoped alternative available? | What a receiver ends up holding |
 | --- | --- | --- | --- |
-| **Jellyfin** | The session access token, in the URL's `api_key`. A receiver cannot send headers, so the credential has to be in the URL. | Not in the stable API: no per-item signed URL, no scoped download token, no server-side expiry to request. | An account credential, good until the session ends. |
-| **Subsonic / Navidrome** | User name plus a salted token derived from the password, in the query, on every endpoint including streams. | Not through the Subsonic API. Navidrome has its own native API with shorter-lived tokens, but that is not the API Linthra speaks, and requiring it would break every other Subsonic server. | An account credential that does not expire on its own. |
+| **Jellyfin** | The session access token, in the URL's `api_key`. A receiver cannot send headers, so the credential has to be in the URL. | Not in the stable API: no per-item signed URL, no scoped download token, no server-side expiry to request. | An account credential that keeps working until the server revokes it. Signing out of Jellyfin in Linthra forgets the token here; it does not ask the server to invalidate it, so a receiver that kept the URL is unaffected until the user revokes that device in Jellyfin. |
+| **Subsonic / Navidrome** | User name plus a salted token derived from the password, in the query, on every endpoint including streams. | Not through the Subsonic API. Navidrome has its own native API with shorter-lived tokens, but that is not the API Linthra speaks, and requiring it would break every other Subsonic server. | An account credential that does not expire on its own. It is derived from the password, so signing out here does not take it back either — only changing the password does. |
 | **Plex** | The `X-Plex-Token` **header** — Linthra never puts it in a URL. Not wired for casting today. | Plex issues transient tokens, which bound the lifetime but are still account-scoped rather than per-item. | Would be a shorter-lived account credential, if casting ever routed through Plex. |
 | **Audiobookshelf** | Bearer token. Not wired for casting today. | Not evaluated; it would need its own review before a cast resolver exists. | n/a |
 | **On-device files** | Nothing: a receiver cannot reach a `file://` path, so these are not castable at all. | n/a | Nothing. |
@@ -76,6 +76,16 @@ independent revocation. For Jellyfin and Subsonic that is a server feature
 request, not something a client can add. If either gains one, the work here is
 small: declare `scopedCapability` on that resolver, mint it in the resolver, and
 the model, tests and docs already have a place for it.
+
+**Revoking on sign-out.** Signing out of a server in Linthra is local: the
+credential is forgotten here, and the server is not asked to invalidate it. For
+a handoff that has already happened, that is the difference between "the
+receiver's copy stops working" and "it keeps working until the user goes and
+revokes the device themselves". Jellyfin can revoke a session server-side, so
+calling that on sign-out is a concrete, self-contained improvement — and a
+change to sign-out behaviour for every user, not only those who cast, so it
+belongs in its own change rather than riding along here. Subsonic has no
+equivalent: its credential is the password.
 
 **A media proxy on the device.** The app could stream from the server itself and
 re-serve to the receiver over the LAN, so the server credential never leaves the

@@ -191,7 +191,7 @@ class TrustGatedCastTransport implements CastTransport {
       // Bounded for the same reason closing is: cancelling a subscription can
       // wait on the stream's own teardown, and a delegate that stalls there
       // would hold the refusal — and the session's close with it — forever.
-      await settleWithin(ended.cancel(), _cleanupTimeout);
+      await settleWithin(ended.cancel, _cleanupTimeout);
     }
   }
 
@@ -224,15 +224,20 @@ class TrustGatedCastTransport implements CastTransport {
       // Bounded and swallowed: the refusal above is what the caller needs, and
       // a receiver that will not close — or will not answer at all — must not
       // be able to turn a refusal into a hang or an unhandled error.
-      settleWithin(session.close(), _cleanupTimeout);
+      settleWithin(session.close, _cleanupTimeout);
 }
 
 /// Waits for best-effort cleanup, but never on it: [work] is given [limit] to
 /// finish, and whether it times out or throws, the caller carries on. Used for
 /// every teardown on a path whose real result is a refusal already in hand.
-Future<void> settleWithin(Future<void> work, Duration limit) async {
+///
+/// [work] is a callback rather than a future on purpose: an implementation may
+/// throw before it ever returns one, and started outside this function that
+/// throw would replace the refusal the caller is carrying. Future.sync brings
+/// both kinds of failure inside.
+Future<void> settleWithin(Future<void> Function() work, Duration limit) async {
   try {
-    await work.timeout(limit);
+    await Future<void>.sync(work).timeout(limit);
   } catch (_) {
     // Intentionally ignored: cleanup is not the outcome anyone is waiting for.
   }
@@ -386,9 +391,9 @@ class _TrustedCastSession implements CastSessionHandle {
     final StreamSubscription<bool>? lifetime = _lifetime;
     _lifetime = null;
     if (lifetime != null) {
-      await settleWithin(lifetime.cancel(), _cleanupTimeout);
+      await settleWithin(lifetime.cancel, _cleanupTimeout);
     }
-    await settleWithin(_session.close(), _cleanupTimeout);
+    await settleWithin(_session.close, _cleanupTimeout);
   }
 }
 

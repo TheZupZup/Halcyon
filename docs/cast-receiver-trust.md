@@ -82,8 +82,9 @@ device, a proof made over another connection, an authentication that never
 finishes, a session that drops or dies mid-handshake, a session that drops in
 the gap between the check and the handoff, an authenticator that throws — before
 or after returning its future — and a receiver that will not close cleanly or at
-all. A readiness error becomes a clean "not ready" rather than an unhandled
-error escaping into the service. Each one ends with the session
+all — including one that throws before it returns a future at all. A readiness
+error becomes a clean "not ready" rather than an unhandled error escaping into
+the service. Each one ends with the session
 closed and nothing loaded, and no refusal message carries anything from the
 handshake.
 

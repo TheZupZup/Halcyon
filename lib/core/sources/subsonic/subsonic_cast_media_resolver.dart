@@ -40,6 +40,10 @@ class SubsonicCastMediaResolver implements CastMediaResolver {
   /// can reach the whole account with it, which is also why the cover-art URL is
   /// never sent (it would carry the same credential for no playback benefit).
   ///
+  /// Signing out in Linthra does not take it back either: the token is derived
+  /// from the password, so only changing that password invalidates a copy
+  /// somebody else kept.
+  ///
   /// Navidrome and some other servers can issue their own shorter-lived tokens
   /// for their own clients, but not through the Subsonic API Linthra speaks; see
   /// docs/cast-media-access.md.
@@ -47,7 +51,8 @@ class SubsonicCastMediaResolver implements CastMediaResolver {
     delegation: CastMediaDelegation.accountCredential,
     scope: CastMediaScope.account,
     summary: 'The receiver is given a Subsonic stream URL carrying the salted '
-        'credential, which reaches the whole account and does not expire.',
+        'credential, which reaches the whole account and stays valid until the '
+        'password changes.',
   );
 
   @override

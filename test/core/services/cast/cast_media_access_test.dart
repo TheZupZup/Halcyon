@@ -94,6 +94,22 @@ void main() {
       expect(access.revocableIndependently, isFalse);
     });
 
+    test('neither source claims that signing out takes the access back', () {
+      // Signing out of Jellyfin here forgets the token locally; it does not ask
+      // the server to invalidate it. Subsonic's credential is derived from the
+      // password, so only changing that password invalidates a kept copy.
+      // Saying "until you sign out" would be the comfortable answer and the
+      // wrong one — this model exists to avoid exactly that.
+      for (final CastMediaAccess access in <CastMediaAccess>[
+        JellyfinCastMediaResolver.access,
+        SubsonicCastMediaResolver.access,
+      ]) {
+        expect(access.lifetime, isNull);
+        expect(access.summary.toLowerCase(), isNot(contains('sign out')));
+        expect(access.summary.toLowerCase(), isNot(contains('session ends')));
+      }
+    });
+
     test('Subsonic delegates the salted credential, account-wide', () {
       const CastMediaAccess access = SubsonicCastMediaResolver.access;
 

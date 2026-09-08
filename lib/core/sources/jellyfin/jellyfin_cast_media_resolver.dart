@@ -42,7 +42,14 @@ class JellyfinCastMediaResolver implements CastMediaResolver {
   /// accepts for a client that is not sending headers. There is no per-item
   /// signed URL, no scoped download token, and no server-side expiry to ask for
   /// in the stable API, so a receiver handed this URL is handed account-level
-  /// access for as long as the session lives.
+  /// access.
+  ///
+  /// How long that access lasts is not the app's to say. Signing out of
+  /// Jellyfin in Linthra forgets the token on this device; it does not ask the
+  /// server to invalidate it, so a receiver that kept the URL keeps working
+  /// until the user revokes that device in Jellyfin, or the server expires it
+  /// on its own terms. Recording the lifetime as "until the user signs out"
+  /// would be the comfortable answer and the wrong one.
   ///
   /// Declaring that plainly is the point: pretending a token in a query string
   /// is a capability would be inventing a restriction the server does not
@@ -52,7 +59,8 @@ class JellyfinCastMediaResolver implements CastMediaResolver {
     delegation: CastMediaDelegation.accountCredential,
     scope: CastMediaScope.account,
     summary: 'The receiver is given a Jellyfin stream URL carrying the session '
-        'access token, which reaches the whole account until the session ends.',
+        'access token, which reaches the whole account and keeps working until '
+        'the server revokes it.',
   );
 
   @override

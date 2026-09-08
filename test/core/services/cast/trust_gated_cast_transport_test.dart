@@ -293,6 +293,22 @@ void main() {
       expect(transport.session.loaded, isEmpty);
     });
 
+    test('a close that throws before returning still gets refused', () async {
+      // An implementation may throw before it ever returns a future. Cleanup
+      // started outside the guarded region would replace the refusal the caller
+      // is already carrying.
+      final _FakeTransport transport = _FakeTransport()
+        ..session.closeThrowsSynchronously = true;
+
+      final CastReceiverTrustException error = await refusal(
+        transport,
+        authenticator: const _RefusingAuthenticator(),
+      );
+
+      expect(error.kind, CastTrustFailureKind.rejected);
+      expect(transport.session.loaded, isEmpty);
+    });
+
     test('a receiver that will not close cleanly still gets refused', () async {
       final _FakeTransport transport = _FakeTransport()
         ..session.closeError = StateError('socket already gone');
@@ -612,6 +628,9 @@ class _FakeHandle implements CastSessionHandle {
   /// and then says nothing.
   bool closeHangs = false;
 
+  /// When true, [close] throws before it returns a future at all.
+  bool closeThrowsSynchronously = false;
+
   /// When true, cancelling a [readyStream] subscription never completes — a
   /// stream whose own teardown stalls.
   bool cancelHangs = false;
@@ -692,8 +711,14 @@ class _FakeHandle implements CastSessionHandle {
   Future<void> requestStatus() async => statusRequests++;
 
   @override
-  Future<void> close() async {
+  Future<void> close() {
     closed = true;
+    // Deliberately not `async`: this throw happens before any future exists.
+    if (closeThrowsSynchronously) throw StateError('socket already disposed');
+    return _close();
+  }
+
+  Future<void> _close() async {
     if (closeHangs) return Completer<void>().future;
     if (closeError != null) throw closeError!;
     if (!_ready.isClosed) await _ready.close();
