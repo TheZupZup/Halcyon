@@ -284,6 +284,15 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Checked out first, and at the exact tag being released, for the
+      # containment verification below: the script and the message it compares
+      # against both live in the repository, and checkout cleans the workspace,
+      # so it has to run before the bundle is downloaded into it.
+      - name: Checkout the released tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build-linux.outputs.release_tag }}
+
       # The artifact upload above stores the *contents* of
       # build/linux/x64/release/bundle at its root (linthra, lib/, data/, ...),
       # so downloading it directly into the archive's staging directory already
@@ -351,6 +360,20 @@ jobs:
           head -5 "$archive_list"
 
           echo "archive_file=${archive_file}" >> "$GITHUB_ENV"
+
+      # Casting is withheld from shipped builds while a reported security issue
+      # is resolved (lib/core/services/cast/cast_containment.dart). The Android
+      # release build makes the same check on its APK/AAB before uploading them;
+      # this is the Linux half, and it runs *before* the upload on purpose —
+      # the Release is already public by this point, so an artifact that failed
+      # the check must never become downloadable from it. Fails closed; see the
+      # script's docstring for what it can and cannot see.
+      - name: Verify the archive carries the Cast containment
+        env:
+          ARCHIVE_FILE: ${{ env.archive_file }}
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_release_containment.py "$ARCHIVE_FILE"
 
       - name: Attach archive to GitHub Release
         env:

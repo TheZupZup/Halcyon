@@ -9,16 +9,18 @@ import 'cast_transport.dart';
 
 /// The readiness boundary casting has to cross before a receiver gets anything:
 /// a [CastTransport] that hands out a session only once the receiver on the
-/// other end has proved it is the device the user picked.
+/// other end has proved, *on that session*, that it is the device the user
+/// picked.
 ///
 /// It is a decorator, not a transport: it opens no socket and speaks no
 /// protocol. That is deliberate. The rule — *no verified identity, no session,
 /// no media* — is policy, and policy that lives inside an I/O adapter can only
 /// be tested on a device. Here it is a few dozen lines of orchestration over a
 /// [CastTransport] and a [CastReceiverAuthenticator], so every failure the
-/// boundary must survive (a refusal, a device answering for another device, an
-/// authentication that never finishes, a session that dies mid-handshake) is a
-/// unit test rather than a code review.
+/// boundary must survive (a refusal, a device answering for another device, a
+/// proof made over some other connection, an authentication that never
+/// finishes, a session that dies mid-handshake or after it) is a unit test
+/// rather than a code review.
 ///
 /// **This does not restore casting.** Nothing in production builds a live
 /// transport while the security containment holds, and the shipped
@@ -38,9 +40,11 @@ class TrustGatedCastTransport implements CastTransport {
     CastReceiverAuthenticator authenticator =
         const UnverifiedCastReceiverAuthenticator(),
     Duration authenticationTimeout = const Duration(seconds: 10),
+    Duration cleanupTimeout = const Duration(seconds: 5),
   })  : _delegate = delegate,
         _authenticator = authenticator,
-        _authenticationTimeout = authenticationTimeout;
+        _authenticationTimeout = authenticationTimeout,
+        _cleanupTimeout = cleanupTimeout;
 
   final CastTransport _delegate;
   final CastReceiverAuthenticator _authenticator;
@@ -49,6 +53,13 @@ class TrustGatedCastTransport implements CastTransport {
   /// slow success: it expires as [CastTrustFailureKind.incomplete], the session
   /// is closed, and nothing is handed over.
   final Duration _authenticationTimeout;
+
+  /// How long the refused session gets to close before the refusal is returned
+  /// anyway. Closing is cleanup on a path that has already failed, so an
+  /// unresponsive receiver must not be able to hold the refusal back — the
+  /// caller would sit in "connecting" forever on the strength of a socket that
+  /// failed its check.
+  final Duration _cleanupTimeout;
 
   /// Discovery is not a trust boundary — finding a name on the LAN says nothing
   /// about who owns it — so it passes straight through, containment guards and
@@ -72,10 +83,10 @@ class TrustGatedCastTransport implements CastTransport {
       rethrow;
     }
 
-    if (!identity.matches(device)) {
+    if (!identity.matches(device, session)) {
       await _close(session);
       throw const CastReceiverTrustException(
-        "That device didn't turn out to be the one you picked, so Linthra "
+        "Linthra couldn't confirm that this is the device you picked, so it "
         'stopped.',
         kind: CastTrustFailureKind.identityMismatch,
       );
@@ -101,8 +112,18 @@ class TrustGatedCastTransport implements CastTransport {
 
     // The session dying underneath the handshake is an unfinished check, not a
     // pass: whatever the receiver had said so far, it never finished saying it.
+    // A `false` before the session has ever been ready is just "not yet" — the
+    // receiver's media app is still launching — but a `false` after a `true` is
+    // the session ending, exactly as DefaultCastService reads it.
+    bool wasReady = false;
     final StreamSubscription<bool> ended = session.readyStream.listen(
-      (_) {},
+      (bool ready) {
+        if (ready) {
+          wasReady = true;
+        } else if (wasReady) {
+          fail(CastTrustFailureKind.incomplete, _incompleteMessage);
+        }
+      },
       onError: (_) => fail(
         CastTrustFailureKind.incomplete,
         _incompleteMessage,
@@ -120,7 +141,7 @@ class TrustGatedCastTransport implements CastTransport {
     );
 
     unawaited(
-      _authenticator.authenticate(device).then(
+      _authenticator.authenticate(device, session).then(
         (CastReceiverIdentity identity) {
           if (!race.isCompleted) race.complete(identity);
         },
@@ -158,30 +179,53 @@ class TrustGatedCastTransport implements CastTransport {
       "Linthra couldn't verify that device, so it didn't send anything to it.";
 
   Future<void> _close(CastSessionHandle session) async {
-    // Closing is cleanup on a path that is already failing; a receiver that
-    // will not close cleanly must not turn a refusal into an unhandled error.
+    // Bounded and swallowed: the refusal above is what the caller needs, and a
+    // receiver that will not close — or will not answer at all — must not be
+    // able to turn a refusal into a hang or an unhandled error.
     try {
-      await session.close();
+      await session.close().timeout(_cleanupTimeout);
     } catch (_) {
-      // Intentionally ignored: the refusal above is what the caller needs.
+      // Intentionally ignored.
     }
   }
 }
 
 /// A session whose receiver has been authenticated, wrapped so it can be told
 /// apart from one that has not — and so the media handoff has its own refusal
-/// rather than relying on nobody ever holding on to a closed session.
+/// rather than relying on nobody ever holding on to a session that has ended.
 class _TrustedCastSession implements CastSessionHandle {
-  _TrustedCastSession(this._session, this.identity);
+  _TrustedCastSession(this._session, this.identity) {
+    // Trust belongs to the connection the proof was made over, so it ends when
+    // that connection does — not when someone gets around to calling [close].
+    // Without this, a track resolution that started before the receiver dropped
+    // could still hand a credential-bearing URL to a dead session while the
+    // service is still tearing it down.
+    _lifetime = _session.readyStream.listen(
+      (bool ready) {
+        if (ready) {
+          _wasReady = true;
+        } else if (_wasReady) {
+          _trusted = false;
+        }
+      },
+      onError: (_) => _trusted = false,
+      onDone: () => _trusted = false,
+      cancelOnError: false,
+    );
+  }
 
   final CastSessionHandle _session;
 
   /// The verified receiver this session is bound to.
   final CastReceiverIdentity identity;
 
-  /// Trust does not survive the session. Once closed, this handle refuses media
-  /// even though it authenticated a moment ago: the connection it was proved
-  /// over is gone, and a reconnection is a new receiver to prove.
+  StreamSubscription<bool>? _lifetime;
+  bool _wasReady = false;
+
+  /// Trust does not survive the session. Once the connection it was proved over
+  /// has ended — dropped by the receiver, or closed from here — this handle
+  /// refuses media even though it authenticated a moment ago: a reconnection is
+  /// a new receiver to prove.
   bool _trusted = true;
 
   @override
@@ -196,10 +240,9 @@ class _TrustedCastSession implements CastSessionHandle {
 
   @override
   Future<void> loadMedia(CastMedia media) async {
-    // The last refusal before a token-bearing URL leaves the device. It is
-    // unreachable by construction — this class only exists after a successful
-    // check — which is exactly why it is here: the handoff should not depend on
-    // the caller having got the order right.
+    // The last refusal before a token-bearing URL leaves the device: the check
+    // is repeated here, at the handoff, rather than trusted to have happened in
+    // the right order somewhere above.
     if (!_trusted) {
       throw const CastReceiverTrustException(
         "Linthra stopped casting to that device because it couldn't keep "
@@ -231,6 +274,8 @@ class _TrustedCastSession implements CastSessionHandle {
   @override
   Future<void> close() async {
     _trusted = false;
+    await _lifetime?.cancel();
+    _lifetime = null;
     await _session.close();
   }
 }

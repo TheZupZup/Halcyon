@@ -28,12 +28,6 @@ void main() {
   const CastDevice speaker = CastDevice(id: 'speaker-1', name: 'Kitchen');
   const CastDevice other = CastDevice(id: 'speaker-2', name: 'Bedroom');
 
-  const CastReceiverIdentity speakerIdentity = CastReceiverIdentity(
-    deviceId: 'speaker-1',
-    fingerprint: 'sha256:aa:bb',
-    model: 'Test Receiver',
-  );
-
   final CastMedia media = CastMedia(
     url: Uri.parse('https://example.test/stream?api_key=secret-token'),
     contentType: 'audio/mpeg',
@@ -44,11 +38,13 @@ void main() {
     _FakeTransport transport, {
     CastReceiverAuthenticator? authenticator,
     Duration timeout = const Duration(milliseconds: 50),
+    Duration cleanupTimeout = const Duration(milliseconds: 50),
   }) {
     return TrustGatedCastTransport(
       delegate: transport,
       authenticator: authenticator ?? _AcceptingAuthenticator(),
       authenticationTimeout: timeout,
+      cleanupTimeout: cleanupTimeout,
     );
   }
 
@@ -137,6 +133,47 @@ void main() {
       expect(transport.session.loaded, isEmpty);
     });
 
+    test('a proof made over another connection is refused', () async {
+      final _FakeTransport transport = _FakeTransport();
+
+      // The right device, authenticated somewhere else. Cast's device
+      // authentication is a property of a connection, so a proof from another
+      // one says nothing about the socket the stream would go to.
+      final CastReceiverTrustException error = await refusal(
+        transport,
+        authenticator: _AcceptingAuthenticator(over: _FakeHandle()),
+      );
+
+      expect(error.kind, CastTrustFailureKind.identityMismatch);
+      expect(transport.session.closed, isTrue);
+      expect(transport.session.loaded, isEmpty);
+    });
+
+    test('a session that drops mid-handshake is an unfinished check', () async {
+      final _FakeTransport transport = _FakeTransport();
+
+      // Ready, then not: the receiver went away while it was being checked.
+      // (A `false` before the first `true` is only "not ready yet" — the
+      // receiver's media app is still launching — and must not fail the check.)
+      final Future<CastSessionHandle> connecting = gate(
+        transport,
+        authenticator: _HangingAuthenticator(),
+        timeout: const Duration(seconds: 30),
+      ).connect(speaker);
+      await pumpEventQueue();
+      transport.session.drop();
+
+      await expectLater(
+        connecting,
+        throwsA(isA<CastReceiverTrustException>().having(
+          (CastReceiverTrustException e) => e.kind,
+          'kind',
+          CastTrustFailureKind.incomplete,
+        )),
+      );
+      expect(transport.session.loaded, isEmpty);
+    });
+
     test('an authentication that never finishes expires', () async {
       final _FakeTransport transport = _FakeTransport();
 
@@ -191,6 +228,22 @@ void main() {
       expect(error.message, isNot(contains('nonce-')));
     });
 
+    test('a receiver that will not close at all still gets refused', () async {
+      // Cleanup is best-effort on a path that has already failed: a receiver
+      // that accepts the close and then goes quiet must not leave the caller
+      // stuck in "connecting" on a session that failed its check.
+      final _FakeTransport transport = _FakeTransport()
+        ..session.closeHangs = true;
+
+      final CastReceiverTrustException error = await refusal(
+        transport,
+        authenticator: const _RefusingAuthenticator(),
+      );
+
+      expect(error.kind, CastTrustFailureKind.rejected);
+      expect(transport.session.loaded, isEmpty);
+    });
+
     test('a receiver that will not close cleanly still gets refused', () async {
       final _FakeTransport transport = _FakeTransport()
         ..session.closeError = StateError('socket already gone');
@@ -233,6 +286,30 @@ void main() {
         gate(transport).discover(const Duration(seconds: 1)),
         throwsA(isA<CastContainmentError>()),
       );
+    });
+
+    test('trust does not survive the receiver dropping the session', () async {
+      final _FakeTransport transport = _FakeTransport();
+
+      final CastSessionHandle session = await gate(transport).connect(speaker);
+      // Let the wrapper's lifetime listener attach (the handle replays its
+      // readiness to it) before the receiver goes away.
+      await pumpEventQueue();
+      transport.session.drop();
+      await pumpEventQueue();
+
+      // The connection the proof was made over is gone, so the handoff refuses
+      // even though nobody has called close() yet — a track resolution that
+      // started before the drop must not still reach a dead receiver.
+      await expectLater(
+        session.loadMedia(media),
+        throwsA(isA<CastReceiverTrustException>().having(
+          (CastReceiverTrustException e) => e.kind,
+          'kind',
+          CastTrustFailureKind.incomplete,
+        )),
+      );
+      expect(transport.session.loaded, isEmpty);
     });
 
     test('trust does not survive the session being closed', () async {
@@ -289,24 +366,52 @@ void main() {
   });
 
   group('CastReceiverIdentity', () {
-    test('is bound to the device it was proved for', () {
-      expect(speakerIdentity.matches(speaker), isTrue);
-      expect(speakerIdentity.matches(other), isFalse);
+    test('is bound to the device *and* the connection it was proved on', () {
+      final _FakeHandle session = _FakeHandle();
+      final _FakeHandle elsewhere = _FakeHandle();
+      final CastReceiverIdentity identity = CastReceiverIdentity(
+        deviceId: 'speaker-1',
+        connection: session,
+        fingerprint: 'sha256:aa:bb',
+        model: 'Test Receiver',
+      );
+
+      expect(identity.matches(speaker, session), isTrue);
+      // Right device, wrong connection: a proof made somewhere else says
+      // nothing about the socket the media would go to.
+      expect(identity.matches(speaker, elsewhere), isFalse);
+      expect(identity.matches(other, session), isFalse);
     });
 
-    test('two proofs of the same device are only equal if they agree', () {
+    test('two proofs are only equal if they agree on all of it', () {
+      final _FakeHandle session = _FakeHandle();
+      final CastReceiverIdentity identity = CastReceiverIdentity(
+        deviceId: 'speaker-1',
+        connection: session,
+        fingerprint: 'sha256:aa:bb',
+      );
+
       expect(
-        speakerIdentity,
-        const CastReceiverIdentity(
+        identity,
+        CastReceiverIdentity(
           deviceId: 'speaker-1',
+          connection: session,
           fingerprint: 'sha256:aa:bb',
-          model: 'Test Receiver',
         ),
       );
       expect(
-        speakerIdentity,
-        isNot(const CastReceiverIdentity(
+        identity,
+        isNot(CastReceiverIdentity(
           deviceId: 'speaker-1',
+          connection: _FakeHandle(),
+          fingerprint: 'sha256:aa:bb',
+        )),
+      );
+      expect(
+        identity,
+        isNot(CastReceiverIdentity(
+          deviceId: 'speaker-1',
+          connection: session,
           fingerprint: 'sha256:cc:dd',
         )),
       );
@@ -355,7 +460,24 @@ class _FakeHandle implements CastSessionHandle {
   /// When set, [close] throws it, so a failing teardown can be exercised.
   Object? closeError;
 
-  /// Ends the session the way a dropped receiver does.
+  /// When true, [close] never completes — a receiver that accepts the request
+  /// and then says nothing.
+  bool closeHangs = false;
+
+  /// Reports the receiver's media app as up.
+  void becomeReady() {
+    _last = true;
+    if (!_ready.isClosed) _ready.add(true);
+  }
+
+  /// Reports the session as no longer ready, the way a dropped receiver does,
+  /// without closing the stream.
+  void drop() {
+    _last = false;
+    if (!_ready.isClosed) _ready.add(false);
+  }
+
+  /// Ends the session the way a receiver that went away entirely does.
   void end() {
     _last = false;
     if (!_ready.isClosed) {
@@ -401,26 +523,36 @@ class _FakeHandle implements CastSessionHandle {
   @override
   Future<void> close() async {
     closed = true;
+    if (closeHangs) return Completer<void>().future;
     if (closeError != null) throw closeError!;
     if (!_ready.isClosed) await _ready.close();
   }
 }
 
-/// Vouches for a receiver — as itself by default, or as [as] to model a device
-/// answering for another one.
+/// Vouches for a receiver — as itself over its own session by default, or as
+/// [as] / over [over] to model a device answering for another one, or a proof
+/// made on a different connection.
 class _AcceptingAuthenticator implements CastReceiverAuthenticator {
-  _AcceptingAuthenticator({this.as});
+  _AcceptingAuthenticator({this.as, this.over});
 
   final CastDevice? as;
+
+  /// When set, the proof names this session instead of the one being
+  /// authenticated — a receiver proved over some other connection.
+  final CastSessionHandle? over;
 
   /// Every device this was asked about, so a test can show it was never asked.
   final List<String> calls = <String>[];
 
   @override
-  Future<CastReceiverIdentity> authenticate(CastDevice device) async {
+  Future<CastReceiverIdentity> authenticate(
+    CastDevice device,
+    CastSessionHandle session,
+  ) async {
     calls.add(device.id);
     return CastReceiverIdentity(
       deviceId: (as ?? device).id,
+      connection: over ?? session,
       fingerprint: 'sha256:aa:bb',
     );
   }
@@ -431,7 +563,10 @@ class _RefusingAuthenticator implements CastReceiverAuthenticator {
   const _RefusingAuthenticator();
 
   @override
-  Future<CastReceiverIdentity> authenticate(CastDevice device) async {
+  Future<CastReceiverIdentity> authenticate(
+    CastDevice device,
+    CastSessionHandle session,
+  ) async {
     throw const CastReceiverTrustException(
       "Linthra couldn't verify that device.",
       kind: CastTrustFailureKind.rejected,
@@ -445,7 +580,10 @@ class _ExplodingAuthenticator implements CastReceiverAuthenticator {
   const _ExplodingAuthenticator();
 
   @override
-  Future<CastReceiverIdentity> authenticate(CastDevice device) async {
+  Future<CastReceiverIdentity> authenticate(
+    CastDevice device,
+    CastSessionHandle session,
+  ) async {
     throw StateError('challenge nonce-4711 rejected by peer certificate');
   }
 }
@@ -454,6 +592,9 @@ class _ExplodingAuthenticator implements CastReceiverAuthenticator {
 /// does not.
 class _HangingAuthenticator implements CastReceiverAuthenticator {
   @override
-  Future<CastReceiverIdentity> authenticate(CastDevice device) =>
+  Future<CastReceiverIdentity> authenticate(
+    CastDevice device,
+    CastSessionHandle session,
+  ) =>
       Completer<CastReceiverIdentity>().future;
 }

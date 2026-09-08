@@ -46,16 +46,25 @@ the implementation choice, so that reviewing the eventual transport is about the
 protocol rather than about the app's plumbing:
 
 - **`CastReceiverAuthenticator`** (`lib/core/services/cast/cast_receiver_trust.dart`)
-  — the contract. It returns a `CastReceiverIdentity` bound to the device that
-  was checked, or throws. An inconclusive check (timeout, dropped connection,
-  an implementation that throws something unexpected) is a failure, never a
-  pass. The shipped implementation is `UnverifiedCastReceiverAuthenticator`,
-  which refuses every receiver, because nothing here can yet prove one.
+  — the contract. It is handed the session to check, and returns a
+  `CastReceiverIdentity` naming both the device and that connection, or throws.
+  The connection half matters: Cast's device authentication is a challenge
+  answered on a connection, so a proof gathered anywhere else describes a
+  different conversation than the one the media would go to. An inconclusive
+  check (timeout, dropped connection, an implementation that throws something
+  unexpected) is a failure, never a pass. The shipped implementation is
+  `UnverifiedCastReceiverAuthenticator`, which refuses every receiver, because
+  nothing here can yet prove one.
 - **`TrustGatedCastTransport`** (`lib/core/services/cast/trust_gated_cast_transport.dart`)
   — the readiness boundary. It wraps a `CastTransport`: a session is only handed
-  out after the receiver authenticated *and* the identity matches the device the
-  user picked; any failure closes the session; the media handoff refuses again
-  on its own; trust does not survive the session closing.
+  out after the receiver authenticated *and* the identity matches both the
+  device the user picked and the session it will use; any failure closes the
+  session (with a bounded cleanup, so an unresponsive receiver cannot hold the
+  refusal back); the media handoff refuses again on its own; and trust ends with
+  the connection it was proved over, whether that is a close from here or the
+  receiver dropping. `DefaultCastService` surfaces a refusal's own message
+  rather than a generic "couldn't connect", so a security refusal does not read
+  as a flaky network.
 
 Neither is wired into production, and neither restores casting. Containment
 still comes first in every path: the gate authenticates over a connection the
@@ -65,10 +74,12 @@ to reach a device.
 
 `test/core/services/cast/trust_gated_cast_transport_test.dart` covers the
 negative cases end to end: a refusal, a device that authenticates as a different
-device, an authentication that never finishes, a session that dies
-mid-handshake, an authenticator that throws something unexpected, and a receiver
-that will not close cleanly. Each one ends with the session closed and nothing
-loaded, and no refusal message carries anything from the handshake.
+device, a proof made over another connection, an authentication that never
+finishes, a session that drops or dies mid-handshake, a session that drops after
+a successful check, an authenticator that throws something unexpected, and a
+receiver that will not close cleanly or at all. Each one ends with the session
+closed and nothing loaded, and no refusal message carries anything from the
+handshake.
 
 ## Choosing an implementation
 
