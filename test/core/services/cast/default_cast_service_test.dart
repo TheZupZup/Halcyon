@@ -7,7 +7,9 @@ import 'package:linthra/core/models/cast_state.dart';
 import 'package:linthra/core/models/cast_volume.dart';
 import 'package:linthra/core/models/playback_state.dart';
 import 'package:linthra/core/models/track.dart';
+import 'package:linthra/core/services/cast/cast_media_access.dart';
 import 'package:linthra/core/services/cast/cast_media_resolver.dart';
+import 'package:linthra/core/services/cast/cast_receiver_trust.dart';
 import 'package:linthra/core/services/cast/cast_transport.dart';
 import 'package:linthra/core/services/cast/default_cast_service.dart';
 
@@ -37,6 +39,10 @@ class _FakeHandle implements CastSessionHandle {
   /// When set, [setVolume]/[setMuted] throw it, so a test can drive a failed
   /// volume command.
   Object? volumeError;
+
+  /// When set, [loadMedia] throws it instead of recording the media, so a test
+  /// can drive a refused handoff.
+  Object? loadError;
   bool closed = false;
 
   void becomeReady() {
@@ -70,7 +76,10 @@ class _FakeHandle implements CastSessionHandle {
   Stream<CastVolume> get volumeStream => _volume.stream;
 
   @override
-  Future<void> loadMedia(CastMedia media) async => loaded.add(media);
+  Future<void> loadMedia(CastMedia media) async {
+    if (loadError != null) throw loadError!;
+    loaded.add(media);
+  }
 
   @override
   Future<void> play() async => playCount++;
@@ -140,6 +149,10 @@ class _FakeResolver implements CastMediaResolver {
 
   @override
   bool canCast(Track track) => castable;
+
+  @override
+  CastMediaAccess accessFor(Track track) =>
+      castable ? CastMediaAccess.undeclared : CastMediaAccess.none;
 
   @override
   Future<CastMedia> resolve(Track track) async {
@@ -297,6 +310,43 @@ void main() {
 
       expect(service.state.hasError, isTrue);
       expect(service.state.message, isNot(contains('Exception')));
+    });
+
+    test('a refused receiver says why, not "couldn\'t connect"', () async {
+      // The trust gate (#575) refuses a receiver that cannot prove who it is.
+      // That is not a flaky network, and telling the user to try again would be
+      // wrong — its own secret-free message has to survive to the sheet.
+      transport.connectError = const CastReceiverTrustException(
+        "Linthra can't verify this device yet, so it won't send your music to "
+        'it.',
+        kind: CastTrustFailureKind.unsupported,
+      );
+      final service = build();
+      addTearDown(service.dispose);
+
+      await service.connect(_d1);
+
+      expect(service.state.hasError, isTrue);
+      expect(service.state.message, contains("can't verify this device"));
+      expect(service.state.isCasting, isFalse);
+    });
+
+    test('a handoff refused by the trust gate says why too', () async {
+      current = _jellyfinTrack;
+      final handle = _FakeHandle()
+        ..loadError = const CastReceiverTrustException(
+          "Linthra stopped casting to that device because it couldn't keep "
+          'verifying it.',
+          kind: CastTrustFailureKind.incomplete,
+        );
+      transport.handle = handle;
+      final service = build();
+      addTearDown(service.dispose);
+
+      await service.connect(_d1);
+
+      expect(service.state.isCasting, isFalse);
+      expect(service.state.message, contains('stopped casting'));
     });
 
     test('re-casts when the playing track changes mid-session', () async {

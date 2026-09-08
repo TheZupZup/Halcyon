@@ -1,5 +1,6 @@
 import '../../models/cast_media.dart';
 import '../../models/track.dart';
+import 'cast_media_access.dart';
 
 /// Why resolving a [Track] into castable media failed.
 enum CastMediaErrorKind {
@@ -47,4 +48,15 @@ abstract interface class CastMediaResolver {
   /// demand, or throws a [CastMediaException] with a friendly, secret-free
   /// message. Only call when [canCast] is true.
   Future<CastMedia> resolve(Track track);
+
+  /// What casting [track] would delegate to the receiver, without resolving
+  /// anything or touching the network.
+  ///
+  /// A resolver declares this from what its server actually supports — a
+  /// capability scoped to the item, or the account credential it has no
+  /// alternative to — so the exposure of a handoff is a property of the code
+  /// rather than a thing to work out from a URL at review time. Callers can ask
+  /// before casting; [CastMedia.access] carries the same answer afterwards. See
+  /// [CastMediaAccess] and docs/cast-media-access.md.
+  CastMediaAccess accessFor(Track track);
 }

@@ -716,6 +716,7 @@ consume our signed artifacts:
 | Release APK/AAB build | **Manual** (`workflow_dispatch`) **and automatic on `v*` tags** (`android-release-build.yml`). |
 | Preparing the version-bump PR (pubspec, in-app mirror, Fastlane changelog, F-Droid `CurrentVersion`) | **Manual** (`workflow_dispatch`, `prepare-release-bump.yml`); opens a draft PR but never tags, builds, or publishes. The same edits are reproducible locally with `scripts/prepare_release_bump.py`. |
 | Verifying the tag matches `pubspec.yaml` (versionName/versionCode) | **Automatic** on a `v*` tag build (`scripts/release_preflight.sh`, encoding-checked against `tool/version_from_tag.dart`); fails fast on a mismatch and the workflow summary explicitly says "Version mismatch: release was not built." so it is not confused with an APK build failure. The same script is intended to be run locally before tagging (§3 step 9). Both manual and tag builds take the version from `pubspec.yaml`. |
+| Verifying the shipped artifacts carry the Cast containment | **Automatic**: on every release build (`android-release-build.yml`, before the artifacts are uploaded) and again on the published assets during a stable publication (`publish-stable-release.yml`, which records every SHA-256 in the job summary). Local twin: `python3 scripts/verify_release_containment.py dist/*.apk dist/*.aab`. See [release-artifact-verification.md](./release-artifact-verification.md). |
 | Attaching APK/AAB to a Release | **Automatic** on a `v*` tag build. Alpha/beta/rc tags attach (debug- or release-signed) to a **pre-release**; stable tags attach **release-signed** assets to an existing Release only. |
 | Linux `.tar.gz` build + attach to a Release | **Automatic**, via `workflow_dispatch` (`linux-desktop-build.yml` `release_tag` input, job `package-linux-release`) — see §4a. `publish-stable-release.yml` dispatches it for every stable release; `android-release-build.yml`'s `attach-release` job dispatches it for a directly-pushed alpha/beta/rc tag. Not wired to `push: tags` or `release: published` — a `GITHUB_TOKEN`-authored tag push/Release doesn't reliably start either. |
 | Creating a GitHub **pre-release** (alpha/beta/rc) | **Automatic** on the tag build if no Release exists yet (placeholder notes; edit afterwards). |
@@ -823,6 +824,9 @@ See [fdroid-readiness.md](./fdroid-readiness.md) for the broader F-Droid status.
 
 - [docs/release-signing.md](./release-signing.md) — signing keys, CI secrets,
   rotation.
+- [docs/release-artifact-verification.md](./release-artifact-verification.md) —
+  checking a published artifact actually carries the Cast security containment,
+  and the recorded digests per release.
 - [docs/fdroid-readiness.md](./fdroid-readiness.md) — F-Droid submission checklist.
 - [docs/fdroid-build-recipe.md](./fdroid-build-recipe.md) — F-Droid build recipe.
 - [docs/dependency-license-audit.md](./dependency-license-audit.md) — dependency
