@@ -1606,6 +1606,18 @@ class JustAudioPlaybackController implements LocalPlaybackController {
     // pending/queued focus action so it can't resurrect playback after stop.
     _resumeAfterTransientLoss = false;
     _supersedeFocusTransport();
+    // A stop is a playback action, so supersede any still-resolving load the
+    // same way seek() does below. Stopping the engine says nothing to a
+    // _playCurrent that has not reached it yet, and this is the counter every
+    // guard on that path reads.
+    //
+    // Consistency rather than a fix for a reproduced failure: raised in review
+    // on #397 as "audio can start after Stop", and the asymmetry with seek() is
+    // real, but the load also bails for other reasons in the case I built, so
+    // no test here demonstrates the difference. The line is cheap, matches its
+    // neighbour, and removes the need to reason about which other guard happens
+    // to cover it.
+    _playbackGeneration++;
     await _player.stop();
     final stopped = PlaybackState(
       currentTrack: _state.currentTrack,

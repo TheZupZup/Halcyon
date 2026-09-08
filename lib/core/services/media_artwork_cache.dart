@@ -73,6 +73,11 @@ class MediaArtworkCache implements MediaArtworkSource {
   /// disk/network round-trip for a cover already fetched this session.
   final Map<String, Uri> _memo = <String, Uri>{};
 
+  /// The file behind each memoized entry, so the same cover can also be handed
+  /// out as a `file:` URI (see [cachedFileUri]). Kept alongside rather than
+  /// derived, because the content URI keeps only the basename.
+  final Map<String, File> _files = <String, File>{};
+
   /// In-flight resolutions, so concurrent requests for the same reference share
   /// one fetch instead of racing to write the same file. The completer is
   /// removed when the fetch settles (success or failure), so a failed cover can
@@ -95,6 +100,14 @@ class MediaArtworkCache implements MediaArtworkSource {
   /// awaiting — covers are warmed ahead of time by `MediaArtworkPrewarmService`.
   @override
   Uri? cached(Uri reference) => _memo[_cacheKey(reference)];
+
+  /// The cached cover as a `file:` URI, for consumers that cannot resolve the
+  /// Android `content://` form (the Linux MPRIS session). Same memoized entry.
+  @override
+  Uri? cachedFileUri(Uri reference) {
+    final File? file = _files[_cacheKey(reference)];
+    return file == null ? null : Uri.file(file.path);
+  }
 
   /// Resolves [reference] to a safe `content://` artwork URI, fetching and
   /// caching the image on a miss. Returns `null` (never throws) when the artwork
@@ -132,6 +145,7 @@ class MediaArtworkCache implements MediaArtworkSource {
     if (await file.exists() && await file.length() > 0) {
       final Uri uri = mediaArtworkContentUri(file);
       _memo[key] = uri;
+      _files[key] = file;
       _announceReady(reference);
       return uri;
     }
@@ -158,6 +172,7 @@ class MediaArtworkCache implements MediaArtworkSource {
     }
     final Uri uri = mediaArtworkContentUri(file);
     _memo[key] = uri;
+    _files[key] = file;
     _announceReady(reference);
     return uri;
   }
@@ -185,8 +200,25 @@ class MediaArtworkCache implements MediaArtworkSource {
   static String _cacheKey(Uri reference) =>
       sha256.convert(utf8.encode(reference.toString())).toString();
 
+  /// Where cover files live, which differs by platform because two different
+  /// consumers have to be able to open them.
+  ///
+  /// Android keeps `getTemporaryDirectory()` (`Context.getCacheDir()`): the
+  /// media-artwork FileProvider is declared against exactly that path in
+  /// `res/xml/media_artwork_paths.xml`, so moving it would stop every
+  /// `content://` cover resolving.
+  ///
+  /// Everywhere else, the consumer is a desktop shell reading `mpris:artUrl`
+  /// (see [cachedFileUri]), and it runs outside Linthra's mount namespace. In a
+  /// Flatpak `getTemporaryDirectory()` is `/tmp`, private to the sandbox, so a
+  /// `file:` URI into it points at the host's unrelated `/tmp` and the cover
+  /// silently fails to load. The application cache directory is
+  /// `~/.var/app/<app-id>/cache` there, which is a real host path visible at the
+  /// same location inside and out.
   static Future<Directory> _defaultDirectory() async {
-    final Directory base = await getTemporaryDirectory();
+    final Directory base = Platform.isAndroid
+        ? await getTemporaryDirectory()
+        : await getApplicationCacheDirectory();
     return Directory(p.join(base.path, 'media_session_artwork'));
   }
 

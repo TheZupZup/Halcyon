@@ -1,8 +1,12 @@
+import 'dart:io';
+
+import 'package:dbus/dbus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/platform/host_platform.dart';
 import 'package:linthra/core/services/linux_playback_controller.dart';
 import 'package:linthra/core/services/media_session_binding.dart';
+import 'package:linthra/core/services/mpris/mpris_media_session.dart';
 import 'package:linthra/data/repositories/download_repository_provider.dart';
 import 'package:linthra/data/repositories/favorites_repository_provider.dart';
 import 'package:linthra/data/repositories/host_platform_provider.dart';
@@ -97,11 +101,21 @@ void main() {
     );
   });
 
-  test('startup asks for a media session and is told there is none', () async {
+  test('startup asks for a media session and gets MPRIS, or nothing', () async {
     final ProviderContainer container = linuxContainer();
-    const binding = PlatformMediaSessionBinding(host: HostPlatform.linux);
+    // The MPRIS binding with a client factory that fails the way a machine
+    // with no session bus does — headless CI, a container, a Flatpak without
+    // the socket. Startup must carry on without desktop controls, not fall
+    // over, and it must never reach `audio_service` on the way.
+    const PlatformMediaSessionBinding binding = PlatformMediaSessionBinding(
+      host: HostPlatform.linux,
+      linuxBinding: MprisMediaSessionBinding(clientFactory: _noSessionBus),
+    );
 
-    final bool attached = await binding.attach(
+    expect(binding.isSupported, isTrue,
+        reason: 'Linux has a media session since #397');
+
+    final MediaSession? session = await binding.attach(
       container.read(playbackControllerProvider),
       container.read(musicLibraryRepositoryProvider),
       playlists: container.read(playlistRepositoryProvider),
@@ -110,6 +124,9 @@ void main() {
       artwork: container.read(mediaArtworkCacheProvider),
     );
 
-    expect(attached, isFalse);
+    expect(session, isNull);
   });
 }
+
+/// A [DBusClient] factory that fails like a host with no session bus.
+DBusClient _noSessionBus() => throw const SocketException('no session bus');

@@ -41,10 +41,11 @@ export 'application_container.dart' show productionApplicationOverrides;
 /// `ProviderContainer.dispose()`.
 ///
 /// One thing it deliberately does not release: the Android media session. The
-/// graceful-shutdown path is desktop-only (see `PlatformShutdownPolicy`), where
-/// the media-session binding is the inert one; on Android the session belongs
-/// to `audio_service`'s foreground service and the platform, not to this
-/// handle.
+/// graceful-shutdown path is desktop-only (see `PlatformShutdownPolicy`), and
+/// on Android the session belongs to `audio_service`'s foreground service and
+/// the platform, not to this handle — so its [MediaSession] detaches to
+/// nothing. Linux's MPRIS session *is* released here: the bus name is Linthra's
+/// to give back.
 class ApplicationHandle {
   /// Creates a handle for [container].
   ///
@@ -180,12 +181,12 @@ Future<ApplicationHandle> bootstrapApplication(
 }) async {
   final ApplicationHandle handle = ApplicationHandle(container: container);
   try {
-    // Attaching the session is best-effort and platform-routed: on a platform
-    // with no media session (Linux today) the binding is the inert one and
-    // `audio_service` is never initialised at all. On Android it attaches the
-    // real session; the handler mirrors the controller and outlives this scope
-    // with the container.
-    await const PlatformMediaSessionBinding().attach(
+    // Attaching the session is best-effort and platform-routed: Android gets
+    // the real `audio_service` session, Linux gets MPRIS, and every other
+    // platform gets the inert binding so `audio_service` is never initialised
+    // where it has no implementation.
+    final MediaSession? session =
+        await const PlatformMediaSessionBinding().attach(
       container.read(playbackControllerProvider),
       container.read(musicLibraryRepositoryProvider),
       playlists: container.read(playlistRepositoryProvider),
@@ -193,6 +194,11 @@ Future<ApplicationHandle> bootstrapApplication(
       downloads: container.read(downloadRepositoryProvider),
       artwork: container.read(mediaArtworkCacheProvider),
     );
+    // Owned so shutdown gives the session back. On Android that is a no-op (the
+    // session belongs to the foreground service), but on Linux it releases the
+    // MPRIS bus name — a player that exits still holding it leaves a ghost in
+    // every shell that was listening.
+    if (session != null) handle.own(session.detach);
 
     // Side-effect-only services: instantiating each one wires its listener.
     // They are disposed with the container, and — because each registers with

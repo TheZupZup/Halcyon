@@ -58,6 +58,22 @@ finish-args:
   # scope: direct configured endpoints need no discovery-specific grant.
   - --share=network
   #
+  # MPRIS (#397). The Linux media session is a D-Bus object Linthra exports and
+  # a well-known name it owns, so a desktop shell can find and drive it. Inside
+  # the sandbox that name has to be granted: Flatpak lets an app own names under
+  # its own application id, and `org.mpris.MediaPlayer2.linthra` is not one of
+  # those.
+  #
+  # These two grants are the narrowest form that works. --own-name is not
+  # --talk-name: owning a name lets other clients call Linthra, and gives
+  # Linthra no way to call anything. Both are scoped to Linthra's own player
+  # names, so no other player's MPRIS interface becomes reachable — which
+  # --socket=session-bus, or an `org.mpris.MediaPlayer2.*` wildcard, would both
+  # do. The second line covers the spec's `.instance<pid>` fallback, used when a
+  # second Linthra window finds the plain name already taken.
+  - --own-name=org.mpris.MediaPlayer2.linthra
+  - --own-name=org.mpris.MediaPlayer2.linthra.*
+  #
   # Secure credential storage (#441) needs nothing here either, for the same
   # reason local music folders don't: the sandbox path is a portal.
   # flutter_secure_storage's Linux implementation
