@@ -419,6 +419,10 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
   ) {
     if (last == null) return true;
     if (next.playing != last.playing ||
+        // A transient-focus hold keeps `playing` and the controls steady but
+        // drops the speed to 0, and that is exactly the push that stops the
+        // displayed position running away during the interruption.
+        next.speed != last.speed ||
         next.processingState != last.processingState ||
         next.shuffleMode != last.shuffleMode ||
         next.repeatMode != last.repeatMode ||
@@ -577,6 +581,7 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
       processingState: _processingStateFor(state.status),
       playing: _isSessionPlaying(state),
       updatePosition: state.position,
+      speed: _sessionSpeed(state),
       shuffleMode: state.shuffleEnabled
           ? audio.AudioServiceShuffleMode.all
           : audio.AudioServiceShuffleMode.none,
@@ -629,6 +634,25 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
         return false;
     }
   }
+
+  /// The rate the reported position is actually advancing at.
+  ///
+  /// `audio_service` — and, through it, `PlaybackStateCompat` — extrapolates the
+  /// position every consumer *displays* (notification, lock screen, Android
+  /// Auto, Bluetooth head unit) from `updatePosition` + wall clock × speed while
+  /// the session says it is playing. A transient-focus hold is the one state
+  /// where the session says `playing` while the engine is stopped for an
+  /// open-ended stretch — up to the controller's hold timeout — so leaving the
+  /// speed at 1.0 would run the progress bar (and a car's) minutes ahead of the
+  /// audio during a call, then snap it back on the resume.
+  ///
+  /// Reporting 0.0 freezes the displayed position exactly where the audio
+  /// stopped, with no extra pushes or timers, and does not touch the foreground
+  /// service: `audio_service` promotes and demotes it on the `playing` flag
+  /// alone. Buffering and loading keep 1.0 — they are bounded by the engine's
+  /// own watchdog and behave as before.
+  static double _sessionSpeed(PlaybackState state) =>
+      state.status == PlaybackStatus.paused ? 0.0 : 1.0;
 
   static RepeatMode _repeatModeFrom(audio.AudioServiceRepeatMode mode) {
     switch (mode) {
