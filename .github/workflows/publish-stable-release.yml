@@ -244,6 +244,7 @@ jobs:
         run: gh run watch "$RUN_ID" --repo "$GITHUB_REPOSITORY" --exit-status
 
       - name: Verify every public Release asset
+        id: assets
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RUN_URL: ${{ steps.dispatch.outputs.run_url }}
@@ -281,21 +282,13 @@ jobs:
             exit 1
           fi
 
-          release_url="$(jq -r '.url' "$release_json")"
-          {
-            echo "## ✅ $RELEASE_TAG published and verified"
-            echo
-            echo "Release PR: $PR_URL"
-            echo "Tagged commit: \`$TARGET_SHA\`"
-            echo "Signed Android build: $RUN_URL"
-            echo "Linux release build: $LINUX_RUN_URL"
-            echo "Release: $release_url"
-            echo
-            echo 'Verified assets:'
-            for asset in "${required[@]}"; do
-              echo "- \`$asset\`"
-            done
-          } >> "$GITHUB_STEP_SUMMARY"
+          # Deliberately no summary yet: "published and verified" is written by
+          # the containment step below, once the bytes have actually been
+          # checked. A banner here would survive a failed check and leave the
+          # security record claiming a verification that did not happen.
+          echo "release_url=$(jq -r '.url' "$release_json")" >> "$GITHUB_OUTPUT"
+          printf 'Present on the Release:\n'
+          printf '  %s\n' "${required[@]}"
 
       # The assets exist — this asks what is inside them. Casting is withheld
       # from shipped builds while a reported security issue is resolved
@@ -313,6 +306,10 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           TARGET_SHA: ${{ steps.release.outputs.target_sha }}
+          RELEASE_URL: ${{ steps.assets.outputs.release_url }}
+          RUN_URL: ${{ steps.dispatch.outputs.run_url }}
+          LINUX_RUN_URL: ${{ steps.dispatch-linux.outputs.run_url }}
+          PR_URL: ${{ steps.release.outputs.pr_url }}
         shell: bash
         run: |
           set -euo pipefail
@@ -331,7 +328,16 @@ jobs:
             --json "$record" \
             "$assets"/*.apk "$assets"/*.aab "$assets"/*.tar.gz
 
+          # Only now, with the shipped bytes checked, does the run claim the
+          # release is verified.
           {
+            echo "## ✅ $RELEASE_TAG published and verified"
+            echo
+            echo "Release PR: $PR_URL"
+            echo "Tagged commit: \`$TARGET_SHA\`"
+            echo "Signed Android build: $RUN_URL"
+            echo "Linux release build: $LINUX_RUN_URL"
+            echo "Release: $RELEASE_URL"
             echo
             echo "### Cast containment verified in the published artifacts"
             echo
