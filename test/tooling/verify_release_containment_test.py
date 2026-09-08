@@ -309,6 +309,31 @@ class CommandLineTest(unittest.TestCase):
         )
         self.assertIn('"sha256"', record.read_text(encoding="utf-8"))
 
+    def test_the_expected_message_can_come_from_another_tree(self):
+        # A release build checks out the tag it builds; the verifier comes from
+        # the workflow's own revision. --containment-source is how the caller
+        # says which tree's message the artifact should carry.
+        source = self.tmp / "cast_containment.dart"
+        source.write_text(
+            "abstract final class CastContainment {\n"
+            "  static const String userMessage = 'An older wording.';\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        matching = self.apk("old.apk", message="An older wording.")
+        mismatched = self.apk("new.apk", message=self.message)
+
+        self.assertEqual(
+            verifier.main([str(matching), "--containment-source", str(source)]),
+            0,
+        )
+        self.assertEqual(
+            verifier.main(
+                [str(mismatched), "--containment-source", str(source)]
+            ),
+            1,
+        )
+
     def test_one_bad_artifact_fails_the_whole_run(self):
         good = self.apk("good.apk", message=self.message)
         bad = self.apk("bad.apk", message="not the containment message")

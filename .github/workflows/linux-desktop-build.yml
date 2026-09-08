@@ -293,6 +293,16 @@ jobs:
         with:
           ref: ${{ needs.build-linux.outputs.release_tag }}
 
+      # Same split as the Android release build: the tag supplies the expected
+      # containment message, this workflow's own revision supplies the script
+      # that looks for it, so rebuilding an older tag is still verified.
+      - name: Check out the release tooling from this workflow's revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tooling
+          sparse-checkout: scripts
+
       # The artifact upload above stores the *contents* of
       # build/linux/x64/release/bundle at its root (linthra, lib/, data/, ...),
       # so downloading it directly into the archive's staging directory already
@@ -374,18 +384,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          # A run rebuilding an OLD release tag checks out that tag's tree,
-          # which may predate this script (and the containment it looks for).
-          # That path is documented and must keep working, so say plainly that
-          # nothing was checked rather than failing the rebuild — after the
-          # whole build — on a file the tag never had. Same handling as the
-          # Android release build.
-          if [ ! -f scripts/verify_release_containment.py ]; then
-            echo "::warning::This tag predates scripts/verify_release_containment.py, so the archive was not checked for the Cast containment. Verify the published asset by hand if the tag is expected to carry it (see docs/release-artifact-verification.md)."
+          source_file="lib/core/services/cast/cast_containment.dart"
+
+          # Only a tag from before the containment existed has nothing to
+          # check; everything else is verified with the script from this
+          # workflow's revision against that tag's own message, so an old tag
+          # is never a way to attach an unverified asset.
+          if [ ! -f "$source_file" ] || ! grep -q 'static const String userMessage' "$source_file"; then
+            echo "::warning::This tag predates the Cast containment, so its archive carries nothing to check. See docs/release-artifact-verification.md."
             exit 0
           fi
 
-          python3 scripts/verify_release_containment.py "$ARCHIVE_FILE"
+          python3 .release-tooling/scripts/verify_release_containment.py \
+            --containment-source "$source_file" \
+            "$ARCHIVE_FILE"
 
       - name: Attach archive to GitHub Release
         env:

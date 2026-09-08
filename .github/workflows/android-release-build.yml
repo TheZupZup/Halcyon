@@ -162,6 +162,18 @@ jobs:
           # manual one.
           ref: ${{ inputs.release_tag }}
 
+      # The release tooling from the revision that is RUNNING, kept beside the
+      # build source rather than replacing it. A run rebuilding an older tag
+      # checks that tag's tree out above, which may predate the containment
+      # verifier; the check still has to happen, so the script comes from here
+      # and the expected message from the tag's own cast_containment.dart.
+      - name: Check out the release tooling from this workflow's revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tooling
+          sparse-checkout: scripts
+
       # Decide, in one place, how this run should sign, whether the tag is a
       # pre-release, and how to label/name the artifacts.
       #   trigger:    manual | tag
@@ -494,17 +506,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          # A run rebuilding an OLD release tag checks out that tag's tree,
-          # which may predate this script (and the containment it looks for).
-          # That path is documented and must keep working, so say plainly that
-          # nothing was checked rather than failing the rebuild on a file the
-          # tag never had. Every current release builds a tree that has it.
-          if [ ! -f scripts/verify_release_containment.py ]; then
-            echo "::warning::This tag predates scripts/verify_release_containment.py, so the artifacts were not checked for the Cast containment. Verify the published assets by hand if the tag is expected to carry it (see docs/release-artifact-verification.md)."
+          source_file="lib/core/services/cast/cast_containment.dart"
+
+          # The one case with nothing to check: a tag from before the
+          # containment existed. Then there is no message to look for, and the
+          # documented rebuild path for such a tag must not fail on its absence.
+          # Anything else is checked — with the verifier from this workflow's
+          # revision, against the built tree's own message — because "the tag is
+          # old" must never become a way to replace public assets unverified.
+          if [ ! -f "$source_file" ] || ! grep -q 'static const String userMessage' "$source_file"; then
+            echo "::warning::This tag predates the Cast containment, so its artifacts carry nothing to check. See docs/release-artifact-verification.md."
             exit 0
           fi
 
-          python3 scripts/verify_release_containment.py dist/*.apk dist/*.aab
+          python3 .release-tooling/scripts/verify_release_containment.py \
+            --containment-source "$source_file" \
+            dist/*.apk dist/*.aab
 
       - name: Upload release APK
         uses: actions/upload-artifact@v7

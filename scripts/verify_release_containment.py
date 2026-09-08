@@ -54,6 +54,8 @@ Usage:
 
     python3 scripts/verify_release_containment.py dist/*.apk dist/*.aab
     python3 scripts/verify_release_containment.py --json report.json build/*.tar.gz
+    python3 .../verify_release_containment.py \
+        --containment-source lib/core/services/cast/cast_containment.dart *.apk
 
 Every artifact's SHA-256 is printed (and written to `--json`) so a release can
 record exactly which bytes were checked.
@@ -72,6 +74,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTAINMENT_SOURCE = REPO_ROOT / "lib/core/services/cast/cast_containment.dart"
+
+# The expected message must come from the tree the artifact was BUILT from, which
+# is not always the tree this script lives in: a release build checks out the tag
+# it is building, while the workflow (and this script with it) comes from the
+# revision that runs. `--containment-source` is how that caller says so.
 
 # The compiled Dart snapshot inside every Flutter release artifact. Android puts
 # one per ABI under lib/<abi>/ (an AAB nests that under base/), the Linux bundle
@@ -242,6 +249,15 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("artifacts", nargs="+", type=Path)
     parser.add_argument(
+        "--containment-source",
+        type=Path,
+        default=CONTAINMENT_SOURCE,
+        help=(
+            "cast_containment.dart of the tree the artifacts were built from "
+            "(default: this checkout's). The expected message is read from it."
+        ),
+    )
+    parser.add_argument(
         "--json",
         type=Path,
         help="Write the per-artifact record (name, size, SHA-256) here.",
@@ -249,7 +265,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     try:
-        message = containment_message(CONTAINMENT_SOURCE)
+        message = containment_message(args.containment_source)
     except VerificationError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
