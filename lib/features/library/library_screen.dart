@@ -65,6 +65,15 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   String _query = '';
   int _lastTabIndex = 0;
 
+  /// Whether the user has picked a tab themselves. The current index cannot
+  /// answer that: Songs to Albums and back leaves it at zero again, and a
+  /// restore landing after that would move them somewhere they just left.
+  bool _userChangedTab = false;
+
+  /// Set only while [_restoreTab] drives the controller, so the one code path
+  /// that handles a tab change can tell a restore from a tap.
+  bool _restoringTab = false;
+
   /// Pending debounce timer. Cancelled and restarted on every keystroke so the
   /// filter re-runs only once the user pauses typing, not on every character.
   Timer? _debounce;
@@ -85,15 +94,41 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// guard matters anyway, because a user who switched tabs in the meantime has
   /// said something more recent than the stored value.
   Future<void> _restoreTab() async {
-    final String? stored = await ref.read(libraryTabStoreProvider).read();
-    if (!mounted || stored == null) return;
+    final String? stored;
+    try {
+      stored = await ref.read(libraryTabStoreProvider).read();
+    } catch (_) {
+      // A storage or plugin failure means no remembered tab, which is the
+      // behaviour before this existed. It must not reach the zone as an
+      // uncaught async error.
+      return;
+    }
+    if (!mounted || stored == null || _userChangedTab) return;
     final int index = _tabNames.indexOf(stored);
     if (index < 0) return; // A tab that no longer exists: stay on the first.
-    if (_tabController.index != 0 || _lastTabIndex != 0) return;
-    setState(() {
-      _lastTabIndex = index;
-      _tabController.index = index;
-    });
+    if (index == _tabController.index) return;
+
+    // Driven through the controller rather than around it, so a restore clears
+    // an in-progress search exactly as any other tab change does. Assigning
+    // _lastTabIndex first would make the shared handler return early and carry
+    // a query typed in Songs into Albums.
+    _restoringTab = true;
+    _tabController.index = index;
+    _restoringTab = false;
+  }
+
+  /// Persists the current tab, swallowing a storage failure.
+  ///
+  /// Losing this preference only means the next launch opens on Songs, which is
+  /// not worth surfacing to someone who was just browsing.
+  Future<void> _persistTab() async {
+    try {
+      await ref
+          .read(libraryTabStoreProvider)
+          .write(_tabNames[_tabController.index]);
+    } catch (_) {
+      // Nothing to recover: the next launch simply opens on the first tab.
+    }
   }
 
   @override
@@ -109,6 +144,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// when entering/leaving Folders, where the catalog search field is hidden.
   void _onTabChanged() {
     if (_tabController.index == _lastTabIndex) return;
+    if (!_restoringTab) _userChangedTab = true;
     _debounce?.cancel();
     setState(() {
       _lastTabIndex = _tabController.index;
@@ -117,11 +153,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         _searchController.clear();
       }
     });
-    // Fire and forget: where the user was reading is not worth blocking a tab
-    // change on, and a failed write only means the next launch opens on Songs.
-    unawaited(
-      ref.read(libraryTabStoreProvider).write(_tabNames[_tabController.index]),
-    );
+    // A restore is replaying what is already stored, so there is nothing new to
+    // write back. Otherwise fire and forget: where the user is reading is not
+    // worth blocking a tab change on.
+    if (_restoringTab) return;
+    unawaited(_persistTab());
   }
 
   void _onQueryChanged(String value) {
