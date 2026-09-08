@@ -32,12 +32,18 @@ class _FakeFolderSource implements FolderBrowsableMusicSource {
   final List<MusicFolder> roots;
   final Map<String, MusicFolderListing> children;
 
+  /// How many times each folder id was actually asked of the "server", so a
+  /// test can tell a cache hit from a round trip.
+  final Map<String, int> folderFetches = <String, int>{};
+
   @override
   Future<List<MusicFolder>> fetchRootFolders() async => roots;
 
   @override
-  Future<MusicFolderListing> fetchFolder(String folderId) async =>
-      children[folderId] ?? MusicFolderListing.empty;
+  Future<MusicFolderListing> fetchFolder(String folderId) async {
+    folderFetches[folderId] = (folderFetches[folderId] ?? 0) + 1;
+    return children[folderId] ?? MusicFolderListing.empty;
+  }
 }
 
 /// The screen registers a [BackButtonListener] while it is inside a folder, so
@@ -135,6 +141,64 @@ void main() {
 
       expect(find.text('Music'), findsOneWidget);
       expect(find.byKey(const Key('folder_browser_header')), findsNothing);
+    });
+
+    testWidgets('walking back up does not re-ask the server (#581)',
+        (tester) async {
+      final _FakeFolderSource source = _FakeFolderSource(
+        id: 'subsonic',
+        displayName: 'Navidrome',
+        roots: const <MusicFolder>[MusicFolder(id: 'r1', name: 'Music')],
+        children: const <String, MusicFolderListing>{
+          'r1': MusicFolderListing(
+            folders: <MusicFolder>[MusicFolder(id: 'c1', name: 'Live Sets')],
+          ),
+        },
+      );
+      await _pump(tester, sources: <FolderBrowsableMusicSource>[source]);
+
+      await tester.tap(find.text('Music'));
+      await tester.pumpAndSettle();
+      expect(source.folderFetches['r1'], 1);
+
+      await tester.tap(find.byTooltip('Back to previous folder'));
+      await tester.pumpAndSettle();
+
+      // Coming back to a level that was on screen a moment ago used to re-fetch
+      // it, which is what made going up feel slow on a remote library.
+      await tester.tap(find.text('Music'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Live Sets'), findsOneWidget);
+      expect(source.folderFetches['r1'], 1);
+    });
+
+    testWidgets('pull to refresh re-reads the folder (#581)', (tester) async {
+      final _FakeFolderSource source = _FakeFolderSource(
+        id: 'subsonic',
+        displayName: 'Navidrome',
+        roots: const <MusicFolder>[MusicFolder(id: 'r1', name: 'Music')],
+        children: const <String, MusicFolderListing>{
+          'r1': MusicFolderListing(
+            folders: <MusicFolder>[MusicFolder(id: 'c1', name: 'Live Sets')],
+          ),
+        },
+      );
+      await _pump(tester, sources: <FolderBrowsableMusicSource>[source]);
+
+      await tester.tap(find.text('Music'));
+      await tester.pumpAndSettle();
+      expect(source.folderFetches['r1'], 1);
+
+      // The deliberate way past the cache, for a folder changed on the server.
+      await tester.fling(
+        find.byKey(const Key('folder_browser_contents')),
+        const Offset(0, 300),
+        1000,
+      );
+      await tester.pumpAndSettle();
+
+      expect(source.folderFetches['r1'], 2);
     });
 
     testWidgets('signing the source out returns to the roots', (tester) async {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/music_folder.dart';
@@ -50,10 +52,34 @@ final folderBrowsableSourcesProvider =
   ];
 });
 
+/// How long a fetched directory level stays cached once nothing is watching it.
+///
+/// Browsing is a walk: you open a folder, look, and come back up. Without this
+/// every step back re-asked the server for a level that was on screen seconds
+/// earlier, which is slow on a remote library and rude to a self-hosted one
+/// (#581). Bounded rather than kept for the whole session so a long browse does
+/// not hold every level it ever visited, and short enough that a folder changed
+/// on the server shows up again quickly.
+const Duration folderListingCacheDuration = Duration(minutes: 5);
+
+/// Holds this provider's value past its last listener for
+/// [folderListingCacheDuration], then lets it dispose as usual.
+///
+/// Applied only after a successful fetch: caching a failure would keep an error
+/// on screen for minutes, and the retry path invalidates anyway.
+void _cacheBriefly(Ref ref) {
+  final KeepAliveLink link = ref.keepAlive();
+  final Timer timer = Timer(folderListingCacheDuration, link.close);
+  ref.onDispose(timer.cancel);
+}
+
 /// Loads the top-level folders for one connected provider.
 final folderRootFoldersProvider = FutureProvider.autoDispose
     .family<List<MusicFolder>, String>((ref, sourceId) async {
-  return _source(ref, sourceId).fetchRootFolders();
+  final List<MusicFolder> roots =
+      await _source(ref, sourceId).fetchRootFolders();
+  _cacheBriefly(ref);
+  return roots;
 });
 
 /// Identifies one directory request without exposing provider credentials.
@@ -78,9 +104,16 @@ class FolderBrowseRequest {
 }
 
 /// Loads exactly one level of a provider's directory hierarchy.
+///
+/// Cached briefly (see [_cacheBriefly]) so walking back up a tree is instant
+/// instead of re-fetching a level the user just left. A sign-out still clears
+/// it: the source this watches disappears, which invalidates the value.
 final folderListingProvider = FutureProvider.autoDispose
     .family<MusicFolderListing, FolderBrowseRequest>((ref, request) async {
-  return _source(ref, request.sourceId).fetchFolder(request.folderId);
+  final MusicFolderListing listing =
+      await _source(ref, request.sourceId).fetchFolder(request.folderId);
+  _cacheBriefly(ref);
+  return listing;
 });
 
 FolderBrowsableMusicSource _source(Ref ref, String sourceId) {

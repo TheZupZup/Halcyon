@@ -292,33 +292,42 @@ class _FolderContents extends ConsumerWidget {
                   message: 'No child folders or playable songs were found.',
                 );
               }
-              return ListView.builder(
-                key: const Key('folder_browser_contents'),
-                itemCount: data.folders.length + data.tracks.length,
-                itemBuilder: (BuildContext context, int index) {
-                  if (index < data.folders.length) {
-                    final MusicFolder folder = data.folders[index];
-                    return ListTile(
-                      key: ValueKey<String>('folder_child_${folder.id}'),
-                      leading: const Icon(Icons.folder_outlined),
-                      title: Text(
-                        folder.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => onOpen(folder),
-                    );
-                  }
-                  final int trackIndex = index - data.folders.length;
-                  return TrackTile(
-                    key: ValueKey<String>(
-                      'folder_track_${data.tracks[trackIndex].uri}',
-                    ),
-                    tracks: data.tracks,
-                    index: trackIndex,
-                  );
+              // Pull to refresh is the way out of the cache above: the level
+              // is held for a few minutes, so a folder you just changed on the
+              // server needs a deliberate way to be re-read (#581).
+              return RefreshIndicator(
+                onRefresh: () async {
+                  ref.invalidate(folderListingProvider(request));
+                  await ref.read(folderListingProvider(request).future);
                 },
+                child: ListView.builder(
+                  key: const Key('folder_browser_contents'),
+                  itemCount: data.folders.length + data.tracks.length,
+                  itemBuilder: (BuildContext context, int index) {
+                    if (index < data.folders.length) {
+                      final MusicFolder folder = data.folders[index];
+                      return ListTile(
+                        key: ValueKey<String>('folder_child_${folder.id}'),
+                        leading: const Icon(Icons.folder_outlined),
+                        title: Text(
+                          folder.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => onOpen(folder),
+                      );
+                    }
+                    final int trackIndex = index - data.folders.length;
+                    return TrackTile(
+                      key: ValueKey<String>(
+                        'folder_track_${data.tracks[trackIndex].uri}',
+                      ),
+                      tracks: data.tracks,
+                      index: trackIndex,
+                    );
+                  },
+                ),
               );
             },
           ),
