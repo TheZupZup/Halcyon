@@ -254,6 +254,29 @@ void main() {
       expect(store.stored, 'artists');
     });
 
+    testWidgets('a restore does not hijack a swipe in progress',
+        (tester) async {
+      final _ManualLibraryTabStore store = _ManualLibraryTabStore();
+      await _pump(tester, store);
+
+      // Partway through a swipe that has not crossed the midpoint: the index
+      // has not moved yet, so nothing has marked this as a user tab change.
+      final TestGesture gesture =
+          await tester.startGesture(tester.getCenter(find.byType(TabBarView)));
+      await gesture.moveBy(const Offset(-60, 0));
+      await tester.pump();
+
+      store.completeWith('artists');
+      await tester.pump();
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      // The swipe fell short, so it belongs back on Songs. The stored tab must
+      // not have taken the wheel mid-gesture.
+      expect(_currentTab(tester), 0);
+    });
+
     testWidgets('a storage failure leaves the screen usable', (tester) async {
       await _pump(tester, _FailingLibraryTabStore());
 

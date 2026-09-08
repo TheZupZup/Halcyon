@@ -107,7 +107,17 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // Selection is a modal state: it replaces the app bar, hides the tab bar
     // and blocks swiping. Moving the tab underneath it would leave the song
     // selection bar sitting over Albums with no visible way back.
-    if (!mounted || stored == null || _userChangedTab || _selecting) return;
+    // A swipe in progress has not moved the index yet, so _userChangedTab is
+    // still false while the user is very much choosing a tab. TabController
+    // reports the drag as a non-zero offset, which is the one signal available
+    // before the gesture settles.
+    if (!mounted ||
+        stored == null ||
+        _userChangedTab ||
+        _selecting ||
+        _tabController.offset != 0) {
+      return;
+    }
     final int index = _tabNames.indexOf(stored);
     if (index < 0) return; // A tab that no longer exists: stay on the first.
     if (index == _tabController.index) return;
