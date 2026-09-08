@@ -32,7 +32,8 @@ class SettingsScreen extends StatelessWidget {
             SettingsCategoryTile(
               icon: Icons.hub_outlined,
               title: 'Connections',
-              subtitle: 'Jellyfin, Plex, Navidrome/Subsonic, local files',
+              subtitle: 'Jellyfin, Plex, Navidrome/Subsonic, local files, '
+                  'Audiobookshelf',
               onTap: () => context.push(AppRoutes.settingsConnections),
             ),
             const SizedBox(height: AppSpacing.md),

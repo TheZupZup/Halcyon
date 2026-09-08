@@ -19,6 +19,7 @@ import '../data/repositories/playlist_repository_provider.dart';
 import '../data/repositories/remote_cache_index_provider.dart';
 import '../features/player/media_artwork_providers.dart';
 import '../features/player/player_providers.dart';
+import '../features/settings/audiobookshelf/audiobookshelf_settings_controller.dart';
 import '../features/settings/jellyfin/jellyfin_settings_controller.dart';
 import '../features/settings/playback/normalize_volume_controller.dart';
 import '../features/settings/plex/plex_settings_controller.dart';
@@ -244,6 +245,9 @@ Future<ApplicationHandle> bootstrapApplication(
       container.read(jellyfinSettingsControllerProvider.notifier).ensureLoaded,
       container.read(subsonicSettingsControllerProvider.notifier).ensureLoaded,
       container.read(plexSettingsControllerProvider.notifier).ensureLoaded,
+      container
+          .read(audiobookshelfSettingsControllerProvider.notifier)
+          .ensureLoaded,
     ]) {
       try {
         await ensureLoaded();
