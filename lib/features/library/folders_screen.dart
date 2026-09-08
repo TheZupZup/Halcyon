@@ -123,7 +123,7 @@ class _FoldersScreenState extends ConsumerState<FoldersScreen> {
   }
 }
 
-class _FolderRoots extends StatelessWidget {
+class _FolderRoots extends ConsumerWidget {
   const _FolderRoots({required this.sources, required this.onOpen});
 
   final List<FolderBrowsableMusicSource> sources;
@@ -131,7 +131,7 @@ class _FolderRoots extends StatelessWidget {
       onOpen;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     if (sources.isEmpty) {
       return const EmptyState(
         icon: Icons.folder_off_outlined,
@@ -141,19 +141,51 @@ class _FolderRoots extends StatelessWidget {
       );
     }
 
-    return ListView(
-      key: const Key('folder_browser_roots'),
-      padding: const EdgeInsets.only(bottom: AppSpacing.xl),
-      children: <Widget>[
-        for (final FolderBrowsableMusicSource source in sources)
-          _SourceRootsSection(
-            key: ValueKey<String>('folder_source_${source.id}'),
-            source: source,
-            onOpen: (folder) => onOpen(source, folder),
-          ),
-      ],
+    // Roots are cached like any other level, so they need the same deliberate
+    // way past it: a top-level folder added or renamed on the server would
+    // otherwise stay hidden behind the cached list. Always-scrollable for the
+    // usual reason, a couple of servers do not fill a screen.
+    return RefreshIndicator(
+      onRefresh: () => _refreshRoots(ref, sources),
+      child: ListView(
+        key: const Key('folder_browser_roots'),
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.only(bottom: AppSpacing.xl),
+        children: <Widget>[
+          for (final FolderBrowsableMusicSource source in sources)
+            _SourceRootsSection(
+              key: ValueKey<String>('folder_source_${source.id}'),
+              source: source,
+              onOpen: (folder) => onOpen(source, folder),
+            ),
+        ],
+      ),
     );
   }
+}
+
+/// Re-reads every connected source's root list for one pull-to-refresh.
+///
+/// Failures are swallowed for the same reason as [_refresh]: each section shows
+/// its own error state, and a gesture-driven future that rejects would surface
+/// the same failure a second time as an unhandled async error. One slow or
+/// broken server must not stop the others from refreshing, so these are awaited
+/// together rather than in sequence.
+Future<void> _refreshRoots(
+  WidgetRef ref,
+  List<FolderBrowsableMusicSource> sources,
+) async {
+  await Future.wait<void>(<Future<void>>[
+    for (final FolderBrowsableMusicSource source in sources)
+      () async {
+        ref.invalidate(folderRootFoldersProvider(source.id));
+        try {
+          await ref.read(folderRootFoldersProvider(source.id).future);
+        } catch (_) {
+          // Rendered by the section's own error state.
+        }
+      }(),
+  ]);
 }
 
 class _SourceRootsSection extends ConsumerWidget {

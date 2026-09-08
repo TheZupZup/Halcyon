@@ -36,8 +36,14 @@ class _FakeFolderSource implements FolderBrowsableMusicSource {
   /// test can tell a cache hit from a round trip.
   final Map<String, int> folderFetches = <String, int>{};
 
+  /// How many times the root list was asked of the "server".
+  int rootFetches = 0;
+
   @override
-  Future<List<MusicFolder>> fetchRootFolders() async => roots;
+  Future<List<MusicFolder>> fetchRootFolders() async {
+    rootFetches++;
+    return roots;
+  }
 
   /// When true, the next fetchFolder throws, standing in for a server that
   /// dropped mid-refresh.
@@ -301,6 +307,29 @@ void main() {
       // must not also surface the same failure as an unhandled async error,
       // which the test binding would report as a failure.
       expect(find.text('Could not open this folder.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('the root list can be pulled to refresh too (#581)',
+        (tester) async {
+      final _FakeFolderSource source = _FakeFolderSource(
+        id: 'subsonic',
+        displayName: 'Navidrome',
+        roots: const <MusicFolder>[MusicFolder(id: 'r1', name: 'Music')],
+      );
+      await _pump(tester, sources: <FolderBrowsableMusicSource>[source]);
+      expect(source.rootFetches, 1);
+
+      // Roots are cached like any other level, so a top-level folder added on
+      // the server needs the same deliberate way past it.
+      await tester.fling(
+        find.byKey(const Key('folder_browser_roots')),
+        const Offset(0, 300),
+        1000,
+      );
+      await tester.pumpAndSettle();
+
+      expect(source.rootFetches, 2);
       expect(tester.takeException(), isNull);
     });
 
