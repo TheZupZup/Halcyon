@@ -1,0 +1,4 @@
+Linthra 0.2.6
+
+- Casting is temporarily turned off while a security fix is finished. Local playback, downloads, and your servers are unaffected, and your queue and settings are unchanged.
+- The cast controls now say casting is temporarily unavailable instead of offering devices.
