@@ -121,18 +121,30 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     _programmaticTabChange = false;
   }
 
+  /// Queues the tab writes so they cannot overtake each other.
+  ///
+  /// Switching Albums then Artists faster than the store can write would
+  /// otherwise leave two writes racing, and a slow first one landing last would
+  /// store the tab the user had already left. Each queued write also reads the
+  /// index when it *runs* rather than when it was queued, so the latest tab
+  /// wins even if several pile up.
+  Future<void> _persistQueue = Future<void>.value();
+
   /// Persists the current tab, swallowing a storage failure.
   ///
   /// Losing this preference only means the next launch opens on Songs, which is
   /// not worth surfacing to someone who was just browsing.
-  Future<void> _persistTab() async {
-    try {
-      await ref
-          .read(libraryTabStoreProvider)
-          .write(_tabNames[_tabController.index]);
-    } catch (_) {
-      // Nothing to recover: the next launch simply opens on the first tab.
-    }
+  void _persistTab() {
+    _persistQueue = _persistQueue.then((_) async {
+      if (!mounted) return;
+      try {
+        await ref
+            .read(libraryTabStoreProvider)
+            .write(_tabNames[_tabController.index]);
+      } catch (_) {
+        // Nothing to recover: the next launch simply opens on the first tab.
+      }
+    });
   }
 
   @override
@@ -166,7 +178,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // write back. Otherwise fire and forget: where the user is reading is not
     // worth blocking a tab change on.
     if (_programmaticTabChange) return;
-    unawaited(_persistTab());
+    _persistTab();
   }
 
   void _onQueryChanged(String value) {

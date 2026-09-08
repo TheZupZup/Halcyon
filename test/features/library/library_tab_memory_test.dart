@@ -47,6 +47,25 @@ class _ManualLibraryTabStore implements LibraryTabStore {
   Future<void> write(String? tabName) async {}
 }
 
+/// A store whose first write is slow and later ones instant, the shape that
+/// lets a stale write land last when writes are allowed to race.
+class _RacyWriteLibraryTabStore implements LibraryTabStore {
+  int _writes = 0;
+
+  /// The value left in the store once everything has settled.
+  String? stored;
+
+  @override
+  Future<String?> read() async => null;
+
+  @override
+  Future<void> write(String? tabName) async {
+    final bool first = _writes++ == 0;
+    if (first) await Future<void>.delayed(const Duration(milliseconds: 300));
+    stored = tabName;
+  }
+}
+
 /// A store that fails the way a missing platform plugin or a full disk would.
 class _FailingLibraryTabStore implements LibraryTabStore {
   @override
@@ -217,6 +236,22 @@ void main() {
       await tester.tap(find.byTooltip('Cancel selection'));
       await tester.pumpAndSettle();
       expect(_currentTab(tester), 0);
+    });
+
+    testWidgets('the last tab wins when writes overlap', (tester) async {
+      final _RacyWriteLibraryTabStore store = _RacyWriteLibraryTabStore();
+      await _pump(tester, store);
+
+      // Faster than the store can write: two writes in flight at once.
+      await tester.tap(find.text('Albums'));
+      await tester.pump();
+      await tester.tap(find.text('Artists'));
+      await tester.pumpAndSettle(const Duration(seconds: 1));
+
+      // Letting them race would land the slow first write last and store the
+      // tab the user had already left.
+      expect(_currentTab(tester), 2);
+      expect(store.stored, 'artists');
     });
 
     testWidgets('a storage failure leaves the screen usable', (tester) async {
