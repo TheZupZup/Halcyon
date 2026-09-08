@@ -6,6 +6,7 @@ import 'package:linthra/core/models/cast_playback_status.dart';
 import 'package:linthra/core/models/cast_state.dart';
 import 'package:linthra/core/models/cast_volume.dart';
 import 'package:linthra/core/services/cast/cast_containment.dart';
+import 'package:linthra/core/services/cast/cast_receiver_pinning.dart';
 import 'package:linthra/core/services/cast/cast_receiver_trust.dart';
 import 'package:linthra/core/services/cast/cast_transport.dart';
 import 'package:linthra/core/services/cast/trust_gated_cast_transport.dart';
@@ -37,13 +38,17 @@ void main() {
   TrustGatedCastTransport gate(
     _FakeTransport transport, {
     CastReceiverAuthenticator? authenticator,
+    CastReceiverPinStore? pins,
     Duration timeout = const Duration(milliseconds: 50),
+    Duration pinTimeout = const Duration(milliseconds: 50),
     Duration cleanupTimeout = const Duration(milliseconds: 50),
   }) {
     return TrustGatedCastTransport(
       delegate: transport,
       authenticator: authenticator ?? _AcceptingAuthenticator(),
+      pins: pins,
       authenticationTimeout: timeout,
+      pinTimeout: pinTimeout,
       cleanupTimeout: cleanupTimeout,
     );
   }
@@ -529,6 +534,249 @@ void main() {
     });
   });
 
+  group('the receiver has to stay the same device', () {
+    // Cast device authentication proves the peer holds a genuine receiver
+    // certificate. It does not say which genuine receiver, and discovery, being
+    // a friendly name on a LAN, says nothing at all. Pinning is what turns "a
+    // real Cast device" into "the one this entry has always been".
+
+    test('the first receiver a device presents is remembered', () async {
+      final _FakeTransport transport = _FakeTransport();
+      final InMemoryCastReceiverPinStore pins = InMemoryCastReceiverPinStore();
+
+      await gate(transport, pins: pins).connect(speaker);
+
+      expect(pins.pins[speaker.id], 'sha256aabb');
+    });
+
+    test('the same receiver connects again', () async {
+      final InMemoryCastReceiverPinStore pins = InMemoryCastReceiverPinStore();
+
+      await gate(_FakeTransport(), pins: pins).connect(speaker);
+      final _FakeTransport again = _FakeTransport();
+      final CastSessionHandle session =
+          await gate(again, pins: pins).connect(speaker);
+      await session.loadMedia(media);
+
+      expect(again.session.loaded, <CastMedia>[media]);
+    });
+
+    test('a different receiver on the same entry is refused', () async {
+      final InMemoryCastReceiverPinStore pins = InMemoryCastReceiverPinStore();
+      await gate(_FakeTransport(), pins: pins).connect(speaker);
+
+      final _FakeTransport impostor = _FakeTransport();
+      await expectLater(
+        gate(
+          impostor,
+          pins: pins,
+          authenticator: _AcceptingAuthenticator(fingerprint: 'sha256:cc:dd'),
+        ).connect(speaker),
+        throwsA(isA<CastReceiverTrustException>().having(
+          (CastReceiverTrustException e) => e.kind,
+          'kind',
+          CastTrustFailureKind.changedReceiver,
+        )),
+      );
+
+      expect(impostor.session.closed, isTrue);
+      expect(impostor.session.loaded, isEmpty);
+      // The pin is evidence, not a cache: a device that failed the check does
+      // not get to replace what it failed against.
+      expect(pins.pins[speaker.id], 'sha256aabb');
+    });
+
+    test('the refusal says what the user can do, and nothing else', () async {
+      final InMemoryCastReceiverPinStore pins = InMemoryCastReceiverPinStore();
+      await gate(_FakeTransport(), pins: pins).connect(speaker);
+
+      Object? thrown;
+      try {
+        await gate(
+          _FakeTransport(),
+          pins: pins,
+          authenticator: _AcceptingAuthenticator(fingerprint: 'sha256:cc:dd'),
+        ).connect(speaker);
+      } catch (error) {
+        thrown = error;
+      }
+
+      final String message = (thrown! as CastReceiverTrustException).message;
+      expect(message, contains('forget it'));
+      expect(message, isNot(contains('sha256')));
+      expect(message, isNot(contains('aa:bb')));
+      expect(message, isNot(contains('cc:dd')));
+    });
+
+    test('forgetting a device lets the next receiver pin', () async {
+      final InMemoryCastReceiverPinStore pins = InMemoryCastReceiverPinStore();
+      await gate(_FakeTransport(), pins: pins).connect(speaker);
+
+      // The replaced-my-speaker path, and the only one: deliberate, from the
+      // user, never something the trust check does to recover from a mismatch.
+      await pins.forget(speaker.id);
+      final _FakeTransport replacement = _FakeTransport();
+      await gate(
+        replacement,
+        pins: pins,
+        authenticator: _AcceptingAuthenticator(fingerprint: 'sha256:cc:dd'),
+      ).connect(speaker);
+
+      expect(pins.pins[speaker.id], 'sha256ccdd');
+      expect(replacement.session.closed, isFalse);
+    });
+
+    test('how a fingerprint is written does not make it another device',
+        () async {
+      final InMemoryCastReceiverPinStore pins = InMemoryCastReceiverPinStore();
+      await gate(_FakeTransport(), pins: pins).connect(speaker);
+
+      final _FakeTransport again = _FakeTransport();
+      await gate(
+        again,
+        pins: pins,
+        authenticator: _AcceptingAuthenticator(fingerprint: 'SHA256 AA-BB'),
+      ).connect(speaker);
+
+      expect(again.session.closed, isFalse);
+    });
+
+    test('each device is pinned on its own', () async {
+      final InMemoryCastReceiverPinStore pins = InMemoryCastReceiverPinStore();
+      await gate(_FakeTransport(), pins: pins).connect(speaker);
+
+      final _FakeTransport bedroom = _FakeTransport();
+      await gate(
+        bedroom,
+        pins: pins,
+        authenticator: _AcceptingAuthenticator(fingerprint: 'sha256:cc:dd'),
+      ).connect(other);
+
+      expect(pins.pins[speaker.id], 'sha256aabb');
+      expect(pins.pins[other.id], 'sha256ccdd');
+      expect(bedroom.session.closed, isFalse);
+    });
+
+    test('an identity with nothing to pin is refused', () async {
+      // A fingerprint that normalises to nothing would match every receiver
+      // forever, so it fails here rather than being written down.
+      final _FakeTransport transport = _FakeTransport();
+      final InMemoryCastReceiverPinStore pins = InMemoryCastReceiverPinStore();
+
+      await expectLater(
+        gate(
+          transport,
+          pins: pins,
+          authenticator: _AcceptingAuthenticator(fingerprint: ' :-: '),
+        ).connect(speaker),
+        throwsA(isA<CastReceiverTrustException>().having(
+          (CastReceiverTrustException e) => e.kind,
+          'kind',
+          CastTrustFailureKind.rejected,
+        )),
+      );
+
+      expect(pins.pins, isEmpty);
+      expect(transport.session.closed, isTrue);
+    });
+
+    test('a store that cannot be read refuses instead of re-pinning', () async {
+      // Otherwise breaking the store would be a way to erase the check.
+      final _FakeTransport transport = _FakeTransport();
+
+      await expectLater(
+        gate(transport, pins: _BrokenPinStore(onRead: true)).connect(speaker),
+        throwsA(isA<CastReceiverTrustException>().having(
+          (CastReceiverTrustException e) => e.kind,
+          'kind',
+          CastTrustFailureKind.incomplete,
+        )),
+      );
+
+      expect(transport.session.closed, isTrue);
+      expect(transport.session.loaded, isEmpty);
+    });
+
+    test('a store that cannot be written refuses too', () async {
+      // Handing out a session that was never recorded would leave the entry
+      // unpinned, so whichever receiver answered next would become the pin.
+      final _FakeTransport transport = _FakeTransport();
+
+      await expectLater(
+        gate(transport, pins: _BrokenPinStore(onWrite: true)).connect(speaker),
+        throwsA(isA<CastReceiverTrustException>()),
+      );
+
+      expect(transport.session.closed, isTrue);
+      expect(transport.session.loaded, isEmpty);
+    });
+
+    test('a store that never answers expires into a refusal', () async {
+      final _FakeTransport transport = _FakeTransport();
+
+      await expectLater(
+        gate(
+          transport,
+          pins: _HangingPinStore(),
+          pinTimeout: const Duration(milliseconds: 10),
+        ).connect(speaker),
+        throwsA(isA<CastReceiverTrustException>().having(
+          (CastReceiverTrustException e) => e.kind,
+          'kind',
+          CastTrustFailureKind.incomplete,
+        )),
+      );
+
+      expect(transport.session.closed, isTrue);
+    });
+
+    test('a write that did not take is not a pin', () async {
+      // A store that accepts a write and keeps nothing would leave the entry
+      // unpinned while the app believed it was pinned, so the next receiver to
+      // answer would become the pin.
+      final _FakeTransport transport = _FakeTransport();
+
+      await expectLater(
+        gate(transport, pins: _ForgetfulPinStore()).connect(speaker),
+        throwsA(isA<CastReceiverTrustException>().having(
+          (CastReceiverTrustException e) => e.kind,
+          'kind',
+          CastTrustFailureKind.incomplete,
+        )),
+      );
+
+      expect(transport.session.closed, isTrue);
+    });
+
+    test('losing the race to pin is a refusal, not a pass', () async {
+      // Two connections to the same entry can reach the empty pin together. The
+      // store keeps whichever arrived first, so the other one has to notice it
+      // is not the receiver that got recorded.
+      final _FakeTransport transport = _FakeTransport();
+
+      await expectLater(
+        gate(transport, pins: _RacedPinStore('sha256ccdd')).connect(speaker),
+        throwsA(isA<CastReceiverTrustException>().having(
+          (CastReceiverTrustException e) => e.kind,
+          'kind',
+          CastTrustFailureKind.changedReceiver,
+        )),
+      );
+
+      expect(transport.session.closed, isTrue);
+      expect(transport.session.loaded, isEmpty);
+    });
+
+    test('a recorded pin is never quietly replaced', () async {
+      final InMemoryCastReceiverPinStore pins = InMemoryCastReceiverPinStore();
+
+      await pins.remember(speaker.id, 'sha256:aa:bb');
+      await pins.remember(speaker.id, 'sha256:cc:dd');
+
+      expect(pins.pins[speaker.id], 'sha256:aa:bb');
+    });
+  });
+
   group('CastReceiverIdentity', () {
     test('is bound to the device *and* the connection it was proved on', () {
       final _FakeHandle session = _FakeHandle();
@@ -729,9 +977,18 @@ class _FakeHandle implements CastSessionHandle {
 /// [as] / over [over] to model a device answering for another one, or a proof
 /// made on a different connection.
 class _AcceptingAuthenticator implements CastReceiverAuthenticator {
-  _AcceptingAuthenticator({this.as, this.over, this.after});
+  _AcceptingAuthenticator({
+    this.as,
+    this.over,
+    this.after,
+    this.fingerprint = 'sha256:aa:bb',
+  });
 
   final CastDevice? as;
+
+  /// The digest the proof carries, so a test can play the same receiver twice
+  /// or a different one the second time.
+  final String fingerprint;
 
   /// When set, the check takes this long, so a test can be sure the handshake
   /// observed the session's readiness before it completes.
@@ -754,7 +1011,7 @@ class _AcceptingAuthenticator implements CastReceiverAuthenticator {
     return CastReceiverIdentity(
       deviceId: (as ?? device).id,
       connection: over ?? session,
-      fingerprint: 'sha256:aa:bb',
+      fingerprint: fingerprint,
     );
   }
 }
@@ -827,4 +1084,77 @@ class _HangingAuthenticator implements CastReceiverAuthenticator {
     CastSessionHandle session,
   ) =>
       Completer<CastReceiverIdentity>().future;
+}
+
+/// A pin store that fails the way a real one can: a corrupt file, a database
+/// that will not open, a write that runs out of room.
+class _BrokenPinStore implements CastReceiverPinStore {
+  _BrokenPinStore({this.onRead = false, this.onWrite = false});
+
+  final bool onRead;
+  final bool onWrite;
+
+  @override
+  Future<String?> pinFor(String deviceId) async {
+    if (onRead) throw StateError('pin store unreadable');
+    return null;
+  }
+
+  @override
+  Future<void> remember(String deviceId, String fingerprint) async {
+    if (onWrite) throw StateError('pin store unwritable');
+  }
+
+  @override
+  Future<void> forget(String deviceId) async {}
+}
+
+/// A pin store that never answers, so the refusal has to come from the clock.
+class _HangingPinStore implements CastReceiverPinStore {
+  @override
+  Future<String?> pinFor(String deviceId) => Completer<String?>().future;
+
+  @override
+  Future<void> remember(String deviceId, String fingerprint) =>
+      Completer<void>().future;
+
+  @override
+  Future<void> forget(String deviceId) async {}
+}
+
+/// A store that accepts a write and keeps nothing.
+class _ForgetfulPinStore implements CastReceiverPinStore {
+  @override
+  Future<String?> pinFor(String deviceId) async => null;
+
+  @override
+  Future<void> remember(String deviceId, String fingerprint) async {}
+
+  @override
+  Future<void> forget(String deviceId) async {}
+}
+
+/// A store that looks empty, and by the time the write lands holds somebody
+/// else's fingerprint: the shape of two connections pinning the same entry at
+/// once, with the contract's refusal to overwrite deciding the winner.
+class _RacedPinStore implements CastReceiverPinStore {
+  _RacedPinStore(this.winner);
+
+  final String winner;
+  bool _read = false;
+
+  @override
+  Future<String?> pinFor(String deviceId) async {
+    if (!_read) {
+      _read = true;
+      return null;
+    }
+    return winner;
+  }
+
+  @override
+  Future<void> remember(String deviceId, String fingerprint) async {}
+
+  @override
+  Future<void> forget(String deviceId) async {}
 }

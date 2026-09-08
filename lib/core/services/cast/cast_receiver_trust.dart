@@ -23,6 +23,14 @@ enum CastTrustFailureKind {
   /// handoff must not survive.
   identityMismatch,
 
+  /// The receiver proved a genuine identity, and it is not the one this device
+  /// presented last time. Authentication says "a real Cast receiver", never "the
+  /// real Cast receiver you meant": a second genuine device answering to a
+  /// familiar name passes the handshake honestly. This is the one outcome a user
+  /// can clear themselves, by forgetting the device, so it is worth telling
+  /// apart from a mismatch the app caught on its own.
+  changedReceiver,
+
   /// Authentication never finished: the session ended underneath it, the user
   /// moved on, or it ran out of time. An unfinished check is a failed check.
   incomplete,

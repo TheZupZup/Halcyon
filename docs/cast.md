@@ -171,7 +171,11 @@ an additional layer, not a substitute for it.
 The trust model, the contract already in the tree (`CastReceiverAuthenticator`
 and the fail-closed `TrustGatedCastTransport`), the implementation options and
 the test matrix are in
-[cast-receiver-trust.md](cast-receiver-trust.md). What a handoff delegates to a
+[cast-receiver-trust.md](cast-receiver-trust.md), and the concrete design for
+what a real receiver check would have to do (the Cast device-authentication
+exchange, the pinned trust anchors, per-device pinning, and where the
+cryptography would come from) is in
+[cast-hardened-design.md](cast-hardened-design.md). What a handoff delegates to a
 receiver, per server, is in [cast-media-access.md](cast-media-access.md).
 
 The reviewed restoration updates `CastContainment`, the production wiring, the
