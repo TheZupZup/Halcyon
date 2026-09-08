@@ -7,6 +7,7 @@ import 'package:linthra/core/models/cast_state.dart';
 import 'package:linthra/core/models/cast_volume.dart';
 import 'package:linthra/core/models/playback_state.dart';
 import 'package:linthra/core/models/track.dart';
+import 'package:linthra/core/services/cast/cast_media_access.dart';
 import 'package:linthra/core/services/cast/cast_media_resolver.dart';
 import 'package:linthra/core/services/cast/cast_transport.dart';
 import 'package:linthra/core/services/cast/default_cast_service.dart';
@@ -140,6 +141,10 @@ class _FakeResolver implements CastMediaResolver {
 
   @override
   bool canCast(Track track) => castable;
+
+  @override
+  CastMediaAccess accessFor(Track track) =>
+      castable ? CastMediaAccess.undeclared : CastMediaAccess.none;
 
   @override
   Future<CastMedia> resolve(Track track) async {

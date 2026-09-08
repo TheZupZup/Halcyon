@@ -1,5 +1,6 @@
 import '../../models/cast_media.dart';
 import '../../models/track.dart';
+import 'cast_media_access.dart';
 import 'cast_media_resolver.dart';
 
 /// A [CastMediaResolver] that delegates to the first member able to cast a
@@ -19,6 +20,17 @@ class RoutingCastMediaResolver implements CastMediaResolver {
   @override
   bool canCast(Track track) =>
       _resolvers.any((CastMediaResolver r) => r.canCast(track));
+
+  /// The delegation of the member that would actually cast [track], so routing
+  /// never averages two providers into one misleading answer. A track no member
+  /// can cast delegates nothing.
+  @override
+  CastMediaAccess accessFor(Track track) {
+    for (final CastMediaResolver resolver in _resolvers) {
+      if (resolver.canCast(track)) return resolver.accessFor(track);
+    }
+    return CastMediaAccess.none;
+  }
 
   @override
   Future<CastMedia> resolve(Track track) async {
