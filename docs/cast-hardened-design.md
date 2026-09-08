@@ -229,9 +229,12 @@ first time it is used, and required to match every time after
 - **A mismatch never overwrites.** Replacing a pin is `forget()`, behind a
   deliberate user action, never something the trust path does to recover.
 - **An empty fingerprint is a refusal**, not a pin that matches everything.
-- **Formatting is not a security decision.** Case and separators are normalised
-  before comparing, so a cosmetic change in an authenticator cannot read as a
-  swapped device.
+- **Formatting is not a security decision.** Case, colons and whitespace are
+  normalised before comparing, so a cosmetic change in an authenticator cannot
+  read as a swapped device. Deliberately not `-` or `_`: those are digits of a
+  base64url digest, and dropping them could make two different fingerprints
+  compare equal. Anything outside that list fails the comparison, which is a
+  refusal the user can see.
 
 The user-facing half is a distinct failure kind
 (`CastTrustFailureKind.changedReceiver`) with its own message, because unlike

@@ -60,8 +60,8 @@ class InMemoryCastReceiverPinStore implements CastReceiverPinStore {
 
   final Map<String, String> _pins = <String, String>{};
 
-  /// What is currently remembered, for tests and diagnostics. Fingerprints are
-  /// public material, so this leaks nothing.
+  /// What is currently remembered, so a test can show what was pinned.
+  /// Fingerprints are public material, so this leaks nothing.
   @visibleForTesting
   Map<String, String> get pins => Map<String, String>.unmodifiable(_pins);
 
@@ -85,13 +85,17 @@ class InMemoryCastReceiverPinStore implements CastReceiverPinStore {
 /// Puts a certificate fingerprint in one shape so that formatting can never
 /// decide a security question.
 ///
-/// The same digest is written `AB:CD:EF`, `ab-cd-ef` or `ab cd ef` depending on
-/// who printed it. Comparing those literally would make a cosmetic change in an
-/// authenticator read as a swapped device, and (the direction that actually
-/// costs something) would let one device look like two, so a mismatch would
-/// stop being noticeable. Only separators and case are removed: every character
-/// that carries meaning, the algorithm prefix included, is kept, so two
-/// fingerprints that differ in substance still differ here.
+/// The same digest is written `AB:CD:EF`, `ab:cd:ef` or `ab cd ef` depending on
+/// who printed it, and comparing those literally would make a cosmetic change in
+/// an authenticator read as a swapped device. Only case and the two characters
+/// used to separate a printed fingerprint, the colon and whitespace, are
+/// removed.
+///
+/// Deliberately not `-` or `_`, tempting as they look: those are digits of a
+/// base64url digest, and dropping them could make two different fingerprints
+/// compare equal. Everything left out of this list fails the comparison, which
+/// is a refusal the user can see, and refusing a fingerprint written in an
+/// unexpected shape is the safe direction to be wrong in.
 String normalizeCastFingerprint(String fingerprint) {
-  return fingerprint.toLowerCase().replaceAll(RegExp(r'[\s:_-]'), '');
+  return fingerprint.toLowerCase().replaceAll(RegExp(r'[\s:]'), '');
 }

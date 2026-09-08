@@ -635,10 +635,39 @@ void main() {
       await gate(
         again,
         pins: pins,
-        authenticator: _AcceptingAuthenticator(fingerprint: 'SHA256 AA-BB'),
+        authenticator: _AcceptingAuthenticator(fingerprint: '  SHA256: AA:BB '),
       ).connect(speaker);
 
       expect(again.session.closed, isFalse);
+    });
+
+    test('a base64url digest keeps every character that carries meaning',
+        () async {
+      // Normalising drops colons and whitespace, never `-` or `_`: those are
+      // digits of a base64url digest, and dropping them would let two different
+      // fingerprints compare equal.
+      final InMemoryCastReceiverPinStore pins = InMemoryCastReceiverPinStore();
+      await gate(
+        _FakeTransport(),
+        pins: pins,
+        authenticator: _AcceptingAuthenticator(fingerprint: 'ab-cd_ef'),
+      ).connect(speaker);
+
+      final _FakeTransport impostor = _FakeTransport();
+      await expectLater(
+        gate(
+          impostor,
+          pins: pins,
+          authenticator: _AcceptingAuthenticator(fingerprint: 'abcdef'),
+        ).connect(speaker),
+        throwsA(isA<CastReceiverTrustException>().having(
+          (CastReceiverTrustException e) => e.kind,
+          'kind',
+          CastTrustFailureKind.changedReceiver,
+        )),
+      );
+
+      expect(impostor.session.closed, isTrue);
     });
 
     test('each device is pinned on its own', () async {
@@ -667,7 +696,7 @@ void main() {
         gate(
           transport,
           pins: pins,
-          authenticator: _AcceptingAuthenticator(fingerprint: ' :-: '),
+          authenticator: _AcceptingAuthenticator(fingerprint: ' :: '),
         ).connect(speaker),
         throwsA(isA<CastReceiverTrustException>().having(
           (CastReceiverTrustException e) => e.kind,
