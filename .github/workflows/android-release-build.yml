@@ -471,6 +471,19 @@ jobs:
 
           echo "Verified: all APK versions match the tag-derived version."
 
+      # Casting is withheld from shipped builds while a reported security issue
+      # is resolved (see lib/core/services/cast/cast_containment.dart). The
+      # source tripwire and the containment tests both run against the tree; this
+      # reads the compiled Dart inside the artifacts this job is about to upload,
+      # so a build that lost containment somewhere between the checkout and the
+      # APK never becomes a Release asset. It also prints each artifact's SHA-256
+      # for the release record. Fails closed — see the script's docstring for
+      # what it can and cannot see.
+      - name: Verify the built artifacts carry the Cast containment
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_release_containment.py dist/*.apk dist/*.aab
+
       - name: Upload release APK
         uses: actions/upload-artifact@v7
         with:

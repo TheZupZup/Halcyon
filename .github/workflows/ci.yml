@@ -100,6 +100,16 @@ jobs:
       - name: Check cast containment markers
         run: python3 scripts/check_cast_containment.py
 
+      # The artifact-level twin of the tripwire above: scripts/
+      # verify_release_containment.py reads the compiled Dart inside a built
+      # APK/AAB/tarball and refuses an artifact that does not look contained.
+      # The release workflows run it on the real artifacts; this runs its unit
+      # tests on synthetic ones, so a change that makes the verifier stop
+      # catching an uncontained build is caught here rather than at release
+      # time. Local twin: `python3 test/tooling/verify_release_containment_test.py`.
+      - name: Test the release artifact verifier
+        run: python3 test/tooling/verify_release_containment_test.py
+
   release-bump-guard:
     name: Release bump touches only version files
     runs-on: ubuntu-latest
