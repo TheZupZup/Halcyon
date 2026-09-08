@@ -4,6 +4,7 @@ name: CI
 # main. Four independent jobs run in parallel:
 #   * flutter             — format, analyze, test, lockfile-enforced pub get.
 #   * secret-scan         — offline scan for committed secrets / private data.
+#   * cast-containment    — tripwire on the Cast containment's source markers.
 #   * release-bump-guard  — release/* PRs only: the bump must be version-only.
 #   * dependency-guard    — deps/* PRs only: the update must be lockfile-only.
 #   * toolchain-guard     — toolchain/flutter-sdk only: the bump must be
@@ -76,6 +77,28 @@ jobs:
       # `./scripts/check_secrets.sh` (also wired into scripts/verify_android.sh).
       - name: Scan for secrets and private data
         run: ./scripts/check_secrets.sh
+
+  cast-containment:
+    name: Cast containment markers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Pure python, no toolchain: greps for the markers of the three layers
+      # that keep casting out of production builds (the constant, the production
+      # wiring, the transport's own refusals), because the change that quietly
+      # restores casting is exactly the one nobody labels as such.
+      #
+      # It is a tripwire, not proof — it matches source patterns in four known
+      # files and cannot see a bypass that leaves those patterns intact. The
+      # runtime evidence is in the Flutter checks job above
+      # (test/app/production_cast_containment_test.dart and
+      # test/core/services/cast/cast_containment_test.dart); the script's own
+      # limitations are documented in its docstring. Local twin:
+      # `python3 scripts/check_cast_containment.py`.
+      - name: Check cast containment markers
+        run: python3 scripts/check_cast_containment.py
 
   release-bump-guard:
     name: Release bump touches only version files

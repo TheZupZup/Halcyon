@@ -7,6 +7,7 @@ import '../../models/cast_playback_status.dart';
 import '../../models/cast_state.dart';
 import '../../models/cast_volume.dart';
 import '../../models/playback_state.dart';
+import 'cast_containment.dart';
 import 'cast_load_message.dart';
 import 'cast_transport.dart';
 
@@ -21,6 +22,14 @@ import 'cast_transport.dart';
 /// [DefaultCastService] (and is unit-tested there); this adapter only does I/O,
 /// so it is verified by static analysis and on-device testing rather than unit
 /// tests, which can't open real sockets.
+///
+/// **Contained.** While [CastContainment.isActive] every entry point here fails
+/// closed. The check is deliberately here, in the layer that opens the socket,
+/// rather than only in the provider wiring: restoring the provider by itself, or
+/// injecting this transport from anywhere else, still cannot reach a receiver.
+/// These throws are unreachable in shipped builds (production binds
+/// [UnavailableCastService]); reaching one means the wiring regressed, which is
+/// why it is an [Error] and not a state the UI renders. See [CastContainment].
 class ChromecastCastTransport implements CastTransport {
   /// The published "Default Media Receiver" app id — a generic player that
   /// streams a media URL with no custom receiver app to host.
@@ -32,6 +41,7 @@ class ChromecastCastTransport implements CastTransport {
 
   @override
   Future<List<CastDevice>> discover(Duration timeout) async {
+    if (CastContainment.isActive) throw CastContainmentError('discovery');
     final List<cast.CastDevice> found =
         await cast.CastDiscoveryService().search(timeout: timeout);
     _devices
@@ -44,6 +54,7 @@ class ChromecastCastTransport implements CastTransport {
 
   @override
   Future<CastSessionHandle> connect(CastDevice device) async {
+    if (CastContainment.isActive) throw CastContainmentError('connecting');
     final cast.CastDevice? target = _devices[device.id];
     if (target == null) {
       throw StateError('Unknown cast device ${device.id}; re-run discovery.');
@@ -126,6 +137,10 @@ class _ChromecastSessionHandle implements CastSessionHandle {
 
   @override
   Future<void> loadMedia(CastMedia media) async {
+    // The last of the three containment layers, checked before anything is
+    // built or sent: a session that reached this point while contained is given
+    // nothing at all.
+    if (CastContainment.isActive) throw CastContainmentError('a media handoff');
     // A LOAD starts a brand-new media session on the receiver, which mints a
     // fresh mediaSessionId and reports the new track's own duration. Forget the
     // previous track's session id and duration so a poll between this LOAD and

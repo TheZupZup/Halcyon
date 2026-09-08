@@ -78,6 +78,8 @@ List<Override> productionApplicationOverrides({
     platformLauncherIconServiceOverride,
     platformShareServiceOverride,
     lyricsServiceOverride,
-    chromecastCastServiceOverride,
+    // Casting is withheld from production builds by the security
+    // containment; see [CastContainment].
+    containedCastServiceOverride,
   ];
 }

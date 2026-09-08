@@ -171,8 +171,31 @@ playback.
 
 ## 4. Cast / Chromecast
 
-Run the end-to-end pass in this order (a streamed track is required — local
-files can't cast):
+**Casting is currently contained** (see [cast.md](cast.md#temporary-containment)),
+so a shipped build has one pass, and it is the one that matters for the security
+maintenance release. Run it on a **real Android device and a real iPhone**, with a
+Chromecast powered on and on the same Wi-Fi:
+
+1. ☐ Start a **Jellyfin** (or Subsonic) track playing.
+2. ☐ Open the cast sheet: it says casting is **temporarily unavailable**, and does
+   *not* claim the platform is unsupported.
+3. ☐ **No device ever appears**, however long the sheet stays open, with a
+   powered-on Chromecast on the same network.
+4. ☐ Nothing can be tapped to connect; there is no retry or "search again".
+5. ☐ Local playback **keeps going untouched** the whole time: no pause, no
+   restart, no jump in position.
+6. ☐ Close and reopen the sheet a few times, background and foreground the app —
+   still no devices, still no interruption.
+7. ☐ The **queue, playback settings, and server sessions are unchanged** after
+   all of the above.
+8. ☐ Local files, downloads, Jellyfin, Navidrome/Subsonic and Plex playback all
+   behave normally.
+
+The end-to-end pass below applies **only once casting is restored** by the
+reviewed change that authenticates receivers. Keep it here; do not run it against
+a contained build (it will fail at step 2 by design).
+
+Run it in this order (a streamed track is required — local files can't cast):
 
 1. ☐ Start a **Jellyfin** (or Subsonic) track playing on the phone.
 2. ☐ Open the cast sheet, discover, and **connect** to a real Chromecast.

@@ -1,5 +1,13 @@
 # Cast / Chromecast
 
+> **Casting is temporarily unavailable.** It is switched off in shipped builds
+> while a reported security issue is resolved. Local playback, downloads, and
+> every server integration are unaffected, and your queue and settings are
+> untouched. See [Temporary containment](#temporary-containment) below, and
+> issues [#572](https://github.com/TheZupZup/Linthra/issues/572) and
+> [#575](https://github.com/TheZupZup/Linthra/issues/575). The rest of this page
+> describes how casting works and will work again once it is restored.
+
 Linthra can hand a Jellyfin or Navidrome/Subsonic stream off to a **Chromecast**
 device (a Cast-enabled speaker, TV, or display) on your network. It uses a
 pure-Dart implementation of the Google Cast v2 protocol — **no Google Play
@@ -92,13 +100,12 @@ The UI renders a `CastState` and drives discovery/connection through the
 `CastService` interface, never a cast SDK directly — mirroring how the audio
 engine is hidden behind `PlaybackController`.
 
-- Android and iOS get the real `DefaultCastService`, which owns cast state and
-  the playback handoff: it resolves the current track's stream URL **at cast
-  time**, loads it on the receiver, pauses local audio, and resumes on
-  disconnect. It delegates the wire protocol to a thin `ChromecastCastTransport`
-  over the pure-Dart `cast` package (Cast v2 over a TLS socket; `bonsoir` for
-  discovery). Other platforms keep `UnavailableCastService`, so the button stays
-  honest.
+- `DefaultCastService` owns cast state and the playback handoff: it resolves the
+  current track's stream URL **at cast time**, loads it on the receiver, pauses
+  local audio, and resumes on disconnect. It delegates the wire protocol to a
+  thin `ChromecastCastTransport` over the pure-Dart `cast` package (Cast v2 over
+  a TLS socket; `bonsoir` for discovery). **While containment is in place no
+  build binds it**: every platform gets `UnavailableCastService`.
 - The network-touching transport is isolated, so all of casting's decision-making
   is unit-tested behind a fake `CastTransport`; the only code that opens a socket
   is verified by analysis and on-device testing.
@@ -107,6 +114,54 @@ engine is hidden behind `PlaybackController`.
   position/play-state, while the queue stays owned locally and track changes are
   mirrored onto the receiver. This is what fixes Cast desync. See
   [architecture.md](architecture.md#the-single-playback-seam-local--cast).
+
+## Temporary containment
+
+Casting is withheld from production builds by `CastContainment` while a reported
+security issue is resolved. The report, its assessment, and the requirements a
+restoration has to meet are held in the repository's private security advisory
+and are not reproduced here, in the code, or in pull requests, until coordinated
+disclosure. If you are picking this work up, ask a maintainer for advisory
+access rather than inferring the details from the code.
+
+It is enforced at three independent layers, because a containment one edit can
+undo is not a containment:
+
+1. **Production wiring** — `containedCastServiceOverride` binds
+   `UnavailableCastService` on every platform. No live backend is constructed,
+   so there is nothing to discover or connect with.
+2. **Transport** — `ChromecastCastTransport` refuses discovery and connection
+   outright. Re-wiring the service on its own, or injecting the transport from
+   somewhere else, still cannot open a receiver socket.
+3. **Media handoff** — the session handle refuses to hand media to a receiver,
+   so a session obtained some other way is still given nothing.
+
+`CastContainment.isActive` is a compile-time constant. There is deliberately no
+setting, environment variable, or debug affordance that flips it: an unreviewed
+runtime switch would be a second production path with none of the review the
+restoration requires.
+
+What demonstrates the containment is the test suite: the production-wiring tests
+build the real override list per platform and drive the service, and the
+transport tests call it directly. `scripts/check_cast_containment.py`, which also
+runs in CI, is a much weaker tripwire on top of that — it matches source patterns
+and only catches the obvious removals it knows about. Its limitations are written
+down in the script itself; it is not evidence that casting cannot be reached.
+
+In the app, the cast button stays visible but muted and the sheet says casting is
+temporarily unavailable — it does not claim the platform is unsupported, which
+would be untrue on the phones this affects.
+
+### Restoring casting
+
+Restoration is a separate, reviewed change, not a revert. Its requirements are
+tracked publicly in [#575](https://github.com/TheZupZup/Linthra/issues/575), and
+in detail in the private advisory, which is where that work is reviewed before
+anything is restored. [#576](https://github.com/TheZupZup/Linthra/issues/576) is
+an additional layer, not a substitute for it.
+
+The reviewed restoration updates `CastContainment`, the production wiring, the
+transport guards, and `scripts/check_cast_containment.py` in one pull request.
 
 ## Cast volume
 
@@ -117,6 +172,9 @@ following the receiver's reported level live. It is all behind `CastService`
 `volume` / `muted` / `supportsVolumeControl`.
 
 ## Security / token notes
+
+These describe the handoff as designed; while casting is contained, none of it
+runs, because no handoff happens at all.
 
 The handoff resolves the current track's stream URL **only at cast time**
 (Jellyfin's or Subsonic's authenticated URL, the credential woven in on demand)
@@ -144,6 +202,8 @@ freshly minted URL that never lands in `Track`, the catalog, a log, or app state
 
 ## Known limitations
 
+- **Casting is off in shipped builds** pending the security fix above. Everything
+  below describes the feature as built, for when it returns.
 - **No Linthra app name/logo on the receiver** with the default media receiver —
   it shows "Default Media Receiver". True branding needs a custom receiver app
   (see [above](#receiver-app-name--logo-branding)). Tracked as a follow-up.

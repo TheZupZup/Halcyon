@@ -1,26 +1,23 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/lifecycle/async_disposal_registry.dart';
 import '../../../core/models/cast_state.dart';
+import '../../../core/services/cast/cast_containment.dart';
 import '../../../core/services/cast/cast_media_resolver.dart';
 import '../../../core/services/cast/cast_service.dart';
-import '../../../core/services/cast/chromecast_cast_transport.dart';
-import '../../../core/services/cast/default_cast_service.dart';
 import '../../../core/services/cast/routing_cast_media_resolver.dart';
 import '../../../core/services/cast/unavailable_cast_service.dart';
 import '../../../core/sources/jellyfin/jellyfin_cast_media_resolver.dart';
 import '../../../core/sources/subsonic/subsonic_cast_media_resolver.dart';
 import '../../settings/jellyfin/jellyfin_settings_controller.dart';
 import '../../settings/subsonic/subsonic_settings_controller.dart';
-import '../player_providers.dart';
 
 /// The single [CastService] the app drives casting through.
 ///
 /// Defaults to [UnavailableCastService] so tests (and any platform without a
-/// Chromecast stack) keep an honest, inert cast button. Production swaps in the
-/// real backend via [chromecastCastServiceOverride]; the cast button and device
-/// sheet are unchanged either way.
+/// cast backend) keep an honest, inert cast button. A service test that needs
+/// live behaviour overrides this provider with its own fake; production applies
+/// [containedCastServiceOverride].
 final castServiceProvider = Provider<CastService>((ref) {
   final service = UnavailableCastService();
   ref.onDisposeAsync(service.dispose);
@@ -39,6 +36,11 @@ final castStateProvider = StreamProvider<CastState>((ref) {
 /// [CastMediaResolver.canCast] false so the service can show a clear limitation
 /// instead of failing. Composed so multiple remote sources cast through one
 /// resolver.
+///
+/// Unused by production while [CastContainment.isActive] — nothing resolves a
+/// stream URL for a receiver when no session can be opened. It stays wired and
+/// tested because [#576](https://github.com/TheZupZup/Linthra/issues/576) builds
+/// on it, rather than rebuilding it afterwards.
 final castMediaResolverProvider = Provider<CastMediaResolver>((ref) {
   return RoutingCastMediaResolver(<CastMediaResolver>[
     JellyfinCastMediaResolver(() => ref.read(jellyfinMusicSourceProvider)),
@@ -46,38 +48,22 @@ final castMediaResolverProvider = Provider<CastMediaResolver>((ref) {
   ]);
 });
 
-/// Production binding: the real Chromecast backend, applied in `main`.
+/// Production binding: the security containment ([CastContainment]).
 ///
-/// It wires [DefaultCastService] to the live [ChromecastCastTransport] and to
-/// the local engine — reading the current track and mirroring track changes
-/// onto the receiver. It does *not* pause or resume local playback itself: the
-/// `ActivePlaybackController` owns that, suspending the engine on handoff and
-/// resuming it paused when a session ends, so casting never surprise-starts the
-/// phone. Reading [localPlaybackControllerProvider] (the queue owner) rather
-/// than the routing controller keeps the dependency graph acyclic. Only Android
-/// and iOS get this; every other platform keeps the unavailable default so the
-/// app never claims a cast ability the platform lacks. Tests don't apply this,
-/// so they keep the inert default unless they override the service themselves.
-final chromecastCastServiceOverride = castServiceProvider.overrideWith((ref) {
-  final bool castable = defaultTargetPlatform == TargetPlatform.android ||
-      defaultTargetPlatform == TargetPlatform.iOS;
-  if (!castable) {
-    final UnavailableCastService fallback = UnavailableCastService();
-    ref.onDisposeAsync(fallback.dispose);
-    return fallback;
-  }
-
-  final local = ref.read(localPlaybackControllerProvider);
-  final service = DefaultCastService(
-    transport: ChromecastCastTransport(),
-    mediaResolver: ref.read(castMediaResolverProvider),
-    currentTrack: () => local.state.currentTrack,
-    // Distinct by uri, not Track == (which is bare-id), so a same-bare-id cast
-    // skip/fallback (jellyfin:101 -> subsonic:101) still reaches the receiver
-    // instead of being filtered out before _handOff sees it.
-    trackChanges: local.stateStream
-        .map((s) => s.currentTrack)
-        .distinct((a, b) => a?.uri == b?.uri),
+/// Every platform gets [UnavailableCastService], so shipped builds construct no
+/// cast transport and open no receiver socket. This *is* the production path:
+/// there is no branch here that builds a live backend, and no flag that selects
+/// one, because a second production path is exactly what containment cannot
+/// have. The cast button and device sheet are unchanged; they read the message
+/// and say casting is temporarily off.
+///
+/// Restoring casting is a separate reviewed change, tracked in
+/// [#575](https://github.com/TheZupZup/Linthra/issues/575). Until then the
+/// transport and the media handoff refuse independently of this provider, so
+/// reverting this alone still cannot reach a receiver.
+final containedCastServiceOverride = castServiceProvider.overrideWith((ref) {
+  final service = UnavailableCastService(
+    message: CastContainment.isActive ? CastContainment.userMessage : null,
   );
   ref.onDisposeAsync(service.dispose);
   return service;

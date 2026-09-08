@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/models/cast_state.dart';
 import 'cast_devices_sheet.dart';
 import 'cast_providers.dart';
 
@@ -8,9 +9,10 @@ import 'cast_providers.dart';
 /// the [CastDevicesSheet]; it never talks to a cast SDK directly.
 ///
 /// Honest by design: with the shipped [UnavailableCastService] the button is
-/// visible but muted, signalling casting is a foundation rather than live. When
-/// connected it switches to the filled cast-connected glyph. Tapping always
-/// opens the sheet, which states the real status for the current backend.
+/// visible but muted, so it never implies casting works today. When connected it
+/// switches to the filled cast-connected glyph. Tapping always opens the sheet,
+/// which states the real status — including that casting is temporarily
+/// withheld while the security containment is in place.
 class CastButton extends ConsumerWidget {
   const CastButton({super.key});
 
@@ -36,8 +38,18 @@ class CastButton extends ConsumerWidget {
       icon: Icon(state.isConnected ? Icons.cast_connected : Icons.cast),
       color: color,
       isSelected: state.isConnected,
-      tooltip: state.isAvailable ? 'Cast' : 'Cast (coming soon)',
+      tooltip: _tooltip(state),
     );
+  }
+
+  /// A carried message on an unavailable state means casting is off for its own
+  /// reason (the security containment), not merely unsupported here — the sheet
+  /// spells it out, and the tooltip shouldn't promise it is coming.
+  String _tooltip(CastState state) {
+    if (state.isAvailable) return 'Cast';
+    return state.message != null
+        ? 'Cast (temporarily unavailable)'
+        : 'Cast (coming soon)';
   }
 
   void _openSheet(BuildContext context) {

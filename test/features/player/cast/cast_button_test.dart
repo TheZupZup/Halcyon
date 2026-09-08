@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/cast_state.dart';
+import 'package:linthra/core/services/cast/cast_containment.dart';
 import 'package:linthra/features/player/cast/cast_button.dart';
 import 'package:linthra/features/player/cast/cast_providers.dart';
 
@@ -28,6 +29,16 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byIcon(Icons.cast), findsOneWidget);
+    });
+
+    testWidgets('reads as temporarily unavailable while contained',
+        (tester) async {
+      await _pump(tester, FakeCastService(initial: CastContainment.state));
+      await tester.pumpAndSettle();
+
+      // "Coming soon" would misdescribe a feature that shipped and was pulled.
+      expect(find.byTooltip('Cast (temporarily unavailable)'), findsOneWidget);
+      expect(_button(tester).isSelected, isFalse);
     });
 
     testWidgets('is shown but marked "coming soon" when unavailable', (
