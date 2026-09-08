@@ -103,7 +103,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       // uncaught async error.
       return;
     }
-    if (!mounted || stored == null || _userChangedTab) return;
+    // Selection is a modal state: it replaces the app bar, hides the tab bar
+    // and blocks swiping. Moving the tab underneath it would leave the song
+    // selection bar sitting over Albums with no visible way back.
+    if (!mounted || stored == null || _userChangedTab || _selecting) return;
     final int index = _tabNames.indexOf(stored);
     if (index < 0) return; // A tab that no longer exists: stay on the first.
     if (index == _tabController.index) return;
@@ -148,7 +151,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     _debounce?.cancel();
     setState(() {
       _lastTabIndex = _tabController.index;
-      if (_query.isNotEmpty) {
+      // The field is the source of truth, not [_query]: typing only reaches
+      // _query after the 300ms debounce, so between a keystroke and that timer
+      // the box holds text while _query is still empty. Testing _query alone
+      // left that text visible on the tab we just moved to, filtering nothing,
+      // and the next keystroke would then apply the whole thing there.
+      if (_query.isNotEmpty || _searchController.text.isNotEmpty) {
         _query = '';
         _searchController.clear();
       }

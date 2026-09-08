@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -25,6 +27,21 @@ class _SlowLibraryTabStore implements LibraryTabStore {
     await Future<void>.delayed(delay);
     return _tabName;
   }
+
+  @override
+  Future<void> write(String? tabName) async {}
+}
+
+/// A store whose read resolves exactly when the test says so, for the windows
+/// that are too short to hit with a delay: between a keystroke and the 300ms
+/// search debounce, or while a long-press is being held.
+class _ManualLibraryTabStore implements LibraryTabStore {
+  final Completer<String?> _read = Completer<String?>();
+
+  void completeWith(String? tabName) => _read.complete(tabName);
+
+  @override
+  Future<String?> read() => _read.future;
 
   @override
   Future<void> write(String? tabName) async {}
@@ -128,6 +145,50 @@ void main() {
       expect(_currentTab(tester), 1);
       expect(tester.widget<TextField>(find.byType(TextField)).controller?.text,
           isEmpty);
+    });
+
+    testWidgets(
+        'a restore landing inside the search debounce still clears the '
+        'box', (tester) async {
+      final _ManualLibraryTabStore store = _ManualLibraryTabStore();
+      await _pump(tester, store);
+
+      await tester.enterText(find.byType(TextField), 'blue');
+      // Deliberately not waiting out the 300ms debounce: the field holds text
+      // while the query it feeds is still empty, which is the window a check on
+      // the query alone misses.
+      store.completeWith('albums');
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      expect(_currentTab(tester), 1);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        isEmpty,
+      );
+    });
+
+    testWidgets('a restore does not move the tab out from under a selection',
+        (tester) async {
+      final _ManualLibraryTabStore store = _ManualLibraryTabStore();
+      await _pump(tester, store);
+
+      await tester.longPress(find.text('Song A'));
+      await tester.pumpAndSettle();
+      expect(find.text('1 selected'), findsOneWidget);
+
+      // Selection replaces the app bar, hides the tab bar and blocks swiping,
+      // so moving the tab underneath it would strand the user.
+      store.completeWith('albums');
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      expect(find.text('1 selected'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Cancel selection'));
+      await tester.pumpAndSettle();
+
+      expect(_currentTab(tester), 0);
     });
 
     testWidgets('a storage failure leaves the screen usable', (tester) async {
