@@ -269,39 +269,70 @@ class _TrustedCastSession implements CastSessionHandle {
   @override
   Stream<CastVolume> get volumeStream => _session.volumeStream;
 
+  /// Refuses when the connection the receiver proved itself on is gone.
+  ///
+  /// Every outbound operation goes through this, not just the media handoff: a
+  /// command sent after trust ended is a command to a receiver nobody has
+  /// authenticated — the same connection may have been re-established
+  /// underneath, and this session's proof says nothing about that one. Inbound
+  /// streams are untouched; they carry no authority, and the app still needs to
+  /// see the session end.
+  void _requireTrust() {
+    if (_trusted) return;
+    throw const CastReceiverTrustException(
+      "Linthra stopped casting to that device because it couldn't keep "
+      'verifying it.',
+      kind: CastTrustFailureKind.incomplete,
+    );
+  }
+
   @override
   Future<void> loadMedia(CastMedia media) async {
     // The last refusal before a token-bearing URL leaves the device: the check
     // is repeated here, at the handoff, rather than trusted to have happened in
     // the right order somewhere above.
-    if (!_trusted) {
-      throw const CastReceiverTrustException(
-        "Linthra stopped casting to that device because it couldn't keep "
-        'verifying it.',
-        kind: CastTrustFailureKind.incomplete,
-      );
-    }
+    _requireTrust();
     await _session.loadMedia(media);
   }
 
   @override
-  Future<void> play() => _session.play();
+  Future<void> play() async {
+    _requireTrust();
+    await _session.play();
+  }
 
   @override
-  Future<void> pause() => _session.pause();
+  Future<void> pause() async {
+    _requireTrust();
+    await _session.pause();
+  }
 
   @override
-  Future<void> seek(Duration position) => _session.seek(position);
+  Future<void> seek(Duration position) async {
+    _requireTrust();
+    await _session.seek(position);
+  }
 
   @override
-  Future<void> setVolume(double level) => _session.setVolume(level);
+  Future<void> setVolume(double level) async {
+    _requireTrust();
+    await _session.setVolume(level);
+  }
 
   @override
-  Future<void> setMuted(bool muted) => _session.setMuted(muted);
+  Future<void> setMuted(bool muted) async {
+    _requireTrust();
+    await _session.setMuted(muted);
+  }
 
   @override
-  Future<void> requestStatus() => _session.requestStatus();
+  Future<void> requestStatus() async {
+    _requireTrust();
+    await _session.requestStatus();
+  }
 
+  /// Teardown is never gated: closing an untrusted session is exactly what the
+  /// caller should still be able to do.
   @override
   Future<void> close() async {
     _trusted = false;

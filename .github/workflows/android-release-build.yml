@@ -493,6 +493,17 @@ jobs:
       - name: Verify the built artifacts carry the Cast containment
         run: |
           set -euo pipefail
+
+          # A run rebuilding an OLD release tag checks out that tag's tree,
+          # which may predate this script (and the containment it looks for).
+          # That path is documented and must keep working, so say plainly that
+          # nothing was checked rather than failing the rebuild on a file the
+          # tag never had. Every current release builds a tree that has it.
+          if [ ! -f scripts/verify_release_containment.py ]; then
+            echo "::warning::This tag predates scripts/verify_release_containment.py, so the artifacts were not checked for the Cast containment. Verify the published assets by hand if the tag is expected to carry it (see docs/release-artifact-verification.md)."
+            exit 0
+          fi
+
           python3 scripts/verify_release_containment.py dist/*.apk dist/*.aab
 
       - name: Upload release APK

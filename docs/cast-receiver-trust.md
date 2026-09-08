@@ -60,9 +60,10 @@ protocol rather than about the app's plumbing:
   out after the receiver authenticated *and* the identity matches both the
   device the user picked and the session it will use; any failure closes the
   session (with a bounded cleanup, so an unresponsive receiver cannot hold the
-  refusal back); the media handoff refuses again on its own; and trust ends with
-  the connection it was proved over, whether that is a close from here or the
-  receiver dropping. `DefaultCastService` surfaces a refusal's own message
+  refusal back); every outbound operation — the media handoff and the transport
+  controls alike — refuses again on its own; and trust ends with the connection
+  it was proved over, whether that is a close from here or the receiver
+  dropping. Only teardown stays ungated. `DefaultCastService` surfaces a refusal's own message
   rather than a generic "couldn't connect", so a security refusal does not read
   as a flaky network.
 

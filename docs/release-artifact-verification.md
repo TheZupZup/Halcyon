@@ -69,7 +69,7 @@ exit non-zero rather than reporting a pass.
 | When | Where | What it checks |
 | --- | --- | --- |
 | Every PR and push | `ci.yml` ▸ *Cast containment markers* | The verifier's own unit tests (`test/tooling/verify_release_containment_test.py`), on synthetic artifacts, so a change that stops it catching an uncontained build is caught here. |
-| Every release build | `android-release-build.yml` ▸ *Verify the built artifacts carry the Cast containment* | The APK/AAB in `dist/`, before they are uploaded anywhere. |
+| Every release build | `android-release-build.yml` ▸ *Verify the built artifacts carry the Cast containment* | The APK/AAB in `dist/`, before they are uploaded anywhere. A run rebuilding a tag from before this check existed says so with a warning instead of failing on a script that tag never had. |
 | Every Linux release build | `linux-desktop-build.yml` ▸ *Verify the archive carries the Cast containment* | The `.tar.gz`, before it is attached to the Release — the Release is already public by then, so an artifact that fails the check must never become downloadable from it. |
 | Stable publication | `publish-stable-release.yml` ▸ *Verify the published artifacts carry the Cast containment* | The assets downloaded back from the published GitHub Release, with every SHA-256 written into the job summary. |
 

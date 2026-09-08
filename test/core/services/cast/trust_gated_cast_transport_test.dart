@@ -369,6 +369,46 @@ void main() {
       );
     });
 
+    test('every receiver command refuses once trust is gone', () async {
+      // Not just the media handoff: after the proved connection ends, the
+      // delegate may have reconnected underneath, and this session's proof says
+      // nothing about that one.
+      final _FakeTransport transport = _FakeTransport();
+
+      final CastSessionHandle session = await gate(transport).connect(speaker);
+      await pumpEventQueue();
+      transport.session.drop();
+      await pumpEventQueue();
+
+      for (final Future<void> Function() command in <Future<void> Function()>[
+        () => session.loadMedia(media),
+        session.play,
+        session.pause,
+        () => session.seek(const Duration(seconds: 3)),
+        () => session.setVolume(0.5),
+        () => session.setMuted(true),
+        session.requestStatus,
+      ]) {
+        await expectLater(
+          command(),
+          throwsA(isA<CastReceiverTrustException>()),
+        );
+      }
+
+      expect(transport.session.loaded, isEmpty);
+      expect(transport.session.playCount, 0);
+      expect(transport.session.pauseCount, 0);
+      expect(transport.session.seeks, isEmpty);
+      expect(transport.session.volumes, isEmpty);
+      expect(transport.session.mutes, isEmpty);
+      expect(transport.session.statusRequests, 0);
+
+      // Teardown still works: closing an untrusted session is exactly what the
+      // caller should still be able to do.
+      await session.close();
+      expect(transport.session.closed, isTrue);
+    });
+
     test('trust does not survive the session being closed', () async {
       final _FakeTransport transport = _FakeTransport();
 
