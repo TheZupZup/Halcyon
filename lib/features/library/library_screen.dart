@@ -12,6 +12,7 @@ import '../../core/models/artist.dart';
 import '../../core/models/track.dart';
 import '../../core/services/bulk_track_actions.dart';
 import '../../core/sources/local/folder_location.dart';
+import '../../data/repositories/library_tab_store_provider.dart';
 import '../../shared/layout/adaptive_layout.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../playlists/widgets/add_to_playlist_sheet.dart';
@@ -52,6 +53,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// Widest the search box gets on a desktop window.
   static const double _searchFieldMaxWidth = 520;
 
+  /// Tab order, as stored names rather than indices, so the persisted choice
+  /// survives a tab being added or reordered later.
+  static const List<String> _tabNames = <String>['songs', 'albums', 'artists'];
+
   final Set<String> _selectedUris = <String>{};
   bool _selecting = false;
 
@@ -67,8 +72,28 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: _tabNames.length, vsync: this);
     _tabController.addListener(_onTabChanged);
+    unawaited(_restoreTab());
+  }
+
+  /// Reopens Library on the tab last used, instead of always on Songs.
+  ///
+  /// Reading is async, so the controller starts on the first tab and moves once
+  /// the value arrives. In practice that is not visible: the tabs only appear
+  /// once the catalog has loaded, which takes longer than a key/value read. The
+  /// guard matters anyway, because a user who switched tabs in the meantime has
+  /// said something more recent than the stored value.
+  Future<void> _restoreTab() async {
+    final String? stored = await ref.read(libraryTabStoreProvider).read();
+    if (!mounted || stored == null) return;
+    final int index = _tabNames.indexOf(stored);
+    if (index < 0) return; // A tab that no longer exists: stay on the first.
+    if (_tabController.index != 0 || _lastTabIndex != 0) return;
+    setState(() {
+      _lastTabIndex = index;
+      _tabController.index = index;
+    });
   }
 
   @override
@@ -92,6 +117,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         _searchController.clear();
       }
     });
+    // Fire and forget: where the user was reading is not worth blocking a tab
+    // change on, and a failed write only means the next launch opens on Songs.
+    unawaited(
+      ref.read(libraryTabStoreProvider).write(_tabNames[_tabController.index]),
+    );
   }
 
   void _onQueryChanged(String value) {
