@@ -200,6 +200,33 @@ The same resolved URI path handles regular filesystem files and direct or
 transcoded Jellyfin, Navidrome/Subsonic, and supported Plex HTTP(S) URLs. No
 source-specific player exists and credentials remain in the existing resolver.
 
+### Volume
+
+Desktop needs its own volume control: there are no hardware volume keys bound to
+the app the way a phone has, and turning the whole system down to quieten one
+player is not the same thing. Now Playing (beside the action row) and the wide
+mini-player bar carry a mute button and a slider, with scroll-wheel and arrow-key
+adjustment; both are hidden on mobile, on windows too narrow to hold them, and
+while casting, where the receiver's own level is the Cast sheet's control.
+
+The level lives on the playback seam, not in a widget: `PlaybackController`
+gained `setVolume` / `setMuted`, and `PlaybackState` carries `volume` and
+`muted`. So every way of changing it — either control, a shell's MPRIS slider,
+the level restored at startup — moves the others, and nothing in the UI talks to
+libmpv directly.
+
+What the engine is actually set to is the listener's level *times* the current
+track's ReplayGain (when normalization is on) *times* the audio-focus duck
+factor, in `JustAudioPlaybackController.engineVolumeFor`. Automatic attenuation
+therefore never moves the slider, and the slider never cancels a duck. Mute
+keeps the level it was at, so unmute returns to exactly it.
+
+The volume (never the mute) is persisted per install through
+`PlaybackVolumePersistence` and restored at startup, sanitized to 0.0–1.0 on
+both the way in and the way out — an out-of-range or non-finite stored value can
+never reach the engine, and a launch is never silent for a reason nothing on
+screen explains.
+
 ### Vendored `just_audio_media_kit`
 
 `just_audio_media_kit` is vendored under `third_party/just_audio_media_kit`
@@ -338,7 +365,7 @@ undeclared network access to an isolated `flatpak-builder` build.
 | **Audio playback** | Supported | media_kit/libmpv through `LinuxPlaybackController`; local files and resolved Jellyfin, Navidrome/Subsonic, and Plex HTTP(S) streams share one backend. |
 | **Suspend / resume** | Supported (app side); real device/sink timing varies | Lifecycle `paused`→`resumed` arms a bounded Linux-only reload of an actively playing track after a short backoff ([issue #466](https://github.com/TheZupZup/Linthra/issues/466)). See [Suspend / resume (manual matrix)](#suspend--resume-manual-matrix). |
 | **Light/Dark/System theme** | Supported (app side); the native brightness bridge itself is Flutter's, not independently verified here | Settings → Appearance's System/Light/Dark choice ([issue #459](https://github.com/TheZupZup/Linthra/issues/459)) is the same shared `ThemeModePreference`/`ThemeModeController` Android uses, mapped onto `MaterialApp`'s own `themeMode` — no `gsettings`/D-Bus/GNOME/KDE-specific code in Linthra itself, and no separate Linux theme path (`test/app/theme_mode_test.dart` proves that). *Supplying* System's brightness on Linux is Flutter's GTK embedder (via the XDG desktop portal or a GNOME GSettings fallback); that native bridge is outside Linthra's code and isn't exercised by `flutter test`, which runs on the Dart VM and injects brightness straight into Flutter's test `PlatformDispatcher`. Reproducing the real bridge deterministically in CI would need a running portal daemon or GNOME schemas — exactly the DE-specific setup this app avoids adding — so it stays untested here and is a known gap, not a claimed guarantee. |
-| Media session / MPRIS | Supported | `PlatformMediaSessionBinding` routes Linux to `MprisMediaSessionBinding`, which exports `/org/mpris/MediaPlayer2` and owns `org.mpris.MediaPlayer2.linthra` ([issue #397](https://github.com/TheZupZup/Linthra/issues/397)). Shells get PlaybackStatus, Metadata, Position and the transport methods; media keys work through the same interface. `audio_service` is still never initialised on Linux — it stays the Android delegate. A machine with no session bus simply gets no desktop controls. |
+| Media session / MPRIS | Supported | `PlatformMediaSessionBinding` routes Linux to `MprisMediaSessionBinding`, which exports `/org/mpris/MediaPlayer2` and owns `org.mpris.MediaPlayer2.linthra` ([issue #397](https://github.com/TheZupZup/Linthra/issues/397)). Shells get PlaybackStatus, Metadata, Position and the transport methods; media keys work through the same interface. `Volume` is read/write, so a shell's own volume slider drives Linthra's level (and reads zero while muted); `Rate` stays honestly read-only. `audio_service` is still never initialised on Linux — it stays the Android delegate. A machine with no session bus simply gets no desktop controls. |
 | Android Auto | Android-only, by design | It is an Android platform integration, not a Linthra feature. |
 | Media notification + `POST_NOTIFICATIONS` | Android-only, by design | There is no equivalent gate on Linux; desktop controls come from MPRIS instead. Standalone track-change notifications are [issue #400](https://github.com/TheZupZup/Linthra/issues/400). |
 | Android audio focus | Android-only, by design | `JustAudioPlaybackController` already scopes its focus handling to Android/iOS. |
@@ -350,8 +377,9 @@ undeclared network access to an isolated `flatpak-builder` build.
 | **Audio output device** | Supported | Settings → Music & playback → Audio output lists libmpv's `audio-device-list` and routes playback with `audio-device` ([issue #402](https://github.com/TheZupZup/Linthra/issues/402)). A saved device is re-applied at launch, and one that is no longer present falls back to the system default. See [Audio output device](#audio-output-device). |
 | Chromecast | Android/iOS only | Already gated in `cast_providers.dart`; Linux keeps the honest "cast unavailable" service. |
 | Share sheet, launcher-icon switching | Android-only, by design | No desktop equivalent; the UI simply omits them. |
+| Volume control | Supported | A mute and a slider on Now Playing and the wide mini-player bar, plus MPRIS `Volume`, driven through `PlaybackController` and remembered across launches ([issue #394](https://github.com/TheZupZup/Linthra/issues/394)). See [Volume](#volume). |
 | Desktop layout | Supported | The shell swaps its bottom bar for a navigation rail at 900 px, and feature screens adapt on the width they are given — see [How the desktop layout adapts](#how-the-desktop-layout-adapts). |
-| Keyboard shortcuts | Partial | Quick search is bound to **Ctrl+K** / **Ctrl+F** ([issue #393](https://github.com/TheZupZup/Linthra/issues/393)) — see [Quick search](#quick-search-ctrlk). Transport and volume shortcuts are still later work in #376. |
+| Keyboard shortcuts | Partial | Quick search is bound to **Ctrl+K** / **Ctrl+F** ([issue #393](https://github.com/TheZupZup/Linthra/issues/393)) — see [Quick search](#quick-search-ctrlk). The volume control takes the wheel and arrow keys when focused; global transport and volume shortcuts are still later work in #376. |
 
 Nothing in that table is faked. Each one is an explicit implementation behind an
 existing interface, so it is visible in the code and covered by tests — with

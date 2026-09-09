@@ -9,11 +9,13 @@ import '../core/models/subsonic_session.dart';
 import '../core/services/artwork_disk_cache.dart';
 import '../core/services/media_session_binding.dart';
 import '../core/services/playback_session_persistence.dart';
+import '../core/services/playback_volume_persistence.dart';
 import '../core/sources/plex/plex_artwork.dart';
 import '../core/sources/subsonic/subsonic_artwork.dart';
 import '../data/repositories/download_repository_provider.dart';
 import '../data/repositories/favorites_repository_provider.dart';
 import '../data/repositories/music_library_repository_provider.dart';
+import '../data/repositories/playback_preferences_provider.dart';
 import '../data/repositories/playback_session_store_provider.dart';
 import '../data/repositories/playlist_repository_provider.dart';
 import '../data/repositories/remote_cache_index_provider.dart';
@@ -334,6 +336,12 @@ Future<ApplicationHandle> bootstrapApplication(
     // without touching anything the next container owns.
     unawaited(container.read(favoritesRepositoryProvider).refreshFromRemote());
     unawaited(container.read(playlistRepositoryProvider).refreshFromRemote());
+
+    // Desktop volume: come back at the level the listener left, before anything
+    // can play. Never blocks launch, and never restores a mute.
+    final PlaybackVolumePersistence? volumePersistence =
+        container.read(playbackVolumePersistenceProvider);
+    if (volumePersistence != null) await volumePersistence.restore();
 
     // Linux crash-safe restore: rehydrate any persisted logical queue as a
     // paused/resumable state. Never autoplay, and never block launch on a bad

@@ -138,6 +138,11 @@ class PlaybackSessionPersistence {
       _positionTimer?.cancel();
       _positionTimer = null;
       _pendingPositionState = null;
+      // Paused, and nothing the *document* holds has moved. A state can change
+      // for reasons this document has no field for — a volume step or a mute,
+      // which emit as fast as a slider drags — and rewriting an identical
+      // session for each of those is a disk write per pointer move.
+      if (_lastPersisted!.position == state.position) return;
       unawaited(_persist(state));
     }
   }

@@ -39,6 +39,8 @@ class UnsupportedPlaybackController implements LocalPlaybackController {
       StreamController<PlaybackState>.broadcast();
 
   PlaybackState _state = PlaybackState.idle;
+  double _volume = 1.0;
+  bool _muted = false;
   bool _disposed = false;
 
   @override
@@ -64,8 +66,14 @@ class UnsupportedPlaybackController implements LocalPlaybackController {
 
   void _emit(PlaybackState next) {
     if (_disposed) return;
-    _state = next;
-    _states.add(next);
+    // Stamped from one place, like the real engine's emit, so every path here
+    // (including the refusals, which build a state from scratch) publishes the
+    // listener's current level.
+    final PlaybackState stamped =
+        next.withVolume(volume: _volume, muted: _muted);
+    if (identical(stamped, _state)) return;
+    _state = stamped;
+    _states.add(stamped);
   }
 
   @override
@@ -131,6 +139,28 @@ class UnsupportedPlaybackController implements LocalPlaybackController {
       shuffleEnabled: _state.shuffleEnabled,
       repeatMode: mode,
     ));
+  }
+
+  // The listener's volume is real state even here: there is no engine to apply
+  // it to, but remembering it (and reflecting it in the emitted state) keeps the
+  // contract honest and means a host that later grows an engine starts at the
+  // level the user chose rather than at full volume.
+
+  @override
+  void setVolume(double volume) {
+    final double next = PlaybackState.sanitizeVolume(volume);
+    final bool nextMuted = _muted && next <= 0.0;
+    if (next == _volume && nextMuted == _muted) return;
+    _volume = next;
+    _muted = nextMuted;
+    _emit(_state);
+  }
+
+  @override
+  void setMuted(bool muted) {
+    if (muted == _muted) return;
+    _muted = muted;
+    _emit(_state);
   }
 
   @override
