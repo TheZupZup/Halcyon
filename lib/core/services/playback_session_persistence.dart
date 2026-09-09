@@ -23,7 +23,7 @@ class PlaybackSessionPersistence {
     required Stream<PlaybackState> playbackStates,
     bool Function(MusicProvider provider)? isRemoteProviderAvailable,
     bool Function(String localUri)? localFileExists,
-    Duration positionSaveInterval = const Duration(seconds: 2),
+    Duration positionSaveInterval = const Duration(seconds: 10),
   })  : _store = store,
         _controller = controller,
         _isRemoteProviderAvailable = isRemoteProviderAvailable,
@@ -36,11 +36,29 @@ class PlaybackSessionPersistence {
   final LocalPlaybackController _controller;
   final bool Function(MusicProvider provider)? _isRemoteProviderAvailable;
   final bool Function(String localUri) _localFileExists;
+
+  /// How long a run of pure position ticks is coalesced before the session is
+  /// rewritten.
+  ///
+  /// Every save re-encodes the whole logical queue and rewrites the store's one
+  /// document, so this interval is the cost of the feature: at a couple of
+  /// seconds it was hundreds of encodes and disk writes an hour for a session
+  /// nobody was reading — real CPU and I/O on a laptop running on battery, for
+  /// a record only a crash ever consumes. Every *meaningful* moment still
+  /// persists immediately (a track change, a queue edit, pause/stop, and a
+  /// clean shutdown via [dispose]), so what this interval bounds is the
+  /// position an unexpected kill mid-playback can lose.
   final Duration _positionSaveInterval;
 
   StreamSubscription<PlaybackState>? _subscription;
   Timer? _positionTimer;
   PlaybackState? _lastPersisted;
+
+  /// The freshest state seen while a position save is pending. The debounced
+  /// save writes *this*, not the state that happened to arm the timer, so a
+  /// longer interval costs fewer writes without ever persisting a staler
+  /// position than the moment it fires.
+  PlaybackState? _pendingPositionState;
   bool _restoring = false;
   bool _disposed = false;
 
@@ -89,6 +107,7 @@ class PlaybackSessionPersistence {
     if (state.currentTrack == null) {
       _positionTimer?.cancel();
       _positionTimer = null;
+      _pendingPositionState = null;
       _lastPersisted = null;
       unawaited(_clearQuietly());
       return;
@@ -107,20 +126,29 @@ class PlaybackSessionPersistence {
     if (structuralChange) {
       _positionTimer?.cancel();
       _positionTimer = null;
+      _pendingPositionState = null;
       unawaited(_persist(state));
       return;
     }
 
     if (state.status == PlaybackStatus.playing) {
-      _positionTimer ??= Timer(_positionSaveInterval, () {
-        _positionTimer = null;
-        unawaited(_persist(state));
-      });
+      _pendingPositionState = state;
+      _positionTimer ??= Timer(_positionSaveInterval, _flushPosition);
     } else {
       _positionTimer?.cancel();
       _positionTimer = null;
+      _pendingPositionState = null;
       unawaited(_persist(state));
     }
+  }
+
+  /// Writes the freshest position seen since the debounce started.
+  void _flushPosition() {
+    _positionTimer = null;
+    final PlaybackState? state = _pendingPositionState;
+    _pendingPositionState = null;
+    if (state == null || _disposed) return;
+    unawaited(_persist(state));
   }
 
   Future<void> _persist(PlaybackState state) async {
@@ -191,12 +219,20 @@ class PlaybackSessionPersistence {
     return true;
   }
 
-  /// Stops listening. Safe to call more than once.
+  /// Stops listening, persisting any position still waiting on the debounce so
+  /// a clean shutdown records exactly where playback was. Safe to call more
+  /// than once.
   Future<void> dispose() async {
     if (_disposed) return;
+    // Marked disposed up front, so a second (or concurrent) dispose can't run
+    // the flush again — [_persist] itself deliberately doesn't check the flag,
+    // which is what lets this last write through.
     _disposed = true;
     _positionTimer?.cancel();
     _positionTimer = null;
+    final PlaybackState? pending = _pendingPositionState;
+    _pendingPositionState = null;
+    if (pending != null) await _persist(pending);
     await _subscription?.cancel();
     _subscription = null;
   }

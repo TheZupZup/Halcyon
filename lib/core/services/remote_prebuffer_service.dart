@@ -3,6 +3,7 @@ import 'dart:async';
 import '../models/playback_state.dart';
 import '../models/repeat_mode.dart';
 import '../models/track.dart';
+import 'playback_lookahead.dart';
 import 'remote_cache/remote_stream_prebufferer.dart';
 
 /// Drives the [RemoteStreamPrebufferer] from live playback: as the queue moves,
@@ -42,38 +43,20 @@ class RemotePrebufferService {
 
   /// The last set of inputs we prepared against, so pure position/status ticks
   /// don't re-trigger a pass.
-  String? _lastKey;
+  PlaybackState? _lastInputs;
   PlaybackState? _pending;
   bool _running = false;
 
   void _onState(PlaybackState state) {
-    final String key = _keyFor(state);
-    if (key == _lastKey) return;
-    _lastKey = key;
+    // Only the inputs that decide what to prepare count: the playing track,
+    // shuffle, repeat, and the head of up-next this service warms. A position
+    // tick moves none of them and costs a few reference checks here (see
+    // [samePlaybackLookahead]).
+    if (samePlaybackLookahead(state, _lastInputs, ahead: _ahead)) return;
+    _lastInputs = state;
     if (state.currentTrack == null) return;
     _pending = state;
     unawaited(_drain());
-  }
-
-  /// A fingerprint of the inputs that decide what to prepare: the playing track,
-  /// shuffle, repeat, and the head of up-next we warm. Excludes
-  /// position/duration/status so listening doesn't thrash on playback ticks.
-  String _keyFor(PlaybackState state) {
-    final StringBuffer buffer = StringBuffer()
-      ..write(state.currentTrack?.uri ?? '-')
-      ..write('|')
-      ..write(state.shuffleEnabled)
-      ..write('|')
-      ..write(state.repeatMode.name)
-      ..write('|');
-    final int count =
-        _ahead < state.upNext.length ? _ahead : state.upNext.length;
-    for (int i = 0; i < count; i++) {
-      buffer
-        ..write(state.upNext[i].uri)
-        ..write(',');
-    }
-    return buffer.toString();
   }
 
   Future<void> _drain() async {

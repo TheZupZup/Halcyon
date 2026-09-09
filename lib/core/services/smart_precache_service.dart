@@ -4,6 +4,7 @@ import '../models/playback_state.dart';
 import '../models/repeat_mode.dart';
 import '../models/track.dart';
 import '../repositories/download_preferences.dart';
+import 'playback_lookahead.dart';
 import 'stability_diagnostics.dart';
 import 'track_prefetcher.dart';
 
@@ -55,40 +56,25 @@ class SmartPrecacheService {
 
   /// The last set of inputs we pre-cached against, so pure position/status
   /// ticks (which don't change what to cache) don't re-trigger a pass.
-  String? _lastKey;
+  PlaybackState? _lastInputs;
   PlaybackState? _pendingState;
   bool _running = false;
 
   void _onState(PlaybackState state) {
-    final String key = _keyFor(state);
     // React only when something that affects *what to cache* changed — the
-    // playing track, the up-next list, shuffle, or repeat — not on every
-    // position tick (which re-emits the same key).
-    if (key == _lastKey) return;
-    _lastKey = key;
+    // playing track, the head of up-next, shuffle, or repeat — not on every
+    // position tick, which changes none of them. The comparison itself is
+    // allocation-free and short-circuits on an unchanged queue, so a tick costs
+    // a handful of reference checks (see [samePlaybackLookahead]).
+    if (samePlaybackLookahead(state, _lastInputs, ahead: kMaxPrecacheCount)) {
+      return;
+    }
+    _lastInputs = state;
     if (state.currentTrack == null) return;
     // Remember the freshest state and drain; a pass already running picks this
     // up when it finishes, so the latest queue always wins.
     _pendingState = state;
     unawaited(_drain());
-  }
-
-  /// A cheap fingerprint of the inputs that decide what to pre-cache. Excludes
-  /// position/duration/status so listening doesn't thrash on playback ticks.
-  static String _keyFor(PlaybackState state) {
-    final StringBuffer buffer = StringBuffer()
-      ..write(state.currentTrack?.uri ?? '-')
-      ..write('|')
-      ..write(state.shuffleEnabled)
-      ..write('|')
-      ..write(state.repeatMode.name)
-      ..write('|');
-    for (final Track track in state.upNext) {
-      buffer
-        ..write(track.uri)
-        ..write(',');
-    }
-    return buffer.toString();
   }
 
   Future<void> _drain() async {

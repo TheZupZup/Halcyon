@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/lifecycle/app_visibility.dart';
 import '../../../core/models/jellyfin_session.dart';
 import '../../../core/services/reachability.dart';
 import '../../../core/sources/jellyfin/jellyfin_availability.dart';
@@ -20,13 +21,23 @@ import 'jellyfin_settings_providers.dart';
 final jellyfinAvailabilityPollIntervalProvider =
     Provider<Duration?>((ref) => null);
 
-/// Production binding: re-probe a configured server periodically.
+/// Production binding: re-probe a configured server periodically *while the
+/// app is on screen*.
 ///
 /// Short enough that walking back onto the home network restores the library on
 /// its own, with no reconnect and no rescan, and long enough that an absent
 /// server costs one cheap, already-authenticated request a minute rather than a
 /// battery drain. App resume and the playback path cover the rest, so this is a
 /// backstop, not the primary signal.
+///
+/// The poll runs only while the UI is visible ([appVisibilityProvider]). With
+/// the screen off, `audio_service` keeps this isolate alive for playback, so
+/// this timer would otherwise keep firing for the whole session — a network
+/// round-trip (and on mobile data, a radio wake-up) every interval, refreshing
+/// a library nobody is looking at. Nothing is lost by standing down: coming
+/// back to the app re-probes immediately (see `LinthraApp`'s resume path), and
+/// the playback path reports what it learns through [noteReachability] whether
+/// the UI is up or not.
 final jellyfinAvailabilityPollOverride =
     jellyfinAvailabilityPollIntervalProvider.overrideWithValue(
   const Duration(seconds: 45),
@@ -53,6 +64,14 @@ class JellyfinAvailabilityController extends Notifier<SourceAvailabilityState> {
   Timer? _poll;
   bool _disposed = false;
 
+  /// How often to re-probe while the app is on screen, or null for no polling
+  /// at all. Read once per build from [jellyfinAvailabilityPollIntervalProvider].
+  Duration? _interval;
+
+  /// Whether a configured session exists, so a visibility change can restart
+  /// the poll without re-reading the settings controller.
+  bool _configured = false;
+
   /// Guards against a slow probe from a previous session/server landing on top
   /// of a newer answer. Every probe takes a ticket; only the newest one may
   /// write. Kept across `build()` re-runs (Riverpod reuses the notifier), which
@@ -76,17 +95,23 @@ class JellyfinAvailabilityController extends Notifier<SourceAvailabilityState> {
       _poll = null;
     });
 
+    _configured = configured;
     if (!configured) {
       // Nothing configured: no probe, no timer, and nothing hidden.
       _generation++;
       return const SourceAvailabilityState.notConfigured();
     }
 
-    final Duration? interval =
-        ref.read(jellyfinAvailabilityPollIntervalProvider);
-    if (interval != null && interval > Duration.zero) {
-      _poll = Timer.periodic(interval, (_) => unawaited(refresh()));
-    }
+    _interval = ref.read(jellyfinAvailabilityPollIntervalProvider);
+    // Listened to rather than watched: a visibility flip must start or stop the
+    // timer without re-running this build, which would reset a settled
+    // availability back to `checking` (blinking the library) and fire a fresh
+    // probe every time the user pockets the phone.
+    ref.listen<bool>(
+      appVisibilityProvider,
+      (bool? previous, bool visible) => _syncPoll(visible: visible),
+    );
+    _syncPoll(visible: ref.read(appVisibilityProvider));
     // Probe off the build so the notifier never writes state while building.
     // Until it lands the state is `checking`, which hides nothing (see
     // [SourceAvailability.hidesTracks]) — a library must not blink out while we
@@ -95,6 +120,25 @@ class JellyfinAvailabilityController extends Notifier<SourceAvailabilityState> {
       if (!_disposed) unawaited(refresh());
     });
     return const SourceAvailabilityState.checking();
+  }
+
+  /// Starts or stops the background poll for the current visibility.
+  ///
+  /// Only ever touches the timer: it never probes and never writes state, so a
+  /// pocketed phone (or a returning one) can't move the library on its own.
+  void _syncPoll({required bool visible}) {
+    final Duration? interval = _interval;
+    final bool shouldPoll = !_disposed &&
+        _configured &&
+        visible &&
+        interval != null &&
+        interval > Duration.zero;
+    if (!shouldPoll) {
+      _poll?.cancel();
+      _poll = null;
+      return;
+    }
+    _poll ??= Timer.periodic(interval, (_) => unawaited(refresh()));
   }
 
   /// Re-probes the configured server now. Safe to call from anywhere and at any

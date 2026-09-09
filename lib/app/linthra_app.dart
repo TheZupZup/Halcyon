@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/app_info.dart';
+import '../core/lifecycle/app_visibility.dart';
 import '../core/lifecycle/platform_shutdown_policy.dart';
 import '../core/platform/host_platform.dart';
 import '../core/services/active_playback_controller.dart';
@@ -107,6 +108,12 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.inactive) {
+      if (state != AppLifecycleState.inactive) {
+        // The UI is off screen. Background work that only serves the visible UI
+        // stands down here — with playback keeping the isolate alive, a poll
+        // nobody can see is a pure wake-up. Playback itself is untouched.
+        ref.read(appVisibilityProvider.notifier).onHidden();
+      }
       final controller = ref.read(playbackControllerProvider);
       StabilityDiagnostics.backgroundPlaybackState(
           controller.state.status.name);
@@ -118,6 +125,7 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
       }
     }
     if (state == AppLifecycleState.resumed) {
+      ref.read(appVisibilityProvider.notifier).onShown();
       final controller = ref.read(playbackControllerProvider);
       if (controller is ActivePlaybackController) {
         controller.onAppResumed();

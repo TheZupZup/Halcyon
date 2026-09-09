@@ -120,6 +120,26 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
   int _lastQueueStart = 0;
   bool _seeded = false;
 
+  // The exact queue/track/duration inputs the metadata half of the last
+  // broadcast was derived from, kept by *reference* so a position tick can be
+  // recognised for what it is before any work is done for it.
+  //
+  // A steady playing state emits ~4 times a second, and every one of those
+  // emissions carries the same `previous` / `upNext` list objects and the same
+  // current track: [PlaybackState.copyWith] passes the lists straight through,
+  // so a tick that only advances the position cannot have changed a single row.
+  // Without this guard each of those ticks re-materialized the published window
+  // (up to [maxPublishedQueueItems] tracks) and rebuilt a [audio.MediaItem],
+  // only for the comparisons below to conclude nothing changed — several
+  // thousand list writes a minute, for the whole length of a screen-off
+  // session. Identity is a conservative test: a genuinely new list (a queue
+  // edit, a skip, a shuffle) is a different object and falls through to the
+  // full comparison, so nothing a session renders can be missed by it.
+  List<Track>? _lastBroadcastPrevious;
+  List<Track>? _lastBroadcastUpNext;
+  Track? _lastBroadcastTrack;
+  Duration? _lastBroadcastDuration;
+
   /// The most rows the platform session's queue ever carries.
   ///
   /// The published queue is delivered to every media controller — Android Auto
@@ -295,7 +315,22 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
 
   // ------------------------------------------------------------------------
 
-  void _broadcast(PlaybackState state) {
+  /// Mirrors [state] onto the platform session.
+  ///
+  /// [force] re-derives the media item and queue window even when the state's
+  /// own inputs are unchanged. That is what a cover finishing its warm needs:
+  /// the artwork is looked up outside [PlaybackState] (see [_sessionArtUri]),
+  /// so the same track can genuinely publish a different item.
+  void _broadcast(PlaybackState state, {bool force = false}) {
+    // A pure position tick carries the same queue objects, the same track, and
+    // the same duration as the last broadcast, so nothing the notification, the
+    // lock screen, or the car's "Up Next" renders can have moved. Reuse what
+    // was published instead of rebuilding it several times a second — the
+    // playback state below still follows the position and re-syncs on drift.
+    if (!force && _isPublishedMetadataUnchanged(state)) {
+      _pushPlaybackState(state, start: _lastQueueStart);
+      return;
+    }
     final Track? track = state.currentTrack;
     final audio.MediaItem? item = track == null
         ? null
@@ -331,6 +366,32 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
         for (final Track t in window) _trackMediaItem(t, id: t.id),
       ]);
     }
+    _lastBroadcastPrevious = state.previous;
+    _lastBroadcastUpNext = state.upNext;
+    _lastBroadcastTrack = state.currentTrack;
+    _lastBroadcastDuration = state.duration;
+    _pushPlaybackState(state, start: start);
+  }
+
+  /// Whether [state] would publish exactly the media item and queue window the
+  /// last broadcast already did, judged by object identity so the check itself
+  /// costs nothing on the ~4 Hz position path.
+  ///
+  /// Deliberately conservative: two equal-but-rebuilt lists answer `false` and
+  /// take the full comparison below, so this can only ever skip work that was
+  /// provably redundant.
+  bool _isPublishedMetadataUnchanged(PlaybackState state) {
+    return _seeded &&
+        identical(state.previous, _lastBroadcastPrevious) &&
+        identical(state.upNext, _lastBroadcastUpNext) &&
+        identical(state.currentTrack, _lastBroadcastTrack) &&
+        state.duration == _lastBroadcastDuration;
+  }
+
+  /// Pushes the platform playback state for [state] when something it renders
+  /// changed. [start] is the absolute queue index the published window begins
+  /// at, so the highlighted row stays numbered within what was published.
+  void _pushPlaybackState(PlaybackState state, {required int start}) {
     // The active row, numbered within the published window so the car
     // highlights the right one — a window-relative index, matching the ids
     // `audio_service` assigns the rows it published.
@@ -377,7 +438,10 @@ class LinthraAudioHandler extends audio.BaseAudioHandler {
       // report shows the rebroadcast is off the playback path — [_broadcast]
       // mirrors the controller's *current* state and issues no transport command.
       StabilityDiagnostics.mediaItemRebroadcast('artwork');
-      _broadcast(_controller.state);
+      // Forced: the state itself hasn't changed (same track, same queue), only
+      // the cover the item resolves to, so the position-tick fast path must not
+      // short-circuit this one.
+      _broadcast(_controller.state, force: true);
     }
   }
 

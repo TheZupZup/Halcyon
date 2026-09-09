@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/app/linthra_app.dart';
+import 'package:linthra/core/lifecycle/app_visibility.dart';
 import 'package:linthra/core/models/playback_state.dart';
 import 'package:linthra/core/models/track.dart';
 import 'package:linthra/core/services/notification_permission.dart';
@@ -187,6 +188,32 @@ void main() {
     // background boundary is captured (here, playing) for the bug report.
     expect(StabilityDiagnostics.playbackStateAtBackground, 'playing');
     expect(StabilityDiagnostics.lastLifecycleState, 'paused');
+  });
+
+  testWidgets(
+      'app visibility follows the lifecycle, so hidden work can stand '
+      'down', (tester) async {
+    await _pumpApp(tester);
+    final ProviderContainer container =
+        ProviderScope.containerOf(tester.element(find.byType(LinthraApp)));
+
+    expect(container.read(appVisibilityProvider), isTrue);
+
+    // A brief inactive (a dialog, the notification shade) is not "hidden": it
+    // is over in a moment, and standing down for it would cost more than it
+    // saves.
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    expect(container.read(appVisibilityProvider), isTrue);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    expect(container.read(appVisibilityProvider), isFalse,
+        reason: 'screen off: background work that only serves the UI stops');
+
+    await _foreground(tester);
+    expect(container.read(appVisibilityProvider), isTrue);
   });
 
   testWidgets(
