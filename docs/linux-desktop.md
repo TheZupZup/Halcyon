@@ -350,7 +350,8 @@ undeclared network access to an isolated `flatpak-builder` build.
 | **Audio output device** | Supported | Settings → Music & playback → Audio output lists libmpv's `audio-device-list` and routes playback with `audio-device` ([issue #402](https://github.com/TheZupZup/Linthra/issues/402)). A saved device is re-applied at launch, and one that is no longer present falls back to the system default. See [Audio output device](#audio-output-device). |
 | Chromecast | Android/iOS only | Already gated in `cast_providers.dart`; Linux keeps the honest "cast unavailable" service. |
 | Share sheet, launcher-icon switching | Android-only, by design | No desktop equivalent; the UI simply omits them. |
-| Desktop layout, keyboard shortcuts | Not started | The existing layout renders in the window and is usable for development. The desktop UX pass is later work in #376. |
+| Desktop layout | Supported | The shell swaps its bottom bar for a navigation rail at 900 px, and feature screens adapt on the width they are given — see [How the desktop layout adapts](#how-the-desktop-layout-adapts). |
+| Keyboard shortcuts | Partial | Quick search is bound to **Ctrl+K** / **Ctrl+F** ([issue #393](https://github.com/TheZupZup/Linthra/issues/393)) — see [Quick search](#quick-search-ctrlk). Transport and volume shortcuts are still later work in #376. |
 
 Nothing in that table is faked. Each one is an explicit implementation behind an
 existing interface, so it is visible in the code and covered by tests — with
@@ -424,6 +425,22 @@ What it buys, per surface:
 Both breakpoints in the app agree by construction: the shell swaps its bottom
 bar for the navigation rail at 900 px of window, and a feature screen inside it
 only reaches `expanded` once the space left over is 1000 px wide.
+
+### Quick search (Ctrl+K)
+
+**Ctrl+K** (or **Ctrl+F**) opens a quick-search overlay over whatever is on
+screen: one box across songs, albums, artists and playlists, grouped and fully
+keyboard-driven (↑/↓ to move, Enter to open, Esc to close). The screen
+underneath keeps its state — it is a dialog on the root navigator, not a
+navigation — and opening a result goes through the app's existing routes and
+playback actions.
+
+Like the layout, it is **not** gated on `HostPlatform`: the binding
+([`quick_search_shortcuts.dart`](../lib/app/quick_search_shortcuts.dart)) wraps
+the router, above every route, and can only fire when a real keyboard sends the
+chord — so a phone is unaffected while an Android tablet with a keyboard case
+gets it for free. What it searches and how it ranks is documented in
+[library.md](./library.md#quick-search-ctrlk).
 
 Tests: `test/shared/layout/adaptive_layout_test.dart`,
 `test/features/library/album_grid_test.dart`,
