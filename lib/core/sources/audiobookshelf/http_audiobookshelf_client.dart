@@ -110,6 +110,32 @@ class HttpAudiobookshelfClient implements AudiobookshelfClient {
     return libraries;
   }
 
+  @override
+  Future<AudiobookshelfLibraryItemsPage> fetchLibraryItems(
+    AudiobookshelfSession session, {
+    required String libraryId,
+    required int limit,
+    required int page,
+  }) async {
+    final Uri uri = AudiobookshelfEndpoints.libraryItems(
+      session.baseUrl,
+      libraryId,
+      limit: limit,
+      page: page,
+    );
+    final http.Response response = await _send(
+      () => _client.get(uri, headers: <String, String>{
+        'Accept': 'application/json',
+        'Authorization': 'Bearer ${session.accessToken}',
+      }),
+    );
+    _checkStatus(response);
+    return AudiobookshelfLibraryItemsPage.fromJson(
+      _decodeObject(response),
+      requestedPage: page,
+    );
+  }
+
   Future<http.Response> _send(
     Future<http.Response> Function() request,
   ) async {

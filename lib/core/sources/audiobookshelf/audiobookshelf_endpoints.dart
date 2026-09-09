@@ -34,10 +34,33 @@ abstract final class AudiobookshelfEndpoints {
   /// Requires the `Authorization: Bearer <accessToken>` header.
   static Uri libraries(String baseUrl) => _join(baseUrl, _librariesPath);
 
-  /// `GET /api/libraries/{id}/items` — the items in one library. Requires
-  /// the `Authorization: Bearer <accessToken>` header.
-  static Uri libraryItems(String baseUrl, String libraryId) =>
-      _join(baseUrl, '/api/libraries/$libraryId/items');
+  /// `GET /api/libraries/{id}/items`: one page of the items in one library.
+  /// Requires the `Authorization: Bearer <accessToken>` header.
+  ///
+  /// The query is what makes this usable on a real library:
+  ///  - `minified=1` drops the audio files, chapters and library-file records
+  ///    from every entry (a listing needs none of them) and gives the
+  ///    pre-joined `authorName` / `narratorName` a row actually renders;
+  ///  - `sort` + `desc=0` order by title on the server, so paging stays
+  ///    consistent instead of each page being sorted on its own;
+  ///  - `limit` + `page` (zero-based) keep one request bounded on a library
+  ///    with thousands of books.
+  static Uri libraryItems(
+    String baseUrl,
+    String libraryId, {
+    required int limit,
+    required int page,
+  }) {
+    return _join(baseUrl, '/api/libraries/$libraryId/items').replace(
+      queryParameters: <String, String>{
+        'minified': '1',
+        'sort': 'media.metadata.title',
+        'desc': '0',
+        'limit': '$limit',
+        'page': '$page',
+      },
+    );
+  }
 
   static Uri _join(String baseUrl, String path) => Uri.parse('$baseUrl$path');
 }
