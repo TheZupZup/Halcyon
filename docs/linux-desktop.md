@@ -347,11 +347,12 @@ underneath keeps its state — it is a dialog on the root navigator, not a
 navigation — and opening a result goes through the app's existing routes and
 playback actions.
 
-Like the layout, it is **not** gated on `HostPlatform`: the binding lives in the
-app frame ([`quick_search_shortcuts.dart`](../lib/features/shell/quick_search_shortcuts.dart))
-and can only fire when a real keyboard sends the chord, so a phone is unaffected
-while an Android tablet with a keyboard case gets it for free. What it searches
-and how it ranks is documented in [library.md](./library.md#quick-search-ctrlk).
+Like the layout, it is **not** gated on `HostPlatform`: the binding
+([`quick_search_shortcuts.dart`](../lib/app/quick_search_shortcuts.dart)) wraps
+the router, above every route, and can only fire when a real keyboard sends the
+chord — so a phone is unaffected while an Android tablet with a keyboard case
+gets it for free. What it searches and how it ranks is documented in
+[library.md](./library.md#quick-search-ctrlk).
 
 Tests: `test/shared/layout/adaptive_layout_test.dart`,
 `test/features/library/album_grid_test.dart`,

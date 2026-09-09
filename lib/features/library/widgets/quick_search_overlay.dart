@@ -110,24 +110,58 @@ class _QuickSearchOverlayState extends ConsumerState<QuickSearchOverlay> {
     _debounce?.cancel();
     _debounce = Timer(QuickSearchOverlay.debounce, () {
       if (!mounted) return;
-      setState(() {
-        _query = value;
-        // A new query means a new list; keeping the old offset would leave the
-        // highlight on an unrelated row.
-        _highlighted = 0;
-      });
+      setState(_applyQuery(value));
     });
+  }
+
+  /// The state mutation a newly settled [query] causes, as a closure for
+  /// `setState`. Shared by the debounce and by [_flushPendingQuery] so a flushed
+  /// query can never leave the list in a different state than a settled one.
+  VoidCallback _applyQuery(String query) {
+    return () {
+      _query = query;
+      // A new query means a new list, so the highlight goes back to the top.
+      _highlighted = 0;
+      // ...and so does the list itself. Without this a user who had scrolled
+      // the previous results down would get row 0 highlighted off-screen, and
+      // Enter would open something they cannot see.
+      _resetScroll();
+    };
+  }
+
+  /// Returns the scroll offset to the top, once the new list has been laid out.
+  void _resetScroll() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      if (_scrollController.offset != 0) _scrollController.jumpTo(0);
+    });
+  }
+
+  /// Applies a pending debounce right now and returns the results for what is
+  /// actually in the box.
+  ///
+  /// Without this, a keyboard user who types and presses Enter inside the 200 ms
+  /// window acts on the *previous* query: on the first one Enter does nothing,
+  /// and on a later one it opens a stale row that no longer matches the text
+  /// they can see. Flushing makes the key press act on what is typed, which is
+  /// the whole "type three letters and hit Enter" flow.
+  QuickSearchResults _flushPendingQuery(QuickSearchResults rendered) {
+    final Timer? pending = _debounce;
+    if (pending == null || !pending.isActive) return rendered;
+    pending.cancel();
+    _debounce = null;
+    final String typed = _controller.text;
+    setState(_applyQuery(typed));
+    return ref.read(quickSearchResultsProvider(typed));
   }
 
   void _clear() {
     // Clearing must be immediate — a pending debounce would otherwise write the
     // just-cleared query back a moment later.
     _debounce?.cancel();
+    _debounce = null;
     _controller.clear();
-    setState(() {
-      _query = '';
-      _highlighted = 0;
-    });
+    setState(_applyQuery(''));
     _fieldFocus.requestFocus();
   }
 
@@ -184,8 +218,9 @@ class _QuickSearchOverlayState extends ConsumerState<QuickSearchOverlay> {
         final int startIndex = songs.indexOf(result.track);
         ref.read(playbackControllerProvider).playTracks(
               songs,
-              // The song group becomes the queue, so Next continues through the
-              // other matches instead of stopping after one song.
+              // The song group becomes the queue, positioned at the chosen row:
+              // Next walks the matches below it and Previous the ones above,
+              // exactly as tapping a row in the Library's own list behaves.
               startIndex: startIndex < 0 ? 0 : startIndex,
             );
         navigator.pop();
@@ -209,7 +244,8 @@ class _QuickSearchOverlayState extends ConsumerState<QuickSearchOverlay> {
     final ThemeData theme = Theme.of(context);
     final QuickSearchResults results =
         ref.watch(quickSearchResultsProvider(_query));
-    final bool loading = ref.watch(quickSearchLoadingProvider);
+    final QuickSearchAvailability availability =
+        ref.watch(quickSearchAvailabilityProvider);
 
     // Clamp before rendering: the catalog can change underneath an open overlay
     // (a sync lands, a playlist is deleted) and shrink the list.
@@ -231,16 +267,19 @@ class _QuickSearchOverlayState extends ConsumerState<QuickSearchOverlay> {
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
+          // Both key actions flush a pending debounce first, so they act on
+          // what is in the box rather than on the previous query's rows.
           _MoveHighlightIntent: CallbackAction<_MoveHighlightIntent>(
             onInvoke: (_MoveHighlightIntent intent) {
-              _move(intent.delta, results.rows.length);
+              _move(intent.delta, _flushPendingQuery(results).rows.length);
               return null;
             },
           ),
           _OpenHighlightedIntent: CallbackAction<_OpenHighlightedIntent>(
             onInvoke: (_) {
-              if (_highlighted < results.rows.length) {
-                _activate(results.rows[_highlighted], results);
+              final QuickSearchResults current = _flushPendingQuery(results);
+              if (_highlighted < current.rows.length) {
+                _activate(current.rows[_highlighted], current);
               }
               return null;
             },
@@ -266,7 +305,7 @@ class _QuickSearchOverlayState extends ConsumerState<QuickSearchOverlay> {
               children: <Widget>[
                 _field(theme),
                 const Divider(height: 1),
-                Flexible(child: _body(theme, results, loading)),
+                Flexible(child: _body(theme, results, availability)),
                 const Divider(height: 1),
                 _hints(theme),
               ],
@@ -310,15 +349,17 @@ class _QuickSearchOverlayState extends ConsumerState<QuickSearchOverlay> {
   Widget _body(
     ThemeData theme,
     QuickSearchResults results,
-    bool loading,
+    QuickSearchAvailability availability,
   ) {
+    // Whatever did load is worth showing even when something else failed: a
+    // Jellyfin outage should not hide the local songs behind an error screen.
     if (results.isNotEmpty) return _resultList(theme, results);
 
-    // Nothing to show yet. Which of the three reasons it is matters: a user who
-    // typed something and sees "nothing here" while the catalog is still
-    // loading would reasonably conclude their music is missing.
+    // Nothing to show. Which of the reasons it is matters: a user who typed
+    // something and sees "nothing here" while the catalog is still loading — or
+    // failed to load — would reasonably conclude their music is missing.
     final Widget message;
-    if (loading) {
+    if (availability == QuickSearchAvailability.loading) {
       message = const _Placeholder(
         key: Key('quick_search_loading'),
         icon: Icons.hourglass_empty,
@@ -339,6 +380,15 @@ class _QuickSearchOverlayState extends ConsumerState<QuickSearchOverlay> {
         key: Key('quick_search_searching'),
         icon: Icons.search,
         title: 'Searching…',
+      );
+    } else if (availability == QuickSearchAvailability.degraded) {
+      // Empty *and* something failed to load: "no results" would be a claim we
+      // cannot back up, so say what actually happened instead.
+      message = const _Placeholder(
+        key: Key('quick_search_unavailable'),
+        icon: Icons.cloud_off,
+        title: 'Some of your library could not be loaded',
+        message: 'Search results are incomplete until it loads again.',
       );
     } else {
       message = _Placeholder(

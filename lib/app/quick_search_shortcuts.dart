@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../library/widgets/quick_search_overlay.dart';
+import '../features/library/widgets/quick_search_overlay.dart';
 
 /// Opens the quick-search overlay.
 ///
@@ -23,12 +23,25 @@ class OpenQuickSearchIntent extends Intent {
 /// fire when a real keyboard sends it, so a phone is unaffected while an Android
 /// tablet with a keyboard case gets it for free.
 ///
-/// The overlay is a dialog on the root navigator (see [showQuickSearch]), so
-/// opening it changes nothing about the screen underneath: no tab switches, no
-/// route is pushed onto a branch, and closing it returns to exactly the same
-/// scroll position and state.
+/// It is mounted **above the router**, wrapping everything the app ever shows,
+/// rather than inside the navigation shell. Key events travel up from whatever
+/// has focus, so a binding inside the shell would be invisible to routes pushed
+/// over it — including the full-screen Now Playing screen, which is exactly
+/// where opening a song from quick search leaves you. Sitting above the router
+/// means every route is a descendant and the shortcut works everywhere.
+///
+/// That position is also why it takes [navigatorKey] instead of using its own
+/// context: above the router there is no `Navigator` ancestor to show a dialog
+/// on, so the overlay is shown on the root navigator by key.
 class QuickSearchShortcuts extends StatefulWidget {
-  const QuickSearchShortcuts({required this.child, super.key});
+  const QuickSearchShortcuts({
+    required this.navigatorKey,
+    required this.child,
+    super.key,
+  });
+
+  /// The root navigator the overlay is shown on (see [rootNavigatorKeyProvider]).
+  final GlobalKey<NavigatorState> navigatorKey;
 
   final Widget child;
 
@@ -53,9 +66,13 @@ class _QuickSearchShortcutsState extends State<QuickSearchShortcuts> {
 
   Future<void> _open() async {
     if (_showing) return;
+    // Null only before the navigator's first build, when there is nothing to
+    // search over yet; a dropped keystroke there is the right outcome.
+    final BuildContext? navigatorContext = widget.navigatorKey.currentContext;
+    if (navigatorContext == null) return;
     _showing = true;
     try {
-      await showQuickSearch(context);
+      await showQuickSearch(navigatorContext);
     } finally {
       _showing = false;
     }

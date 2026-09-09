@@ -393,6 +393,118 @@ void main() {
       expect(find.text('host screen'), findsOneWidget);
     });
 
+    testWidgets('Enter inside the debounce window opens what was just typed',
+        (tester) async {
+      final FakePlaybackController playback = await _open(tester);
+
+      // Type and press Enter immediately — well inside the 200 ms window, so
+      // the ranking has not run yet.
+      await tester.enterText(
+        find.byKey(const Key('quick_search_field')),
+        'instant',
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+
+      await _press(tester, LogicalKeyboardKey.enter);
+
+      expect(
+        playback.playedTracks.single.title,
+        'Instant Crush',
+        reason: 'the pending query is flushed, so Enter acts on the typed text',
+      );
+      expect(_visited, contains('player'));
+    });
+
+    testWidgets('Enter inside the window never opens the previous query result',
+        (tester) async {
+      final FakePlaybackController playback = await _open(tester);
+
+      // Let a first query settle, so there are stale rows on screen.
+      await _type(tester, 'get lucky');
+      expect(find.text('Get Lucky'), findsOneWidget);
+
+      // Replace it and hit Enter before the new ranking runs.
+      await tester.enterText(
+        find.byKey(const Key('quick_search_field')),
+        'halo',
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+      await _press(tester, LogicalKeyboardKey.enter);
+
+      expect(
+        playback.playedTracks.single.title,
+        'Halo',
+        reason: 'the stale Get Lucky row must not be what Enter opens',
+      );
+    });
+
+    testWidgets('arrow keys inside the window act on the typed query too',
+        (tester) async {
+      await _open(tester);
+      await _type(tester, 'daft');
+
+      await tester.enterText(
+        find.byKey(const Key('quick_search_field')),
+        'beyonce',
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // Deliberately not pumpAndSettle: settling would let the debounce fire on
+      // its own and hide whether the key press flushed it. One frame is all the
+      // flush needs.
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+
+      // Beyonce's rows are [Halo, Sasha Fierce, Beyonce], so one step down from
+      // the top lands on the album — not on the old query's second song.
+      expect(_highlightedTitle(tester), 'Sasha Fierce');
+      expect(find.text('Get Lucky'), findsNothing);
+    });
+
+    testWidgets('a new query scrolls the result list back to the top',
+        (tester) async {
+      // Enough matches to overflow the list, so there is an offset to reset.
+      await _open(
+        tester,
+        tracks: <Track>[
+          for (int i = 0; i < 5; i++)
+            Track(
+              id: 'a$i',
+              title: 'Alpha $i',
+              uri: 'file:///a$i.mp3',
+              artistName: 'Alpha Band',
+              albumName: 'Alpha Album $i',
+            ),
+          for (int i = 0; i < 5; i++)
+            Track(
+              id: 'b$i',
+              title: 'Bravo $i',
+              uri: 'file:///b$i.mp3',
+              artistName: 'Bravo Band',
+              albumName: 'Bravo Album $i',
+            ),
+        ],
+      );
+      await _type(tester, 'alpha');
+
+      final ScrollableState scrollable =
+          tester.state<ScrollableState>(find.byType(Scrollable).last);
+      scrollable.position.jumpTo(scrollable.position.maxScrollExtent);
+      await tester.pumpAndSettle();
+      expect(scrollable.position.pixels, greaterThan(0));
+
+      await _type(tester, 'bravo');
+
+      expect(
+        tester
+            .state<ScrollableState>(find.byType(Scrollable).last)
+            .position
+            .pixels,
+        0,
+        reason: 'row 0 is highlighted, so the list must be showing row 0',
+      );
+    });
+
     testWidgets('Enter with no results does nothing', (tester) async {
       await _open(tester);
       await _type(tester, 'zzzzz');
