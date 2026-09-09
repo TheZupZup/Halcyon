@@ -4,12 +4,13 @@
 # a version bump is supposed to touch.
 #
 # The "Prepare release bump" workflow (and its local twin
-# scripts/prepare_release_bump.py) edits exactly four files:
+# scripts/prepare_release_bump.py) edits exactly these files:
 #
 #   * pubspec.yaml                                            (version: line)
 #   * lib/core/app_info.dart                                  (_devVersionName)
 #   * fastlane/metadata/android/en-US/changelogs/<code>.txt   (Fastlane changelog)
 #   * metadata/io.github.thezupzup.linthra.yml                (F-Droid Current*)
+#   * linux/packaging/<app-id>.metainfo.xml                   (AppStream release)
 #
 # A release-bump PR that also carries an unrelated source/UI change is almost
 # always a mistake: those changes belong in their own PR so the release commit
@@ -56,6 +57,7 @@ is_allowed() {
     pubspec.yaml|pubspec.lock|\
     lib/core/app_info.dart|\
     metadata/io.github.thezupzup.linthra.yml|\
+    linux/packaging/*.metainfo.xml|\
     fastlane/metadata/android/*/changelogs/*.txt|\
     docs/release-notes/*)
       return 0 ;;
@@ -86,6 +88,7 @@ fi
   echo "  - pubspec.yaml, pubspec.lock"
   echo "  - lib/core/app_info.dart"
   echo "  - metadata/io.github.thezupzup.linthra.yml"
+  echo "  - linux/packaging/<app-id>.metainfo.xml"
   echo "  - fastlane/metadata/android/<locale>/changelogs/<versionCode>.txt"
   echo "  - docs/release-notes/**"
   echo

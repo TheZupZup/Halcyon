@@ -7,6 +7,7 @@ Updates every file that must agree on the release version:
   * lib/core/app_info.dart                                  (`_devVersionName`)
   * fastlane/metadata/android/en-US/changelogs/<code>.txt   (Fastlane changelog)
   * metadata/io.github.thezupzup.linthra.yml                (F-Droid CurrentVersion/Code)
+  * linux/packaging/<app-id>.metainfo.xml                   (AppStream <release>)
 
 Then prints the next safe command — the release preflight — so a contributor
 running the script locally sees the same workflow the GitHub Action runs.
@@ -21,6 +22,10 @@ Usage:
     python3 scripts/prepare_release_bump.py 0.1.0-alpha.37 \
         --changelog "Linthra 0.1.0-alpha.37 — fixed X."
     python3 scripts/prepare_release_bump.py 0.1.0-alpha.37 --force-changelog
+    python3 scripts/prepare_release_bump.py 0.1.0-alpha.37 --release-date 2026-09-09
+
+Drift between all of those (and the release tag) is checked by
+scripts/check_release_metadata_sync.py, which CI runs on every push.
 
 The version-to-versionCode encoding mirrors tool/version_from_tag.dart and
 scripts/release_preflight.sh; see docs/release-process.md §1.
@@ -29,6 +34,7 @@ scripts/release_preflight.sh; see docs/release-process.md §1.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import re
 import sys
 from pathlib import Path
@@ -192,7 +198,7 @@ def create_changelog(path, version_name, body, allow_overwrite):
     return True
 
 
-def _fdroid_current_version_code(text, base_version_code):
+def fdroid_current_version_code(text, base_version_code):
     """Return the CurrentVersionCode F-Droid will use for this metadata.
 
     Linthra's F-Droid entry uses VercodeOperation to turn one canonical base
@@ -285,7 +291,7 @@ def update_fdroid_metadata(path, version_name, version_code):
             "F-Droid metadata at {} has no `CurrentVersionCode:` line; "
             "refusing to guess.".format(path)
         )
-    fdroid_version_code = _fdroid_current_version_code(text, version_code)
+    fdroid_version_code = fdroid_current_version_code(text, version_code)
     new_text = re.sub(
         r"^CurrentVersion:.*$",
         "CurrentVersion: {}".format(version_name),
@@ -306,6 +312,120 @@ def update_fdroid_metadata(path, version_name, version_code):
     return True
 
 
+# AppStream release entries (#452).
+#
+# Matched with regexes rather than round-tripped through ElementTree on
+# purpose: linux/packaging/<app-id>.metainfo.xml is hand-maintained and carries
+# a long explanatory comment block, and an XML round-trip would reflow the whole
+# file into an unreviewable diff every release. These patterns read the one
+# shape the file actually uses, and anything they cannot find is reported
+# instead of guessed at.
+_RELEASES_BLOCK = re.compile(
+    r"(?P<indent>[ \t]*)<releases>[ \t]*\r?\n(?P<body>.*?)(?P<closing>[ \t]*</releases>)",
+    re.DOTALL,
+)
+_RELEASE_ENTRY = re.compile(r"<release\b[^>]*?/?>")
+_ATTRIBUTE = re.compile(r'([A-Za-z_:][-\w:.]*)\s*=\s*"([^"]*)"')
+
+
+def is_prerelease(version_name):
+    """Whether `version_name` carries an -alpha.N / -beta.N / -rc.N suffix."""
+    match = _TAG_PATTERN.match(version_name.strip())
+    if match is None:
+        raise VersionError('Malformed version "{}".'.format(version_name))
+    return match.group(4) is not None
+
+
+def parse_release_date(value):
+    """Validate a YYYY-MM-DD release date and return it normalised."""
+    try:
+        return dt.date.fromisoformat(value.strip()).isoformat()
+    except ValueError:
+        raise VersionError(
+            'Malformed release date "{}"; expected YYYY-MM-DD.'.format(value)
+        ) from None
+
+
+def appstream_releases(text):
+    """Return the `<release .../>` entries of an AppStream document, in order.
+
+    Each entry is `(raw_tag, attributes)`. Returns None when the document has no
+    `<releases>` block at all, so a caller can tell "no releases listed" from
+    "this file is not shaped the way we think it is".
+    """
+    block = _RELEASES_BLOCK.search(text)
+    if block is None:
+        return None
+    return [
+        (tag, dict(_ATTRIBUTE.findall(tag)))
+        for tag in _RELEASE_ENTRY.findall(block.group("body"))
+    ]
+
+
+def _release_entry(version_name, release_date):
+    """The `<release/>` tag for one release.
+
+    Pre-releases are marked `type="development"` so a software centre does not
+    offer an alpha as if it were the current stable build.
+    """
+    attributes = 'version="{}" date="{}"'.format(version_name, release_date)
+    if is_prerelease(version_name):
+        attributes += ' type="development"'
+    return "<release {}/>".format(attributes)
+
+
+def update_appstream_release(path, version_name, release_date):
+    """Add or refresh this release's entry in the AppStream metainfo file.
+
+    Newest first, which is the order the file already uses and the order
+    software centres read. An entry that already names `version_name` is
+    rewritten in place (date, development marker) rather than duplicated, so
+    re-running the script is safe.
+
+    Returns True if the file changed. A missing file returns False silently, as
+    with the F-Droid metadata: a checkout may not carry the Linux packaging.
+    """
+    if not path.exists():
+        return False
+    text = path.read_text()
+    block = _RELEASES_BLOCK.search(text)
+    if block is None:
+        raise VersionError(
+            "AppStream metainfo at {} has no <releases> block; refusing to "
+            "guess where the release entry belongs.".format(path)
+        )
+
+    body = block.group("body")
+    entry = _release_entry(version_name, release_date)
+    existing = next(
+        (
+            tag
+            for tag, attributes in appstream_releases(text)
+            if attributes.get("version") == version_name
+        ),
+        None,
+    )
+    if existing is not None:
+        new_body = body.replace(existing, entry, 1)
+    else:
+        indent = _entry_indent(body, block.group("indent"))
+        new_body = "{}{}\n{}".format(indent, entry, body)
+
+    if new_body == body:
+        return False
+    start, end = block.span("body")
+    path.write_text(text[:start] + new_body + text[end:])
+    return True
+
+
+def _entry_indent(body, block_indent):
+    """Indent a new `<release/>` line to match the entries already there."""
+    match = re.search(r"^([ \t]*)<release\b", body, flags=re.MULTILINE)
+    if match is not None:
+        return match.group(1)
+    return block_indent + "  "
+
+
 def _rel(repo, path):
     try:
         return str(path.relative_to(repo))
@@ -313,7 +433,7 @@ def _rel(repo, path):
         return str(path)
 
 
-def prepare(repo, raw_version, changelog_body, allow_overwrite):
+def prepare(repo, raw_version, changelog_body, allow_overwrite, release_date):
     """Run the full bump against `repo`. Returns (versionName, code, changed)."""
     if raw_version.startswith("v"):
         raise VersionError(
@@ -347,6 +467,7 @@ def prepare(repo, raw_version, changelog_body, allow_overwrite):
         / "{}.txt".format(version_code)
     )
     fdroid = repo / "metadata" / "io.github.thezupzup.linthra.yml"
+    metainfo = repo / "linux" / "packaging" / "io.github.thezupzup.linthra.metainfo.xml"
 
     changed = []
     if update_pubspec(pubspec, version_name, version_code):
@@ -357,6 +478,8 @@ def prepare(repo, raw_version, changelog_body, allow_overwrite):
         changed.append(_rel(repo, changelog))
     if update_fdroid_metadata(fdroid, version_name, version_code):
         changed.append(_rel(repo, fdroid))
+    if update_appstream_release(metainfo, version_name, release_date):
+        changed.append(_rel(repo, metainfo))
     return version_name, version_code, changed
 
 
@@ -364,7 +487,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description=(
             "Prepare a Linthra release version bump (pubspec, app_info, "
-            "Fastlane changelog, F-Droid metadata). Does not tag or build."
+            "Fastlane changelog, F-Droid metadata, AppStream release entry). "
+            "Does not tag or build."
         )
     )
     parser.add_argument(
@@ -382,6 +506,13 @@ def main(argv=None):
         help="Overwrite the Fastlane changelog if it already exists.",
     )
     parser.add_argument(
+        "--release-date",
+        default="",
+        help=(
+            "Release date for the AppStream entry, YYYY-MM-DD. Empty -> today (UTC)."
+        ),
+    )
+    parser.add_argument(
         "--repo-root",
         type=Path,
         default=Path(__file__).resolve().parent.parent,
@@ -391,11 +522,17 @@ def main(argv=None):
 
     repo = args.repo_root.resolve()
     try:
+        release_date = (
+            parse_release_date(args.release_date)
+            if args.release_date
+            else dt.datetime.now(dt.timezone.utc).date().isoformat()
+        )
         version_name, version_code, changed = prepare(
             repo,
             args.version,
             args.changelog,
             args.force_changelog,
+            release_date,
         )
     except VersionError as err:
         print("ERROR: {}".format(err), file=sys.stderr)

@@ -7,8 +7,9 @@ import '../../tool/version_from_tag.dart';
 
 /// Specifies `scripts/prepare_release_bump.py` — the Python helper the
 /// `.github/workflows/prepare-release-bump.yml` workflow calls to update
-/// pubspec.yaml, lib/core/app_info.dart, the Fastlane changelog, and the
-/// F-Droid metadata's `CurrentVersion`/`CurrentVersionCode`.
+/// pubspec.yaml, lib/core/app_info.dart, the Fastlane changelog, the F-Droid
+/// metadata's `CurrentVersion`/`CurrentVersionCode`, and the AppStream
+/// `<release>` entry software centres show.
 ///
 /// The script has to agree forever with `tool/version_from_tag.dart` and
 /// `scripts/release_preflight.sh`, so this suite shells out to it against a
@@ -298,6 +299,154 @@ void main() {
     });
   });
 
+  group('prepare_release_bump.py (AppStream release entry, #452)', () {
+    // What a software centre and Flathub read. Left behind, it advertises the
+    // previous release for the build the user just installed.
+    const String metainfo = '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<component type="desktop-application">\n'
+        '  <id>io.github.thezupzup.linthra</id>\n'
+        '  <releases>\n'
+        '    <release version="0.1.0-alpha.36" date="2026-09-06" '
+        'type="development"/>\n'
+        '  </releases>\n'
+        '</component>\n';
+
+    Future<Directory> fixture({String? body}) => _fixtureRepo(
+          pubspecVersion: '0.1.0-alpha.36',
+          pubspecCode: 100036,
+          appInfoVersion: '0.1.0-alpha.36',
+          metainfoBody: body ?? metainfo,
+        );
+
+    File metainfoFile(Directory dir) => File(p.join(dir.path, 'linux',
+        'packaging', 'io.github.thezupzup.linthra.metainfo.xml'));
+
+    test('adds the new release as the newest entry', () async {
+      final Directory tmp = await fixture();
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.37',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--release-date', '2026-09-09'],
+      );
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+
+      final String after = metainfoFile(tmp).readAsStringSync();
+      expect(
+        after,
+        contains('<release version="0.1.0-alpha.37" date="2026-09-09" '
+            'type="development"/>'),
+      );
+      // Newest first, and the previous entry is kept.
+      expect(after.indexOf('0.1.0-alpha.37'),
+          lessThan(after.indexOf('0.1.0-alpha.36')));
+      expect(after, contains('date="2026-09-06"'));
+    });
+
+    test('marks a stable release as stable', () async {
+      final Directory tmp = await fixture();
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '1.0.0',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--release-date', '2026-09-09'],
+      );
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+      expect(
+        metainfoFile(tmp).readAsStringSync(),
+        contains('<release version="1.0.0" date="2026-09-09"/>'),
+      );
+    });
+
+    test('re-running the same bump does not duplicate the entry', () async {
+      final Directory tmp = await fixture();
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      for (int i = 0; i < 2; i++) {
+        final ProcessResult r = _runScript(
+          script,
+          '0.1.0-alpha.37',
+          repoRoot: tmp.path,
+          extraArgs: <String>['--release-date', '2026-09-09'],
+        );
+        expect(r.exitCode, 0,
+            reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+      }
+
+      final String after = metainfoFile(tmp).readAsStringSync();
+      expect('0.1.0-alpha.37'.allMatches(after).length, 1);
+    });
+
+    test('refreshes the date of an entry that already exists', () async {
+      final Directory tmp = await fixture();
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.36',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--release-date', '2026-09-09'],
+      );
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+
+      final String after = metainfoFile(tmp).readAsStringSync();
+      expect(after, contains('date="2026-09-09"'));
+      expect(after, isNot(contains('date="2026-09-06"')));
+      expect('0.1.0-alpha.36'.allMatches(after).length, 1);
+    });
+
+    test('does nothing when the metainfo file is absent', () async {
+      final Directory tmp = await _fixtureRepo(
+        pubspecVersion: '0.1.0-alpha.36',
+        pubspecCode: 100036,
+        appInfoVersion: '0.1.0-alpha.36',
+      );
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r =
+          _runScript(script, '0.1.0-alpha.37', repoRoot: tmp.path);
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+      expect(metainfoFile(tmp).existsSync(), isFalse);
+    });
+
+    test('refuses a metainfo file with no <releases> block', () async {
+      final Directory tmp = await fixture(
+        body: '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<component type="desktop-application">\n'
+            '  <id>io.github.thezupzup.linthra</id>\n'
+            '</component>\n',
+      );
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r =
+          _runScript(script, '0.1.0-alpha.37', repoRoot: tmp.path);
+      expect(r.exitCode, isNot(0));
+      expect(r.stderr, contains('<releases>'));
+    });
+
+    test('rejects a malformed release date', () async {
+      final Directory tmp = await fixture();
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.37',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--release-date', '09/09/2026'],
+      );
+      expect(r.exitCode, isNot(0));
+      expect(r.stderr, contains('Malformed release date'));
+    });
+  });
+
   group('prepare_release_bump.py — input validation', () {
     test('rejects a leading v', () async {
       final Directory tmp = await _fixtureRepo(
@@ -395,6 +544,7 @@ Future<Directory> _fixtureRepo({
   String? appInfoVersion,
   String? appInfoBody,
   String? fdroidBody,
+  String? metainfoBody,
 }) async {
   final Directory dir =
       await Directory.systemTemp.createTemp('prepare_release_bump_');
@@ -423,6 +573,14 @@ Future<Directory> _fixtureRepo({
     Directory(p.join(dir.path, 'metadata')).createSync(recursive: true);
     File(p.join(dir.path, 'metadata', 'io.github.thezupzup.linthra.yml'))
         .writeAsStringSync(fdroidBody);
+  }
+  if (metainfoBody != null) {
+    Directory(p.join(dir.path, 'linux', 'packaging')).createSync(
+      recursive: true,
+    );
+    File(p.join(dir.path, 'linux', 'packaging',
+            'io.github.thezupzup.linthra.metainfo.xml'))
+        .writeAsStringSync(metainfoBody);
   }
   return dir;
 }

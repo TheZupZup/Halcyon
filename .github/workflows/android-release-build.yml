@@ -313,7 +313,7 @@ jobs:
       # the GitHub Actions run page reads as a release that did not build —
       # never confused with an APK build failure (the build never ran). The
       # contributor sees the same wording locally because they ran the same
-      # script (see docs/release-process.md §3 step 9). We pass --no-app-info
+      # script (see docs/release-process.md §3 step 10). We pass --no-app-info
       # here because the AppInfo drift is already covered by the CI workflow's
       # `flutter test` step (test/core/app_info_version_test.dart).
       - name: Verify the tag matches pubspec.yaml
