@@ -394,6 +394,37 @@ class _UpNextListState extends ConsumerState<_UpNextList> {
     _followWalkTo(to, delta);
   }
 
+  /// Applies a pointer drop, carrying keyboard focus along with the row that
+  /// held it.
+  ///
+  /// Focus nodes are per position, so a drag changes which track the focused
+  /// node belongs to. Left alone, a Ctrl+Arrow after a drag reorders whichever
+  /// neighbour slid under the focus rather than the track just dropped. The
+  /// remap covers any focused row, not only the dragged one: a drag past a
+  /// focused row shifts that row too.
+  ///
+  /// Nothing happens when no handle has focus, so a plain mouse drag never
+  /// pulls focus into the list.
+  void _moveByPointer(int from, int to) {
+    final int focused =
+        _handleFocusNodes.indexWhere((FocusNode node) => node.hasFocus);
+    if (!_move(from, to)) return;
+    if (focused < 0) return;
+    _followWalkTo(_positionAfterMove(focused, from: from, to: to), to - from);
+  }
+
+  /// Where row [index] ends up once the row at [from] is moved to [to].
+  static int _positionAfterMove(
+    int index, {
+    required int from,
+    required int to,
+  }) {
+    if (index == from) return to;
+    if (from < index && index <= to) return index - 1;
+    if (to <= index && index < from) return index + 1;
+    return index;
+  }
+
   /// Scrolls the moved track's handle into view and gives it focus, so a held
   /// chord keeps walking the same track.
   ///
@@ -424,7 +455,7 @@ class _UpNextListState extends ConsumerState<_UpNextList> {
     final List<Track> tracks = widget.tracks;
     return SliverReorderableList(
       itemCount: tracks.length,
-      onReorderItem: (int oldIndex, int newIndex) => _move(oldIndex, newIndex),
+      onReorderItem: _moveByPointer,
       proxyDecorator: _liftedRow,
       itemBuilder: (context, index) => _UpNextTile(
         // Index-qualified so the same track queued twice never produces a
@@ -529,6 +560,15 @@ class _UpNextTile extends StatelessWidget {
   }
 }
 
+/// The modifier the move chord is spelled with on [platform].
+///
+/// Both modifiers stay registered everywhere — an unused activator costs
+/// nothing — but the hint has to name the one that actually works here. On
+/// macOS Ctrl+Arrow belongs to Mission Control and never reaches the app, so a
+/// hint saying Ctrl there would point people at a chord the OS eats.
+String _moveModifierLabel(TargetPlatform platform) =>
+    platform == TargetPlatform.macOS ? 'Cmd' : 'Ctrl';
+
 /// Asks for the focused queue row to move [delta] positions (-1 up, +1 down).
 class _MoveQueueItemIntent extends Intent {
   const _MoveQueueItemIntent(this.delta);
@@ -614,7 +654,8 @@ class _ReorderHandle extends StatelessWidget {
                   child: ReorderableDragStartListener(
                     index: index,
                     child: Tooltip(
-                      message: 'Reorder (drag, or Ctrl + ↑ / ↓)',
+                      message: 'Reorder (drag, or '
+                          '${_moveModifierLabel(theme.platform)} + ↑ / ↓)',
                       // Hover only. The default long-press trigger puts a
                       // long-press recognizer in the arena next to the drag
                       // listener, and on a handle the press *is* the drag: the

@@ -22,6 +22,7 @@ Future<void> _open(
   WidgetTester tester,
   FakePlaybackController controller, {
   InMemoryPlaylistStore? store,
+  TargetPlatform? platform,
 }) async {
   await tester.pumpWidget(
     ProviderScope(
@@ -30,6 +31,7 @@ Future<void> _open(
         if (store != null) playlistStoreProvider.overrideWithValue(store),
       ],
       child: MaterialApp(
+        theme: platform == null ? null : ThemeData(platform: platform),
         home: Scaffold(
           body: Builder(
             builder: (context) => TextButton(
@@ -108,6 +110,14 @@ Future<void> _pressMoveChord(WidgetTester tester, {required bool down}) async {
   );
   await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
   await tester.pumpAndSettle();
+}
+
+/// The reorder handle's hover hint, which spells out the keyboard chord.
+String _moveHint(WidgetTester tester) {
+  return tester
+      .widgetList<Tooltip>(find.byType(Tooltip))
+      .map((Tooltip t) => t.message ?? '')
+      .firstWhere((String m) => m.contains('Reorder'));
 }
 
 /// The custom semantics actions offered on the row rendering [title].
@@ -547,6 +557,94 @@ void main() {
       expect(upNext..remove('01'), <String>[
         for (int i = 2; i < 30; i++) i.toString().padLeft(2, '0'),
       ]);
+    });
+    testWidgets('a chord after a pointer drag moves the track that was dragged',
+        (tester) async {
+      final controller = FakePlaybackController();
+      await controller.playTracks(
+        [_track('A'), _track('B'), _track('C'), _track('D'), _track('E')],
+      );
+
+      await _open(tester, controller);
+      // Focus B's handle, then drag B to the end with the mouse. Focus nodes
+      // are per position, so without a handoff the focus would be left on the
+      // row C slid into and the chord below would move C (or, at the top of
+      // the list, do nothing at all).
+      await _focusHandle(tester, 0);
+      await _dragToEdge(tester, from: 0, toEnd: true);
+      expect(controller.state.upNext.map((Track t) => t.id).toList(),
+          <String>['C', 'D', 'E', 'B']);
+
+      await _pressMoveChord(tester, down: false);
+
+      expect(controller.state.upNext.map((Track t) => t.id).toList(),
+          <String>['C', 'D', 'B', 'E']);
+    });
+
+    testWidgets('a drag past a focused row carries that row along',
+        (tester) async {
+      final controller = FakePlaybackController();
+      await controller.playTracks(
+        [_track('A'), _track('B'), _track('C'), _track('D'), _track('E')],
+      );
+
+      await _open(tester, controller);
+      // Focus D, then drag B from the top past it. D is now one row higher, so
+      // the chord has to follow D rather than stay on the index it used to sit
+      // at — which E has since slid into.
+      await _focusHandle(tester, 2); // up next is [B, C, D, E]
+      await _dragToEdge(tester, from: 0, toEnd: true);
+      expect(controller.state.upNext.map((Track t) => t.id).toList(),
+          <String>['C', 'D', 'E', 'B']);
+
+      await _pressMoveChord(tester, down: false);
+
+      // D moved up. Staying on the stale index would have moved E instead,
+      // giving [C, E, D, B].
+      expect(controller.state.upNext.map((Track t) => t.id).toList(),
+          <String>['D', 'C', 'E', 'B']);
+    });
+
+    testWidgets('a mouse drag alone never pulls focus into the queue',
+        (tester) async {
+      final controller = FakePlaybackController();
+      await controller
+          .playTracks([_track('A'), _track('B'), _track('C'), _track('D')]);
+
+      await _open(tester, controller);
+      await _dragToEdge(tester, from: 0, toEnd: true);
+
+      // Nothing was focused before the drag, so nothing is after it: the
+      // handoff only moves focus that already existed.
+      expect(
+        find
+            .byIcon(Icons.drag_handle)
+            .evaluate()
+            .any((Element e) => Focus.of(e).hasFocus),
+        isFalse,
+      );
+    });
+
+    testWidgets('the hover hint names the modifier that works on this platform',
+        (tester) async {
+      final controller = FakePlaybackController();
+      await controller.playTracks([_track('A'), _track('B')]);
+
+      await _open(tester, controller, platform: TargetPlatform.macOS);
+
+      // Ctrl + arrow is Mission Control on macOS and never reaches the app, so
+      // a hint naming it would send people to a chord the OS eats.
+      expect(_moveHint(tester), contains('Cmd'));
+      expect(_moveHint(tester), isNot(contains('Ctrl')));
+    });
+
+    testWidgets('the hover hint says Ctrl on Linux', (tester) async {
+      final controller = FakePlaybackController();
+      await controller.playTracks([_track('A'), _track('B')]);
+
+      await _open(tester, controller, platform: TargetPlatform.linux);
+
+      expect(_moveHint(tester), contains('Ctrl'));
     });
   });
 }
