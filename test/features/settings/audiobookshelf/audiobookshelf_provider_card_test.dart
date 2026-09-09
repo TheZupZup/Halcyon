@@ -61,6 +61,15 @@ void main() {
     expect(find.text('Connected'), findsOneWidget);
     expect(find.text('Signed in as alice'), findsOneWidget);
     expect(find.text('Manage'), findsOneWidget);
+    // The way into the books themselves, offered only once there is a server
+    // to browse.
+    expect(find.text('Browse'), findsOneWidget);
+  });
+
+  testWidgets('offers no Browse without a connection', (tester) async {
+    await _pump(tester);
+
+    expect(find.text('Browse'), findsNothing);
   });
 
   testWidgets('Connect opens the connection form', (tester) async {
