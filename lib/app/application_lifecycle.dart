@@ -21,6 +21,7 @@ import '../features/player/media_artwork_providers.dart';
 import '../features/player/player_providers.dart';
 import '../features/settings/audiobookshelf/audiobookshelf_settings_controller.dart';
 import '../features/settings/jellyfin/jellyfin_settings_controller.dart';
+import '../features/settings/playback/audio_output_controller.dart';
 import '../features/settings/playback/normalize_volume_controller.dart';
 import '../features/settings/plex/plex_settings_controller.dart';
 import '../features/settings/subsonic/subsonic_settings_controller.dart';
@@ -237,6 +238,19 @@ Future<ApplicationHandle> bootstrapApplication(
       ),
     );
 
+    // Re-apply a saved audio output (Linux) so a chosen headset, DAC or HDMI
+    // sink survives a restart without the listener re-picking it. Not awaited:
+    // asking libmpv for its device list is the only slow part of this, and
+    // holding the first frame for it would trade a visible launch delay for a
+    // routing decision that is still applied well before anything plays — the
+    // choice lands on the live player *and* on every player created after it.
+    // It is owned rather than fire-and-forget so shutdown still waits for it.
+    //
+    // Cheap by design when there is nothing to restore: the controller does not
+    // probe the backend just to confirm the system default, and off Linux the
+    // seam is a no-op that never loads libmpv at all.
+    handle.ownPendingWork(_restoreAudioOutput(container));
+
     // Warm the persisted sessions before the first frame so a synced remote
     // track can stream on the first tap. Best-effort and secret-free: a
     // missing/corrupt record loads as "not connected".
@@ -327,5 +341,18 @@ Future<ApplicationHandle> bootstrapApplication(
     // caller sees.
     await handle.shutdown();
     Error.throwWithStackTrace(error, stackTrace);
+  }
+}
+
+/// Builds the audio-output controller, which re-applies a saved output device.
+///
+/// Failure is swallowed on purpose: an audio backend that will not answer must
+/// never break launch, and the fallback — the system default — is exactly what
+/// the app does without this.
+Future<void> _restoreAudioOutput(ProviderContainer container) async {
+  try {
+    await container.read(audioOutputControllerProvider.future);
+  } catch (_) {
+    // Ignore: playback stays on the system default.
   }
 }
