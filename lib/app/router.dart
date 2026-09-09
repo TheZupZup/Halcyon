@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../features/appearance/appearance_settings_screen.dart';
+import '../features/audiobooks/audiobooks_screen.dart';
 import '../features/downloads/downloads_screen.dart';
 import '../features/favorites/favorites_screen.dart';
 import '../features/library/album_detail_screen.dart';
@@ -151,6 +152,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                     path: 'connections',
                     builder: (context, state) =>
                         const ConnectionsSettingsScreen(),
+                  ),
+                  GoRoute(
+                    path: 'audiobooks',
+                    builder: (context, state) => const AudiobooksScreen(),
                   ),
                   GoRoute(
                     path: 'playback',

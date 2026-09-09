@@ -268,4 +268,206 @@ void main() {
       expect(libraries, isEmpty);
     });
   });
+
+  group('fetchLibraryItems', () {
+    Map<String, dynamic> book({
+      String id = 'item-1',
+      String title = 'The Hobbit',
+    }) {
+      return <String, dynamic>{
+        'id': id,
+        'mediaType': 'book',
+        'media': <String, dynamic>{
+          'duration': 40230.5,
+          'metadata': <String, dynamic>{
+            'title': title,
+            'subtitle': 'or There and Back Again',
+            'authorName': 'J. R. R. Tolkien',
+            'narratorName': 'Rob Inglis',
+            'seriesName': 'Middle-earth',
+          },
+        },
+      };
+    }
+
+    test('parses a page, and asks for a minified, title-sorted page', () async {
+      http.Request? captured;
+      final client = _client(MockClient((http.Request request) async {
+        captured = request;
+        return _json(<String, dynamic>{
+          'results': <Map<String, dynamic>>[book()],
+          'total': 42,
+          'page': 0,
+        });
+      }));
+
+      final page = await client.fetchLibraryItems(
+        _session,
+        libraryId: 'lib-1',
+        limit: 100,
+        page: 0,
+      );
+
+      expect(page.total, 42);
+      expect(page.page, 0);
+      expect(page.items, hasLength(1));
+      final item = page.items.single;
+      expect(item.id, 'item-1');
+      expect(item.title, 'The Hobbit');
+      expect(item.subtitle, 'or There and Back Again');
+      expect(item.authorName, 'J. R. R. Tolkien');
+      expect(item.narratorName, 'Rob Inglis');
+      expect(item.seriesName, 'Middle-earth');
+      expect(item.duration, const Duration(milliseconds: 40230500));
+
+      expect(captured!.headers['Authorization'], 'Bearer tok-abc');
+      expect(captured!.url.path, '/api/libraries/lib-1/items');
+      expect(captured!.url.queryParameters, <String, String>{
+        'minified': '1',
+        'sort': 'media.metadata.title',
+        'desc': '0',
+        'limit': '100',
+        'page': '0',
+      });
+    });
+
+    test('reads the full (non-minified) author/narrator/series shape too',
+        () async {
+      // A response that sends the objects rather than the pre-joined names:
+      // the parser must not depend on the query string staying as it is.
+      final client = _client(MockClient((_) async {
+        return _json(<String, dynamic>{
+          'results': <Map<String, dynamic>>[
+            <String, dynamic>{
+              'id': 'item-1',
+              'media': <String, dynamic>{
+                'metadata': <String, dynamic>{
+                  'title': 'Good Omens',
+                  'authors': <Map<String, dynamic>>[
+                    <String, dynamic>{'id': 'a1', 'name': 'Terry Pratchett'},
+                    <String, dynamic>{'id': 'a2', 'name': 'Neil Gaiman'},
+                  ],
+                  'narrators': <String>['Martin Jarvis'],
+                  'series': <Map<String, dynamic>>[
+                    <String, dynamic>{'id': 's1', 'name': 'Discworld'},
+                  ],
+                },
+              },
+            },
+          ],
+          'total': 1,
+        });
+      }));
+
+      final page = await client.fetchLibraryItems(
+        _session,
+        libraryId: 'lib-1',
+        limit: 100,
+        page: 0,
+      );
+
+      final item = page.items.single;
+      expect(item.authorName, 'Terry Pratchett, Neil Gaiman');
+      expect(item.narratorName, 'Martin Jarvis');
+      expect(item.seriesName, 'Discworld');
+      // Nothing reported a length: no invented 0:00.
+      expect(item.duration, isNull);
+    });
+
+    test('skips an entry with no title instead of failing the page', () async {
+      final client = _client(MockClient((_) async {
+        return _json(<String, dynamic>{
+          'results': <Map<String, dynamic>>[
+            book(),
+            // Scanned but not yet identified: no metadata title.
+            <String, dynamic>{'id': 'item-2', 'media': <String, dynamic>{}},
+          ],
+          'total': 2,
+        });
+      }));
+
+      final page = await client.fetchLibraryItems(
+        _session,
+        libraryId: 'lib-1',
+        limit: 100,
+        page: 0,
+      );
+
+      expect(page.items, hasLength(1));
+      expect(page.items.single.id, 'item-1');
+      // The server's own count is kept: it counts the book that was skipped.
+      expect(page.total, 2);
+    });
+
+    test('an unrecognized shape is an empty page, not an error', () async {
+      final client = _client(MockClient((_) async {
+        return _json(<String, dynamic>{'somethingElse': true});
+      }));
+
+      final page = await client.fetchLibraryItems(
+        _session,
+        libraryId: 'lib-1',
+        limit: 100,
+        page: 2,
+      );
+
+      expect(page.items, isEmpty);
+      expect(page.total, 0);
+      // No page echoed back: the one that was asked for.
+      expect(page.page, 2);
+    });
+
+    test('a rejected token surfaces as unauthorized', () async {
+      final client = _client(MockClient((_) async {
+        return _json(<String, dynamic>{'error': 'nope'}, status: 401);
+      }));
+
+      await expectLater(
+        client.fetchLibraryItems(
+          _session,
+          libraryId: 'lib-1',
+          limit: 100,
+          page: 0,
+        ),
+        throwsA(
+          isA<AudiobookshelfException>().having(
+            (AudiobookshelfException e) => e.kind,
+            'kind',
+            AudiobookshelfErrorKind.unauthorized,
+          ),
+        ),
+      );
+    });
+
+    test('a non-ASCII title survives a body with no charset header', () async {
+      final client = _client(MockClient((_) async {
+        return http.Response.bytes(
+          utf8.encode(jsonEncode(<String, dynamic>{
+            'results': <Map<String, dynamic>>[
+              <String, dynamic>{
+                'id': 'item-1',
+                'media': <String, dynamic>{
+                  'metadata': <String, dynamic>{
+                    'title': 'L\u2019\u00c9tranger',
+                    'authorName': 'Albert Camus',
+                  },
+                },
+              },
+            ],
+            'total': 1,
+          })),
+          200,
+        );
+      }));
+
+      final page = await client.fetchLibraryItems(
+        _session,
+        libraryId: 'lib-1',
+        limit: 100,
+        page: 0,
+      );
+
+      expect(page.items.single.title, 'L\u2019\u00c9tranger');
+    });
+  });
 }
