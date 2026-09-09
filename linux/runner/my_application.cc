@@ -7,6 +7,7 @@
 
 #include "flutter/generated_plugin_registrant.h"
 #include "folder_picker_channel.h"
+#include "window_lifecycle_channel.h"
 
 // The user-visible application name. Kept as one constant so the header bar,
 // the fallback title bar, and anything added later can never drift apart — and
@@ -32,6 +33,10 @@ struct _MyApplication {
   // here because it needs the application's own window as the dialog parent,
   // which a plugin registrant does not have.
   FolderPickerChannel* folder_picker;
+  // What closing the window does (#401), and the only thing that knows whether
+  // a window still exists. Owned here for the same reason: it is the
+  // application's own window it manages.
+  WindowLifecycleChannel* window_lifecycle;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -44,6 +49,17 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
+
+  // Already running: present the window we have instead of building a second
+  // one. This is the path a launcher click takes while Linthra is playing in
+  // the background with its window hidden (#401) - the runner is
+  // single-instance, so GTK hands that click to this process as an
+  // activation, and the answer to it is "here is your window back", never a
+  // duplicate app.
+  if (window_lifecycle_channel_present(self->window_lifecycle)) {
+    return;
+  }
+
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
@@ -113,6 +129,11 @@ static void my_application_activate(GApplication* application) {
   // zenity/kdialog, which the sandbox does not contain. See
   // folder_picker_channel.h.
   self->folder_picker = folder_picker_channel_new(view, window);
+
+  // Registered on the same engine, and for the same reason: closing this
+  // window is the application's own decision to make, and only the runner can
+  // answer a GTK delete-event in time. See window_lifecycle_channel.h.
+  self->window_lifecycle = window_lifecycle_channel_new(view, window);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
@@ -205,6 +226,7 @@ static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   g_clear_pointer(&self->folder_picker, folder_picker_channel_free);
+  g_clear_pointer(&self->window_lifecycle, window_lifecycle_channel_free);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 
@@ -236,7 +258,20 @@ MyApplication* my_application_new() {
   // because GDK reads the program name there.
   g_set_prgname(APPLICATION_ID);
 
+  // Single instance, deliberately (#401). Launching Linthra while it is
+  // already running has to reach the window that exists rather than start a
+  // second process: two of them would mean two audio engines, two MPRIS names
+  // and two connections to the same SQLite catalog. GTK forwards the second
+  // launch to this one as an activation, and my_application_activate() answers
+  // it by presenting the window - including when a close had hidden it and
+  // there is nothing else on screen to click.
+  //
+  // The flags value is spelled as a cast rather than named: G_APPLICATION_NONE
+  // is deprecated from GLib 2.74 (which -Werror turns into a build failure) and
+  // its replacement G_APPLICATION_DEFAULT_FLAGS does not exist before it, so
+  // neither name builds everywhere Linthra is built.
   return MY_APPLICATION(g_object_new(my_application_get_type(),
                                      "application-id", APPLICATION_ID, "flags",
-                                     G_APPLICATION_NON_UNIQUE, nullptr));
+                                     static_cast<GApplicationFlags>(0),
+                                     nullptr));
 }
