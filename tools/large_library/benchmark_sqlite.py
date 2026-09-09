@@ -7,6 +7,7 @@ import argparse
 import sqlite3
 import statistics
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 QUERIES: tuple[tuple[str, str, tuple[object, ...]], ...] = (
@@ -38,6 +39,42 @@ def query_plan(
 ) -> str:
     rows = connection.execute(f"EXPLAIN QUERY PLAN {sql}", params).fetchall()
     return " | ".join(str(row[3]) for row in rows)
+
+
+def summary_lines(
+    track_count: int,
+    results: Sequence[tuple[str, float, float, float]],
+    iterations: int,
+) -> list[str]:
+    """Render the summary block printed after the per-query lines.
+
+    Separate from `main` so the wording, the numbers and the alignment can be
+    checked without a database: everything here is derived from `results`.
+    """
+    summed_average_ms = sum(average_ms for _, average_ms, _, _ in results)
+    average_query_ms = summed_average_ms / len(results)
+    slowest_name, _, _, slowest_max_ms = max(results, key=lambda result: result[3])
+
+    # Labels are padded to a fixed width and values are right-aligned inside
+    # one column, so counts and timings line up whatever their magnitude.
+    def row(label: str, value: str, unit: str = "") -> str:
+        return f"  {label + ':':<24}{value:>9}{unit}"
+
+    return [
+        "benchmark summary",
+        row("tracks", f"{track_count:,}"),
+        row("queries", f"{len(results)}"),
+        row("iterations per query", f"{iterations:,}"),
+        # Each query is timed the same number of times and reported as a mean,
+        # so this is the sum of those per-query averages, not the wall-clock
+        # time the benchmark spent querying. Saying so keeps the number
+        # comparable between runs that used a different --iterations.
+        row("sum of query averages", f"{summed_average_ms:.3f}", " ms"),
+        row("average per query", f"{average_query_ms:.3f}", " ms"),
+        # The slowest single timed run, not the slowest query on average: it is
+        # the outlier worth looking at when a run is unexpectedly spiky.
+        row("slowest single run", f"{slowest_max_ms:.3f}", f" ms ({slowest_name})"),
+    ]
 
 
 def benchmark(
@@ -96,18 +133,9 @@ def main() -> None:
                 )
                 failed = True
 
-        total_average_ms = sum(average_ms for _, average_ms, _, _ in results)
-        average_query_ms = total_average_ms / len(results)
-        slowest_name, _, _, slowest_max_ms = max(results, key=lambda result: result[3])
-
         print()
-        print("benchmark summary")
-        print(f"  tracks:            {count:,}")
-        print(f"  queries:           {len(results)}")
-        print(f"  iterations:  	     {args.iterations:,}")
-        print(f"  total query time:  {total_average_ms:8.3f} ms")
-        print(f"  average/query:     {average_query_ms:8.3f} ms")
-        print(f"  slowest query:     {slowest_max_ms:8.3f} ms ({slowest_name})")
+        for line in summary_lines(count, results, args.iterations):
+            print(line)
         if failed:
             raise SystemExit(1)
     finally:

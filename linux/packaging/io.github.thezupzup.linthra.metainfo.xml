@@ -21,8 +21,16 @@
   Screenshots are omitted until there are Linux captures; inventing them from
   the Android set would misrepresent the desktop window.
 
+  The <releases> list is maintained by scripts/prepare_release_bump.py, which
+  adds this release's entry when it bumps pubspec.yaml, and it is held to the
+  rest of the release metadata (pubspec, About screen, Play changelog, F-Droid
+  entry) by scripts/check_release_metadata_sync.py, which CI runs on every push
+  (#452). Newest entry first; a pre-release carries type="development" so a
+  software centre does not offer an alpha as the current stable build.
+
   Validate after editing:
     appstreamcli validate linux/packaging/io.github.thezupzup.linthra.metainfo.xml
+    python3 scripts/check_release_metadata_sync.py
 -->
 <component type="desktop-application">
   <id>io.github.thezupzup.linthra</id>

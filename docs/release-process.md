@@ -307,7 +307,7 @@ the version bump in a merged PR **before** creating the tag is what stops the
 The fast path is the manual **Prepare release bump** GitHub Action
 (`.github/workflows/prepare-release-bump.yml`). It runs the same edits a
 contributor would do by hand — pubspec, in-app mirror, Fastlane changelog,
-F-Droid metadata — and opens a draft PR. It does NOT create the tag and does
+F-Droid metadata, AppStream release entry — and opens a draft PR. It does NOT create the tag and does
 NOT publish a release; those still happen manually after the PR is merged.
 
 1. **Run the workflow** — GitHub Actions ▸ *Prepare release bump* ▸ *Run workflow*.
@@ -315,7 +315,11 @@ NOT publish a release; those still happen manually after the PR is merged.
    and paste a hand-written **changelog text**. For a **stable** release (e.g.
    `v0.1.1`) do **not** leave the changelog empty: the empty-input default is an
    alpha-worded, "not on F-Droid yet" maintenance note that is wrong for a stable,
-   on-F-Droid release.
+   on-F-Droid release. **Release date** is optional and only feeds the AppStream
+   `<release>` entry: leave it empty to stamp the day the workflow runs, or set
+   it when you already know the release will be published on another day. A
+   re-run keeps a date that is already recorded, so correcting one afterwards
+   means passing the intended date explicitly.
 2. **Review the generated PR** (`chore(release): prepare v0.1.0-alpha.37`).
    Confirm the computed `versionCode`, the updated files, and the changelog
    body. Edit the changelog in the PR if you want to refine it.
@@ -330,6 +334,10 @@ NOT publish a release; those still happen manually after the PR is merged.
    resulting APK and smoke-test.
 8. **Update `fdroiddata`** to the new tag/version if the F-Droid submission has
    landed (see [fdroid-submission.md](./fdroid-submission.md)).
+9. **Update the Flatpak/Flathub packaging** from the same tag once Linthra is
+   on Flathub (see
+   [flathub-update-process.md](./flathub-update-process.md)). The version bump
+   in step 1 already wrote the AppStream release entry that listing shows.
 
 > **The workflow never creates the tag.** The tag is created only after the
 > bump PR is merged. Never publish a release tag before the bump PR is
@@ -339,16 +347,26 @@ NOT publish a release; those still happen manually after the PR is merged.
 The workflow refuses to run when the tag already exists locally or on origin,
 when `pubspec.yaml` is already at the requested version, when `app_info.dart`
 has no `_devVersionName` to update, or when an existing Fastlane changelog
-would be overwritten without `--force-changelog`. See
+would be overwritten without `--force-changelog` (`--keep-changelog` leaves
+written notes alone instead, for a re-run that only has to fix the other
+metadata). See
 [scripts/prepare_release_bump.py](../scripts/prepare_release_bump.py) for the
 full safety list — that is the same script the workflow invokes, so you can
 run it locally:
 
 ```sh
 python3 scripts/prepare_release_bump.py 0.1.0-alpha.37
-# (optionally with --changelog "..." or --force-changelog)
+# (optionally with --changelog "...", --force-changelog, or --release-date)
 ./scripts/release_preflight.sh v0.1.0-alpha.37
+python3 scripts/check_release_metadata_sync.py --tag v0.1.0-alpha.37
 ```
+
+The last command is the version-drift check: it reads every file that names the
+release version (pubspec, `app_info.dart`, the Fastlane changelog, the F-Droid
+entry, the AppStream `<release>` entry a software centre shows) and reports all
+of the disagreements at once. CI runs it on every push, and the prepare
+workflow runs it before opening the PR, so a listing that still advertises last
+month's version cannot reach Flathub quietly.
 
 ### Manual flow (the long form)
 
@@ -380,46 +398,54 @@ the canonical source of truth for what the bump must contain.
    GitHub-Release body can live under `docs/release-notes/vX.Y.Z*.md` (see the
    [v0.1.0-alpha.9 notes](./release-notes/v0.1.0-alpha.9.md)); the version inside
    it must match the tag.
-4. **Regenerate committed generated files** (Drift `*.g.dart`) so they match the
+4. **Add the AppStream release entry** at the top of `<releases>` in
+   `linux/packaging/io.github.thezupzup.linthra.metainfo.xml`, e.g.
+   `<release version="0.1.0-alpha.31" date="2026-09-09" type="development"/>`.
+   Newest entry first; a pre-release carries `type="development"`, as above, so
+   a software centre does not offer an alpha as the current stable build, and a
+   stable release leaves the attribute off. This is the version
+   GNOME Software, KDE Discover and Flathub show for the installed app. Verify
+   the whole set agrees with `python3 scripts/check_release_metadata_sync.py`.
+5. **Regenerate committed generated files** (Drift `*.g.dart`) so they match the
    schema at the tagged commit — run the
    [Generate Drift files workflow](../README.md#generating-drift-files-in-ci) or
    `dart run build_runner build --delete-conflicting-outputs` locally, and commit
    the result. The committed output means the F-Droid build needs no `build_runner`
    prebuild (see [fdroid-build-recipe.md §4](./fdroid-build-recipe.md#4-reproducibility-notes)).
-5. **Open the version-bump PR and wait for CI green**
+6. **Open the version-bump PR and wait for CI green**
    (`flutter analyze`, `flutter test`, formatting) — this includes the
    version-drift test from step 2.
-6. **Confirm licensing** is still accurate if dependencies changed — re-run the
+7. **Confirm licensing** is still accurate if dependencies changed — re-run the
    [dependency & license audit](./dependency-license-audit.md).
-7. **Merge the version-bump PR.** Do **not** tag yet — see the warning box
+8. **Merge the version-bump PR.** Do **not** tag yet — see the warning box
    below.
-8. **Pull latest `main` locally** so the tag points at the merged bump:
+9. **Pull latest `main` locally** so the tag points at the merged bump:
 
    ```sh
    git checkout main
    git pull origin main
    ```
 
-9. **Run the release preflight script** — the same script the GitHub release
-   workflow runs, so any mismatch fails locally with the same wording instead
-   of wasting a tag:
+10. **Run the release preflight script** — the same script the GitHub release
+    workflow runs, so any mismatch fails locally with the same wording instead
+    of wasting a tag:
 
-   ```sh
-   ./scripts/release_preflight.sh v0.1.0-alpha.31
-   # OK: v0.1.0-alpha.31 matches pubspec.yaml version 0.1.0-alpha.31+100031.
-   # ...
-   # Next safe commands:
-   #   git tag -a v0.1.0-alpha.31 -m "Linthra 0.1.0-alpha.31"
-   #   git push origin v0.1.0-alpha.31
-   ```
+    ```sh
+    ./scripts/release_preflight.sh v0.1.0-alpha.31
+    # OK: v0.1.0-alpha.31 matches pubspec.yaml version 0.1.0-alpha.31+100031.
+    # ...
+    # Next safe commands:
+    #   git tag -a v0.1.0-alpha.31 -m "Linthra 0.1.0-alpha.31"
+    #   git push origin v0.1.0-alpha.31
+    ```
 
-   The preflight is pure bash — it needs **no** Flutter/Dart toolchain. It
-   checks the same things CI checks: tag shape, canonical `versionCode`,
-   `pubspec.yaml` `version:`, and (locally — CI's `flutter test` already
-   covers it) `AppInfo._devVersionName`. On any mismatch it prints the
-   pushed tag, the expected `pubspec.yaml` version, the actual `pubspec.yaml`
-   version, and the exact fix; nothing is tagged.
-10. **Create the annotated tag (§2)** — `vX.Y.Z(-suffix.N)` must equal the
+    The preflight is pure bash — it needs **no** Flutter/Dart toolchain. It
+    checks the same things CI checks: tag shape, canonical `versionCode`,
+    `pubspec.yaml` `version:`, and (locally — CI's `flutter test` already
+    covers it) `AppInfo._devVersionName`. On any mismatch it prints the
+    pushed tag, the expected `pubspec.yaml` version, the actual `pubspec.yaml`
+    version, and the exact fix; nothing is tagged.
+11. **Create the annotated tag (§2)** — `vX.Y.Z(-suffix.N)` must equal the
     `versionName` you set in `pubspec.yaml` (step 2). The tag build re-verifies
     the match (§4) and fails fast if they diverge.
 
@@ -428,11 +454,11 @@ the canonical source of truth for what the bump must contain.
     git push origin v0.1.0-alpha.31
     ```
 
-11. **Watch GitHub Actions.** The Android Release Build workflow runs
+12. **Watch GitHub Actions.** The Android Release Build workflow runs
     automatically on a `v*` tag push, re-verifies `pubspec.yaml` matches the
     tag (§4), builds the APK/AAB, and attaches them to a Release (pre-release
     for alpha/beta/rc; existing Release only for stable).
-12. **Install the APK and smoke-test** the build before announcing.
+13. **Install the APK and smoke-test** the build before announcing.
 
 > **Warnings (the "lost-tag" failure mode).**
 >
@@ -714,8 +740,8 @@ consume our signed artifacts:
 | Dependency-update PR touches only `pubspec.lock` | **Automatic** on `deps/*` PRs only (`ci.yml`, job `dependency-guard`; `scripts/check_dependency_update_files.sh`). |
 | Debug APK build + build-output verification | Manual (`workflow_dispatch`) + on PRs (`android-debug-apk.yml`; a "Verify build output exists" step rejects a missing/empty APK). |
 | Release APK/AAB build | **Manual** (`workflow_dispatch`) **and automatic on `v*` tags** (`android-release-build.yml`). |
-| Preparing the version-bump PR (pubspec, in-app mirror, Fastlane changelog, F-Droid `CurrentVersion`) | **Manual** (`workflow_dispatch`, `prepare-release-bump.yml`); opens a draft PR but never tags, builds, or publishes. The same edits are reproducible locally with `scripts/prepare_release_bump.py`. |
-| Verifying the tag matches `pubspec.yaml` (versionName/versionCode) | **Automatic** on a `v*` tag build (`scripts/release_preflight.sh`, encoding-checked against `tool/version_from_tag.dart`); fails fast on a mismatch and the workflow summary explicitly says "Version mismatch: release was not built." so it is not confused with an APK build failure. The same script is intended to be run locally before tagging (§3 step 9). Both manual and tag builds take the version from `pubspec.yaml`. |
+| Preparing the version-bump PR (pubspec, in-app mirror, Fastlane changelog, F-Droid `CurrentVersion`, AppStream `<release>`) | **Manual** (`workflow_dispatch`, `prepare-release-bump.yml`); opens a draft PR but never tags, builds, or publishes. The same edits are reproducible locally with `scripts/prepare_release_bump.py`. |
+| Verifying the tag matches `pubspec.yaml` (versionName/versionCode) | **Automatic** on a `v*` tag build (`scripts/release_preflight.sh`, encoding-checked against `tool/version_from_tag.dart`); fails fast on a mismatch and the workflow summary explicitly says "Version mismatch: release was not built." so it is not confused with an APK build failure. The same script is intended to be run locally before tagging (§3 step 10). Both manual and tag builds take the version from `pubspec.yaml`. |
 | Verifying the shipped artifacts carry the Cast containment | **Automatic**: on every release build (`android-release-build.yml`, before the artifacts are uploaded) and again on the published assets during a stable publication (`publish-stable-release.yml`, which records every SHA-256 in the job summary). Local twin: `python3 scripts/verify_release_containment.py dist/*.apk dist/*.aab`. See [release-artifact-verification.md](./release-artifact-verification.md). |
 | Attaching APK/AAB to a Release | **Automatic** on a `v*` tag build. Alpha/beta/rc tags attach (debug- or release-signed) to a **pre-release**; stable tags attach **release-signed** assets to an existing Release only. |
 | Linux `.tar.gz` build + attach to a Release | **Automatic**, via `workflow_dispatch` (`linux-desktop-build.yml` `release_tag` input, job `package-linux-release`) — see §4a. `publish-stable-release.yml` dispatches it for every stable release; `android-release-build.yml`'s `attach-release` job dispatches it for a directly-pushed alpha/beta/rc tag. Not wired to `push: tags` or `release: published` — a `GITHUB_TOKEN`-authored tag push/Release doesn't reliably start either. |
@@ -763,7 +789,7 @@ checks (`test/core/app_info_version_test.dart`); the cross-file F-Droid
 invariants — monotonic `versionCode`, per-ABI `base*10 + rank`, stable release
 asset names, tracked `pubspec.lock` (`test/tooling/fdroid_release_guardrails_test.dart`);
 and the tag↔`pubspec.yaml` preflight (`scripts/release_preflight.sh`, run on a
-`v*` tag and locally before tagging — §3 step 9, §4).
+`v*` tag and locally before tagging — §3 step 10, §4).
 
 - **Lockfile drift** — `flutter pub get --enforce-lockfile` (CI `flutter` job;
   also in `scripts/verify_android.sh` and `android-debug-apk.yml`). Fails if a
