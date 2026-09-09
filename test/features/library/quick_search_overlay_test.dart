@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -82,7 +83,7 @@ GoRouter _router() {
       ),
       GoRoute(
         path: '/player',
-        builder: (_, __) => const _Landed('player'),
+        builder: (_, __) => const _PlayerScreen(),
       ),
     ],
   );
@@ -115,6 +116,25 @@ class _Landed extends StatelessWidget {
   Widget build(BuildContext context) {
     _visited.add(label);
     return Scaffold(body: Center(child: Text('landed: $label')));
+  }
+}
+
+/// Stands in for Now Playing: a top-level route that can itself open quick
+/// search, which is the case the global shortcut created.
+class _PlayerScreen extends StatelessWidget {
+  const _PlayerScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    _visited.add('player');
+    return Scaffold(
+      body: Center(
+        child: TextButton(
+          onPressed: () => showQuickSearch(context),
+          child: const Text('landed: player'),
+        ),
+      ),
+    );
   }
 }
 
@@ -503,6 +523,85 @@ void main() {
         0,
         reason: 'row 0 is highlighted, so the list must be showing row 0',
       );
+    });
+
+    testWidgets('opening a song from Now Playing does not stack a second copy',
+        (tester) async {
+      await _open(tester);
+
+      // Get to Now Playing the way a user would: search, open a song.
+      await _type(tester, 'get lucky');
+      await _press(tester, LogicalKeyboardKey.enter);
+      expect(find.text('landed: player'), findsOneWidget);
+
+      // Search again from Now Playing itself and open a different song.
+      await tester.tap(find.text('landed: player'));
+      await tester.pumpAndSettle();
+      await _type(tester, 'halo');
+      await _press(tester, LogicalKeyboardKey.enter);
+
+      // Still on Now Playing, and playing the new song.
+      expect(find.text('landed: player'), findsOneWidget);
+
+      // One Back must return to the screen that opened the player, not to an
+      // identical second copy of it.
+      final NavigatorState navigator =
+          tester.state<NavigatorState>(find.byType(Navigator).first);
+      navigator.pop();
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('host screen'),
+        findsOneWidget,
+        reason: 'a duplicate /player push would have left another one here',
+      );
+    });
+
+    testWidgets(
+        'a row scrolling under a still pointer keeps the keyboard choice',
+        (tester) async {
+      // Enough rows to overflow the list, so arrowing down actually scrolls it
+      // and slides a different row under the parked pointer.
+      await _open(
+        tester,
+        tracks: <Track>[
+          for (int i = 0; i < 5; i++)
+            Track(
+              id: 'a$i',
+              title: 'Alpha $i',
+              uri: 'file:///a$i.mp3',
+              artistName: 'Alpha Band',
+              albumName: 'Alpha Album $i',
+            ),
+        ],
+      );
+      await _type(tester, 'alpha');
+
+      // Park the pointer over the top row and never move it again.
+      final TestGesture pointer =
+          await tester.createGesture(kind: PointerDeviceKind.mouse);
+      addTearDown(pointer.removePointer);
+      await pointer.addPointer(
+          location: tester.getCenter(find.text('Alpha 0')));
+      await tester.pumpAndSettle();
+      expect(_highlightedTitle(tester), 'Alpha 0');
+
+      // Walk down far enough that ensureVisible has to scroll the list.
+      for (int i = 0; i < 6; i++) {
+        await _press(tester, LogicalKeyboardKey.arrowDown);
+      }
+
+      expect(
+        _highlightedTitle(tester),
+        'Alpha Album 1',
+        reason: 'scrolling a row under an idle mouse must not steal the '
+            'keyboard selection',
+      );
+
+      // A real mouse move still selects, so the affordance is not lost.
+      await pointer.moveTo(tester.getCenter(find.text('Alpha Album 3')));
+      await tester.pumpAndSettle();
+      expect(_highlightedTitle(tester), 'Alpha Album 3');
     });
 
     testWidgets('Enter with no results does nothing', (tester) async {

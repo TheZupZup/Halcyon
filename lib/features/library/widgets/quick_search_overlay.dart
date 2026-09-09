@@ -73,6 +73,10 @@ class _QuickSearchOverlayState extends ConsumerState<QuickSearchOverlay> {
 
   Timer? _debounce;
 
+  /// Where the pointer was when it last drove the selection, so a synthesized
+  /// hover at the same spot can be told from a real one.
+  Offset? _lastPointerPosition;
+
   /// Whether the box is currently blank. Tracked separately from [_query]
   /// because they legitimately disagree for one debounce window, and the
   /// difference is exactly what tells "nothing typed yet" from "still ranking".
@@ -178,6 +182,23 @@ class _QuickSearchOverlayState extends ConsumerState<QuickSearchOverlay> {
     _scrollHighlightedIntoView();
   }
 
+  /// Moves the highlight to a hovered row — but only when the pointer really
+  /// moved there.
+  ///
+  /// A row sliding under a stationary pointer (a re-render on a new query, or
+  /// `ensureVisible` scrolling the list) synthesizes an enter/hover at the
+  /// unchanged pointer position. That is the list moving, not the user choosing,
+  /// so it must not take the selection off the row the keyboard just put it on.
+  void _hoverRow(int index, Offset position) {
+    // Recorded on every event, selection-changing or not, so "did the pointer
+    // move?" is answered against the last place it was actually seen rather
+    // than the last place it happened to pick a row.
+    final Offset? previous = _lastPointerPosition;
+    _lastPointerPosition = position;
+    if (previous == position) return;
+    if (_highlighted != index) setState(() => _highlighted = index);
+  }
+
   void _scrollHighlightedIntoView() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _highlighted >= _rowKeys.length) return;
@@ -224,7 +245,13 @@ class _QuickSearchOverlayState extends ConsumerState<QuickSearchOverlay> {
               startIndex: startIndex < 0 ? 0 : startIndex,
             );
         navigator.pop();
-        router.push(AppRoutes.player);
+        // Quick search opens from anywhere, Now Playing included, so the screen
+        // it wants may already be the one showing. Pushing a second copy would
+        // leave an identical screen behind it and cost the user an extra Back
+        // to get home — and one more for every search they run from there.
+        if (router.state.uri.path != AppRoutes.player) {
+          router.push(AppRoutes.player);
+        }
       case QuickSearchAlbum():
         navigator.pop();
         router.go(AppRoutes.albumDetailPath(result.album.id));
@@ -420,11 +447,7 @@ class _QuickSearchOverlayState extends ConsumerState<QuickSearchOverlay> {
             result: result,
             selected: rowIndex == _highlighted,
             onTap: () => _activate(result, results),
-            onHover: () {
-              if (_highlighted != rowIndex) {
-                setState(() => _highlighted = rowIndex);
-              }
-            },
+            onPointerAt: (Offset position) => _hoverRow(rowIndex, position),
           ),
         );
       }
@@ -518,21 +541,25 @@ class _ResultRow extends StatelessWidget {
     required this.result,
     required this.selected,
     required this.onTap,
-    required this.onHover,
+    required this.onPointerAt,
     super.key,
   });
 
   final QuickSearchResult result;
   final bool selected;
   final VoidCallback onTap;
-  final VoidCallback onHover;
+
+  /// Called with the pointer's position on every enter and hover, so the host
+  /// can tell a real mouse move from a row sliding under a still pointer.
+  final ValueChanged<Offset> onPointerAt;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final String? subtitle = result.subtitle;
     return MouseRegion(
-      onEnter: (_) => onHover(),
+      onEnter: (PointerEnterEvent event) => onPointerAt(event.position),
+      onHover: (PointerHoverEvent event) => onPointerAt(event.position),
       child: ListTile(
         selected: selected,
         selectedTileColor: theme.colorScheme.primary.withValues(alpha: 0.12),
