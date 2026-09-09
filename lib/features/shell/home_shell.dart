@@ -2,10 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../player/mini_player.dart';
+import 'quick_search_shortcuts.dart';
 
 /// The persistent app frame: hosts the active tab and the app's primary
 /// navigation. Tab state is owned by go_router's [StatefulNavigationShell], so
 /// each tab keeps its own stack and scroll position across switches.
+///
+/// It is also where the app's keyboard shortcuts are bound
+/// ([QuickSearchShortcuts]): the frame is the one widget every tab is inside, so
+/// Ctrl+K reaches quick search from anywhere in the app without each screen
+/// knowing about it.
 class HomeShell extends StatelessWidget {
   const HomeShell({
     required this.navigationShell,
@@ -118,64 +124,66 @@ class HomeShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BackButtonListener(
-      onBackButtonPressed: _handleSystemBack,
-      child: LayoutBuilder(
-        builder: (BuildContext context, BoxConstraints constraints) {
-          final bool desktop = _usesDesktopNavigation(context, constraints);
+    return QuickSearchShortcuts(
+      child: BackButtonListener(
+        onBackButtonPressed: _handleSystemBack,
+        child: LayoutBuilder(builder: _buildFrame),
+      ),
+    );
+  }
 
-          // Keep StatefulNavigationShell at the same element position across
-          // the 900 px breakpoint. Only the two chrome slots before it change
-          // between real desktop widgets and zero-sized placeholders, so an
-          // inactive branch's Navigator stack and scroll state survive resize.
-          //
-          // The mini-player sits below the whole frame rather than inside the
-          // content column, so on a desktop window the now-playing bar runs the
-          // full width under the rail — the shape every desktop music player
-          // has. On phones there is no rail, so nothing about it moves.
-          return Scaffold(
-            body: FocusTraversalGroup(
-              policy: OrderedTraversalPolicy(),
-              child: Column(
+  Widget _buildFrame(BuildContext context, BoxConstraints constraints) {
+    final bool desktop = _usesDesktopNavigation(context, constraints);
+
+    // Keep StatefulNavigationShell at the same element position across
+    // the 900 px breakpoint. Only the two chrome slots before it change
+    // between real desktop widgets and zero-sized placeholders, so an
+    // inactive branch's Navigator stack and scroll state survive resize.
+    //
+    // The mini-player sits below the whole frame rather than inside the
+    // content column, so on a desktop window the now-playing bar runs the
+    // full width under the rail — the shape every desktop music player
+    // has. On phones there is no rail, so nothing about it moves.
+    return Scaffold(
+      body: FocusTraversalGroup(
+        policy: OrderedTraversalPolicy(),
+        child: Column(
+          children: <Widget>[
+            Expanded(
+              child: Row(
                 children: <Widget>[
+                  if (desktop)
+                    _buildNavigationRail()
+                  else
+                    const SizedBox.shrink(),
+                  if (desktop)
+                    const VerticalDivider(width: 1)
+                  else
+                    const SizedBox.shrink(),
                   Expanded(
-                    child: Row(
-                      children: <Widget>[
-                        if (desktop)
-                          _buildNavigationRail()
-                        else
-                          const SizedBox.shrink(),
-                        if (desktop)
-                          const VerticalDivider(width: 1)
-                        else
-                          const SizedBox.shrink(),
-                        Expanded(
-                          child: FocusTraversalOrder(
-                            order: const NumericFocusOrder(1),
-                            child: FocusTraversalGroup(
-                              child: navigationShell,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  // Last in the reading order: the bar spans everything above
-                  // it, so a keyboard user reaches it after both the page and
-                  // the destinations, not between them.
-                  FocusTraversalOrder(
-                    order: const NumericFocusOrder(3),
-                    child: FocusTraversalGroup(
-                      child: const MiniPlayer(),
+                    child: FocusTraversalOrder(
+                      order: const NumericFocusOrder(1),
+                      child: FocusTraversalGroup(
+                        child: navigationShell,
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
-            bottomNavigationBar: desktop ? null : _buildNavigationBar(),
-          );
-        },
+            // Last in the reading order: the bar spans everything above
+            // it, so a keyboard user reaches it after both the page and
+            // the destinations, not between them.
+            FocusTraversalOrder(
+              order: const NumericFocusOrder(3),
+              child: FocusTraversalGroup(
+                child: const MiniPlayer(),
+              ),
+            ),
+          ],
+        ),
       ),
+      bottomNavigationBar: desktop ? null : _buildNavigationBar(),
     );
   }
 }
