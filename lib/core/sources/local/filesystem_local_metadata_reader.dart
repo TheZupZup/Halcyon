@@ -2,31 +2,37 @@ import 'dart:io';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 
+import '../../services/local_artwork_cache.dart';
 import 'local_audio_metadata.dart';
 import 'local_metadata_reader.dart';
 import 'vorbis_comment_fields.dart';
 
-/// Reads audio tags from a real file on disk: the desktop/Linux half of
-/// [LocalMetadataReader], where Android's SAF walk reads them natively.
+/// Reads audio tags — and embedded cover art — from a real file on disk: the
+/// desktop/Linux half of [LocalMetadataReader], where Android's SAF walk reads
+/// both natively.
 ///
 /// Without this, a Linux library shows filenames and folder names: the mapper's
 /// fallback is deliberately decent, but "03 - Track.flac" in a folder called
-/// "Album" is not the same as a real title, artist and duration. This is what
-/// makes a local Linux library look like a library (#407).
+/// "Album" is not the same as a real title, artist, duration and cover. This is
+/// what makes a local Linux library look like a library (#407, #408).
 ///
 /// It reads through `audio_metadata_reader` (MIT, pure Dart), which opens the
 /// file and parses only the tag structures (headers, frames, comment blocks)
 /// rather than reading a whole 60 MB FLAC into memory to find its title. Cover
-/// art is deliberately *not* fetched (`getImage: false`): embedded artwork is a
-/// separate concern (#408) and pulling multi-megabyte images out of every file
-/// during a scan is exactly the cost this avoids.
+/// art is fetched (`getImage: true`) only on a cache miss — [_artworkCache] is
+/// consulted first, so a file whose cover was already extracted on an earlier
+/// scan costs exactly what a tags-only read costs; pulling the embedded
+/// picture back out of a parse nobody needs is exactly the cost that skips.
 ///
 /// Deliberately total, like the SAF reader it mirrors: an unreadable file, an
 /// unsupported container, a truncated tag or a format the package has no parser
 /// for all return `null`, so the track still appears with its filename-derived
 /// metadata instead of vanishing from the library.
 class FilesystemLocalMetadataReader implements LocalMetadataReader {
-  const FilesystemLocalMetadataReader();
+  FilesystemLocalMetadataReader({LocalArtworkCache? artworkCache})
+      : _artworkCache = artworkCache ?? LocalArtworkCache();
+
+  final LocalArtworkCache _artworkCache;
 
   @override
   Future<LocalAudioMetadata?> readFromPath(String path) async {
@@ -45,21 +51,76 @@ class FilesystemLocalMetadataReader implements LocalMetadataReader {
       // Switching this back to existsSync() re-freezes the desktop UI for the
       // length of the scan, silently (see the test that asserts the yield).
       if (!await file.exists()) return null;
+
+      // A cover cached from an earlier scan needs no re-extraction: checking
+      // first means a hit costs nothing beyond this stat, and only a genuine
+      // miss asks the parser for the (possibly large) embedded picture.
+      final File? cachedArtwork = await _artworkCache.cachedFile(path);
+      final bool needsArtwork = cachedArtwork == null;
+
       // Format-specific rather than the package's unified `readMetadata`: that
       // one folds ID3's TPE2 (album artist) into a single `artist` field, which
       // would lose the distinction the catalog groups albums by.
-      final LocalAudioMetadata? parsed =
-          _fromParserTag(readAllMetadata(file, getImage: false));
-      if (parsed == null) return null;
+      final Object tag = readAllMetadata(file, getImage: needsArtwork);
+      final LocalAudioMetadata? parsedTags = _fromParserTag(tag);
       // FLAC's comment block is readable in the clear, so prefer the real
       // ARTIST/ALBUMARTIST over what the package merged. See
       // [VorbisCommentFields] for why no heuristic can substitute for this.
-      return _withVorbisArtists(parsed, await VorbisCommentFields.read(file));
+      final Map<String, List<String>>? vorbisFields =
+          parsedTags == null ? null : await VorbisCommentFields.read(file);
+      final LocalAudioMetadata textMetadata = parsedTags == null
+          ? LocalAudioMetadata.empty
+          : _withVorbisArtists(parsedTags, vorbisFields);
+
+      Uri? artworkUri =
+          cachedArtwork == null ? null : Uri.file(cachedArtwork.path);
+      if (needsArtwork) {
+        final Picture? cover = _bestCover(_picturesOf(tag));
+        if (cover != null) {
+          artworkUri = await _artworkCache.store(path, cover.bytes);
+        }
+      }
+
+      final LocalAudioMetadata result = LocalAudioMetadata(
+        title: textMetadata.title,
+        artist: textMetadata.artist,
+        albumArtist: textMetadata.albumArtist,
+        album: textMetadata.album,
+        albumId: textMetadata.albumId,
+        trackNumber: textMetadata.trackNumber,
+        duration: textMetadata.duration,
+        artworkUri: artworkUri,
+      );
+      return result.isEmpty ? null : result;
     } catch (_) {
       // Any failure is "no tags", never a failed scan. The path is not logged:
       // a user's file path is private data (see CONTRIBUTING, Privacy).
       return null;
     }
+  }
+
+  /// The embedded pictures a parsed container carries, regardless of which
+  /// format-specific field they live under. Every format but MP4 collects them
+  /// as `pictures`; MP4's `covr` atom is modeled as a single nullable picture.
+  static List<Picture> _picturesOf(Object tag) => switch (tag) {
+        Mp3Metadata() => tag.pictures,
+        ApeMetadata() => tag.pictures,
+        VorbisMetadata() => tag.pictures,
+        RiffMetadata() => tag.pictures,
+        Mp4Metadata() =>
+          tag.picture == null ? const <Picture>[] : <Picture>[tag.picture!],
+        _ => const <Picture>[],
+      };
+
+  /// The picture to treat as *the* cover, when a file carries more than one
+  /// (a front cover alongside a back cover or a band photo, say): the one
+  /// explicitly tagged as the front cover, or the first attached picture when
+  /// none is.
+  static Picture? _bestCover(List<Picture> pictures) {
+    for (final Picture picture in pictures) {
+      if (picture.pictureType == PictureType.coverFront) return picture;
+    }
+    return pictures.isEmpty ? null : pictures.first;
   }
 
   /// Replaces the artist fields with the file's real ones when the comment

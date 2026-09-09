@@ -75,5 +75,5 @@ final directoryReadabilityProvider = Provider<DirectoryReadability>((ref) {
 final localMetadataReaderProvider = Provider<LocalMetadataReader>((ref) {
   return ref.watch(hostPlatformProvider).isAndroid
       ? const UnsupportedLocalMetadataReader()
-      : const FilesystemLocalMetadataReader();
+      : FilesystemLocalMetadataReader();
 });

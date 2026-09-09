@@ -25,6 +25,8 @@ abstract final class AudioTagFixtures {
     String? albumArtist,
     String? album,
     String? track,
+    Uint8List? coverImage,
+    String coverMimeType = 'image/png',
   }) {
     final BytesBuilder frames = BytesBuilder();
     void frame(String id, String? value) {
@@ -41,6 +43,7 @@ abstract final class AudioTagFixtures {
     frame('TPE2', albumArtist); // Band/orchestra — the album artist
     frame('TALB', album); // Album
     frame('TRCK', track); // Track number, possibly "3/12"
+    if (coverImage != null) _apicFrame(frames, coverImage, coverMimeType);
 
     final Uint8List body = frames.toBytes();
     final BytesBuilder file = BytesBuilder();
@@ -51,6 +54,29 @@ abstract final class AudioTagFixtures {
     file.add(body);
     file.add(_mpegFrames());
     return file.toBytes();
+  }
+
+  /// Appends an ID3v2.3 `APIC` (attached picture) frame to [frames]: an
+  /// encoding byte, the null-terminated MIME type, a picture-type byte (`0x03`
+  /// = cover front), an empty null-terminated description, then the image
+  /// bytes verbatim — the exact layout `Id3v2Reader.getPicture` walks.
+  static void _apicFrame(
+    BytesBuilder frames,
+    Uint8List image,
+    String mimeType,
+  ) {
+    final BytesBuilder payload = BytesBuilder();
+    payload.add(<int>[0x00]); // ISO-8859-1 encoding
+    payload.add(mimeType.codeUnits);
+    payload.add(<int>[0x00]); // MIME terminator
+    payload.add(<int>[0x03]); // picture type: cover (front)
+    payload.add(<int>[0x00]); // empty description, terminator
+    payload.add(image);
+    final Uint8List body = payload.toBytes();
+    frames.add('APIC'.codeUnits);
+    frames.add(_uint32be(body.length));
+    frames.add(<int>[0x00, 0x00]);
+    frames.add(body);
   }
 
   /// A FLAC carrying Vorbis comments.
@@ -76,6 +102,8 @@ abstract final class AudioTagFixtures {
     int paddingBefore = 0,
     int sampleRate = 44100,
     int totalSamples = 44100 * 3,
+    Uint8List? coverImage,
+    String coverMimeType = 'image/png',
   }) {
     final List<String> artistComments = <String>[
       if (artist != null) 'ARTIST=$artist',
@@ -95,6 +123,8 @@ abstract final class AudioTagFixtures {
       sampleRate: sampleRate,
       totalSamples: totalSamples,
       paddingBefore: paddingBefore,
+      coverImage: coverImage,
+      coverMimeType: coverMimeType,
     );
   }
 
@@ -103,6 +133,8 @@ abstract final class AudioTagFixtures {
     int sampleRate = 44100,
     int totalSamples = 44100 * 3,
     int paddingBefore = 0,
+    Uint8List? coverImage,
+    String coverMimeType = 'image/png',
   }) {
     final BytesBuilder vorbis = BytesBuilder();
     const String vendor = 'Linthra test fixture';
@@ -130,10 +162,33 @@ abstract final class AudioTagFixtures {
       file.add(_uint24be(paddingBefore));
       file.add(Uint8List(paddingBefore));
     }
-    file.add(<int>[0x84]); // VORBIS_COMMENT (4), last block
+    file.add(<int>[coverImage == null ? 0x84 : 0x04]); // VORBIS_COMMENT (4)
     file.add(_uint24be(vorbisBlock.length));
     file.add(vorbisBlock);
+    if (coverImage != null) {
+      final Uint8List pictureBlock = _pictureBlock(coverImage, coverMimeType);
+      file.add(<int>[0x86]); // PICTURE (6), last block
+      file.add(_uint24be(pictureBlock.length));
+      file.add(pictureBlock);
+    }
     return file.toBytes();
+  }
+
+  /// A FLAC `PICTURE` metadata block body: picture type, MIME type, an empty
+  /// description, dimensions/depth/colour-count (unused by the reader, so
+  /// zeroed), then the image bytes — the exact layout the FLAC parser's
+  /// `case 6` walks.
+  static Uint8List _pictureBlock(Uint8List image, String mimeType) {
+    final BytesBuilder block = BytesBuilder();
+    block.add(_uint32be(3)); // picture type: cover (front)
+    final List<int> mime = mimeType.codeUnits;
+    block.add(_uint32be(mime.length));
+    block.add(mime);
+    block.add(_uint32be(0)); // description length: none
+    block.add(Uint8List(16)); // width, height, depth, colours used
+    block.add(_uint32be(image.length));
+    block.add(image);
+    return block.toBytes();
   }
 
   /// A FLAC whose comment block carries [comments] verbatim, so a test can

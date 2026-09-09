@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/track.dart';
+import 'package:linthra/core/services/local_artwork_cache.dart';
 import 'package:linthra/core/sources/local/filesystem_local_metadata_reader.dart';
 import 'package:linthra/core/sources/local/local_audio_metadata.dart';
 import 'package:linthra/core/sources/local/local_track_mapper.dart';
@@ -11,15 +13,21 @@ import 'package:linthra/core/sources/local/local_track_mapper.dart';
 import 'audio_tag_fixtures.dart';
 
 void main() {
-  const FilesystemLocalMetadataReader reader = FilesystemLocalMetadataReader();
+  late FilesystemLocalMetadataReader reader;
   late Directory root;
+  late Directory artworkDir;
 
   setUp(() async {
     root = await Directory.systemTemp.createTemp('linthra_tag_reader_');
+    artworkDir = await Directory.systemTemp.createTemp('linthra_tag_artwork_');
+    reader = FilesystemLocalMetadataReader(
+      artworkCache: LocalArtworkCache(directory: () async => artworkDir),
+    );
   });
 
   tearDown(() async {
     if (root.existsSync()) await root.delete(recursive: true);
+    if (artworkDir.existsSync()) await artworkDir.delete(recursive: true);
   });
 
   /// Writes [bytes] as [name] under the temp root and returns its path.
@@ -27,6 +35,39 @@ void main() {
     final File file = File('${root.path}/$name');
     file.writeAsBytesSync(bytes, flush: true);
     return file.path;
+  }
+
+  /// A real, decodable solid-colour PNG of [width]x[height] — enough for the
+  /// cache's decode/bound step to see an actual image rather than opaque
+  /// bytes, without committing a binary fixture to the repo.
+  Future<Uint8List> solidPng(int width, int height) async {
+    final ui.PictureRecorder recorder = ui.PictureRecorder();
+    final ui.Canvas canvas = ui.Canvas(recorder);
+    canvas.drawRect(
+      ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+      ui.Paint()..color = const ui.Color(0xFF336699),
+    );
+    final ui.Image image = await recorder.endRecording().toImage(width, height);
+    final ByteData? data =
+        await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
+    return data!.buffer.asUint8List();
+  }
+
+  /// The pixel dimensions of a PNG produced by [solidPng] (or any other real
+  /// image), read back through the same decode seam the cache uses — so a test
+  /// asserting a resize actually asserts the file on disk got smaller.
+  Future<ui.Size> decodedSize(File file) async {
+    final ui.ImmutableBuffer buffer =
+        await ui.ImmutableBuffer.fromUint8List(await file.readAsBytes());
+    final ui.ImageDescriptor descriptor = await ui.ImageDescriptor.encoded(
+      buffer,
+    );
+    final ui.Size size =
+        ui.Size(descriptor.width.toDouble(), descriptor.height.toDouble());
+    descriptor.dispose();
+    buffer.dispose();
+    return size;
   }
 
   group('tagged files', () {
@@ -415,6 +456,154 @@ void main() {
 
       expect(await reader.readFromPath('${root.path}/nope.flac'), isNull);
       expect(reachedEventLoop, isTrue);
+    });
+  });
+
+  group('embedded artwork (#408)', () {
+    test('an MP3 cover is extracted and cached as a file: URI', () async {
+      final Uint8List cover = await solidPng(64, 64);
+      final String path = write(
+        'cover.mp3',
+        AudioTagFixtures.mp3(title: 'Song', coverImage: cover),
+      );
+
+      final LocalAudioMetadata? metadata = await reader.readFromPath(path);
+
+      expect(metadata!.artworkUri, isNotNull);
+      expect(metadata.artworkUri!.isScheme('file'), isTrue);
+      final File cached = File(metadata.artworkUri!.toFilePath());
+      expect(cached.existsSync(), isTrue);
+      expect(cached.lengthSync(), greaterThan(0));
+      // Lives under Linthra's own cache dir, not wherever the source file is.
+      expect(cached.path.startsWith(artworkDir.path), isTrue);
+    });
+
+    test('a FLAC PICTURE block is extracted the same way', () async {
+      final Uint8List cover = await solidPng(32, 32);
+      final String path = write(
+        'cover.flac',
+        AudioTagFixtures.flac(title: 'Song', coverImage: cover),
+      );
+
+      final LocalAudioMetadata? metadata = await reader.readFromPath(path);
+
+      expect(metadata!.artworkUri, isNotNull);
+      expect(File(metadata.artworkUri!.toFilePath()).existsSync(), isTrue);
+    });
+
+    test('a file with no embedded picture has no artwork', () async {
+      final String path = write(
+        'plain.mp3',
+        AudioTagFixtures.mp3(title: 'Song'),
+      );
+
+      final LocalAudioMetadata? metadata = await reader.readFromPath(path);
+
+      expect(metadata!.artworkUri, isNull);
+    });
+
+    test('a picture alone (no text tags) is still reported', () async {
+      final Uint8List cover = await solidPng(16, 16);
+      final String path = write(
+        'artonly.mp3',
+        AudioTagFixtures.mp3(coverImage: cover),
+      );
+
+      final LocalAudioMetadata? metadata = await reader.readFromPath(path);
+
+      expect(metadata, isNotNull);
+      expect(metadata!.title, isNull);
+      expect(metadata.artworkUri, isNotNull);
+    });
+
+    test('corrupt embedded picture bytes yield no artwork, tags unaffected',
+        () async {
+      final String path = write(
+        'corrupt.mp3',
+        AudioTagFixtures.mp3(
+          title: 'Still Readable',
+          coverImage: Uint8List.fromList('not an image'.codeUnits),
+        ),
+      );
+
+      final LocalAudioMetadata? metadata = await reader.readFromPath(path);
+
+      expect(metadata!.title, 'Still Readable');
+      expect(metadata.artworkUri, isNull);
+    });
+
+    test('a restart-equivalent re-read reuses the cached cover', () async {
+      final Uint8List cover = await solidPng(64, 64);
+      final String path = write(
+        'cached.mp3',
+        AudioTagFixtures.mp3(title: 'Song', coverImage: cover),
+      );
+
+      final Uri first = (await reader.readFromPath(path))!.artworkUri!;
+      final File cachedFile = File(first.toFilePath());
+      final DateTime writtenAt = cachedFile.lastModifiedSync();
+
+      // A fresh reader instance stands in for a new app launch: nothing is
+      // kept in memory between them, only the cache on disk.
+      final FilesystemLocalMetadataReader restarted =
+          FilesystemLocalMetadataReader(
+        artworkCache: LocalArtworkCache(directory: () async => artworkDir),
+      );
+      final Uri second = (await restarted.readFromPath(path))!.artworkUri!;
+
+      expect(second, first);
+      // Untouched, not rewritten: the cache hit skipped extraction entirely.
+      expect(cachedFile.lastModifiedSync(), writtenAt);
+    });
+
+    test('a cover larger than the bound is downsampled, not stored as-is',
+        () async {
+      final Uint8List cover = await solidPng(2000, 1000);
+      final String path = write(
+        'huge.mp3',
+        AudioTagFixtures.mp3(title: 'Song', coverImage: cover),
+      );
+
+      final LocalAudioMetadata? metadata = await reader.readFromPath(path);
+
+      final File cached = File(metadata!.artworkUri!.toFilePath());
+      final ui.Size size = await decodedSize(cached);
+      expect(size.width, lessThanOrEqualTo(1024));
+      expect(size.height, lessThanOrEqualTo(1024));
+      // Aspect ratio survives the resize.
+      expect(size.width / size.height, closeTo(2.0, 0.05));
+    });
+
+    test('a cover already within the bound is stored unresized', () async {
+      final Uint8List cover = await solidPng(200, 100);
+      final String path = write(
+        'small.mp3',
+        AudioTagFixtures.mp3(title: 'Song', coverImage: cover),
+      );
+
+      final LocalAudioMetadata? metadata = await reader.readFromPath(path);
+
+      final File cached = File(metadata!.artworkUri!.toFilePath());
+      final ui.Size size = await decodedSize(cached);
+      expect(size.width, 200);
+      expect(size.height, 100);
+    });
+
+    test('a missing/deleted cache entry regenerates instead of staying null',
+        () async {
+      final Uint8List cover = await solidPng(48, 48);
+      final String path = write(
+        'regenerate.mp3',
+        AudioTagFixtures.mp3(title: 'Song', coverImage: cover),
+      );
+
+      final Uri first = (await reader.readFromPath(path))!.artworkUri!;
+      File(first.toFilePath()).deleteSync();
+
+      final Uri? second = (await reader.readFromPath(path))?.artworkUri;
+
+      expect(second, isNotNull);
+      expect(File(second!.toFilePath()).existsSync(), isTrue);
     });
   });
 }
