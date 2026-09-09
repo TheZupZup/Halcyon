@@ -242,6 +242,23 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("marked", problems[0])
 
+    def test_an_entry_that_wraps_a_description_is_read_as_one_entry(self):
+        # AppStream allows child elements inside a <release>. The attributes
+        # that matter are the opening tag's, and a <url type="..."> inside the
+        # description must not be mistaken for one of them.
+        problems = self.repo(
+            releases=[
+                '    <release version="0.2.6" date="2026-09-08">',
+                "      <description>",
+                "        <p>Folder browsing.</p>",
+                "      </description>",
+                '      <url type="details">https://example.invalid/notes</url>',
+                "    </release>",
+                '    <release version="0.2.5" date="2026-09-06"/>',
+            ]
+        ).problems()
+        self.assertEqual(problems, [])
+
     def test_missing_releases_block_is_reported(self):
         repo = self.repo()
         repo.write(

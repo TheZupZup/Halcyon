@@ -333,7 +333,14 @@ _RELEASES_BLOCK = re.compile(
     r"(?P<indent>[ \t]*)<releases>[ \t]*\r?\n(?P<body>.*?)(?P<closing>[ \t]*</releases>)",
     re.DOTALL,
 )
-_RELEASE_ENTRY = re.compile(r"<release\b[^>]*?/?>")
+# A release entry is either self-closing or a pair wrapping child elements
+# (AppStream allows a <description>, <url>, <issues> inside one). Matching
+# the whole element means an entry with children is seen once, and can be
+# rewritten without leaving its children orphaned.
+_RELEASE_ENTRY = re.compile(
+    r"<release\b[^>]*?/>|<release\b[^>]*?>.*?</release\s*>", re.DOTALL
+)
+_RELEASE_OPEN_TAG = re.compile(r"<release\b[^>]*?/?>")
 _ATTRIBUTE = re.compile(r'([A-Za-z_:][-\w:.]*)\s*=\s*"([^"]*)"')
 
 
@@ -363,7 +370,8 @@ def parse_release_date(value):
 def appstream_releases(text):
     """Return the `<release .../>` entries of an AppStream document, in order.
 
-    Each entry is `(raw_tag, attributes)`. Returns None when the document has no
+    Each entry is `(element, attributes)`, the attributes being those of its
+    opening tag. Returns None when the document has no
     `<releases>` block at all, so a caller can tell "no releases listed" from
     "this file is not shaped the way we think it is".
     """
@@ -371,21 +379,22 @@ def appstream_releases(text):
     if block is None:
         return None
     return [
-        (tag, dict(_ATTRIBUTE.findall(tag)))
-        for tag in _RELEASE_ENTRY.findall(block.group("body"))
+        (element, dict(_ATTRIBUTE.findall(_RELEASE_OPEN_TAG.match(element).group(0))))
+        for element in _RELEASE_ENTRY.findall(block.group("body"))
     ]
 
 
-def _release_entry(version_name, release_date):
-    """The `<release/>` tag for one release.
+def _release_entry(version_name, release_date, self_closing=True):
+    """The `<release>` tag for one release.
 
     Pre-releases are marked `type="development"` so a software centre does not
-    offer an alpha as if it were the current stable build.
+    offer an alpha as if it were the current stable build. `self_closing` is
+    False when the tag opens an element that has children to keep.
     """
     attributes = 'version="{}" date="{}"'.format(version_name, release_date)
     if is_prerelease(version_name):
         attributes += ' type="development"'
-    return "<release {}/>".format(attributes)
+    return "<release {}{}>".format(attributes, "/" if self_closing else "")
 
 
 def update_appstream_release(path, version_name, release_date):
@@ -426,10 +435,14 @@ def update_appstream_release(path, version_name, release_date):
     # The date already in the file wins over today: it is the date that release
     # was published, and only an explicit --release-date may rewrite it.
     date = release_date or existing_attributes.get("date") or today_utc()
-    entry = _release_entry(version_name, date)
     if existing is not None:
-        new_body = body.replace(existing, entry, 1)
+        # Rewrite the attributes, not the element: an entry that wraps a
+        # <description> keeps it, and the file stays well-formed XML.
+        open_tag = _RELEASE_OPEN_TAG.match(existing).group(0)
+        entry = _release_entry(version_name, date, self_closing=open_tag.endswith("/>"))
+        new_body = body.replace(existing, existing.replace(open_tag, entry, 1), 1)
     else:
+        entry = _release_entry(version_name, date)
         indent = _entry_indent(body, block.group("indent"))
         new_body = "{}{}\n{}".format(indent, entry, body)
 

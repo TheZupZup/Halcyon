@@ -480,6 +480,44 @@ void main() {
           metainfoFile(tmp).readAsStringSync(), contains('date="2026-09-06"'));
     });
 
+    test('an entry that wraps a description keeps it', () async {
+      // AppStream allows child elements inside a <release>. Rewriting only the
+      // opening tag keeps them, where replacing the element would have left
+      // the children and </release> orphaned and the XML malformed.
+      final Directory tmp = await fixture(
+        body: '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<component type="desktop-application">\n'
+            '  <releases>\n'
+            '    <release version="0.1.0-alpha.36" date="2026-09-06" '
+            'type="development">\n'
+            '      <description>\n'
+            '        <p>Folder browsing, and a calmer queue.</p>\n'
+            '      </description>\n'
+            '    </release>\n'
+            '  </releases>\n'
+            '</component>\n',
+      );
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.36',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--release-date', '2026-09-09', '--keep-changelog'],
+      );
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+
+      final String after = metainfoFile(tmp).readAsStringSync();
+      expect(after, contains('<p>Folder browsing, and a calmer queue.</p>'));
+      expect(after, contains('</release>'));
+      expect(after, contains('date="2026-09-09"'));
+      // The rewritten tag still opens the element it opened before.
+      expect(after, isNot(contains('type="development"/>')));
+      expect(XmlIsWellFormed(after).result, isTrue,
+          reason: 'tags left unbalanced:\n$after');
+    });
+
     test('does nothing when the metainfo file is absent', () async {
       final Directory tmp = await _fixtureRepo(
         pubspecVersion: '0.1.0-alpha.36',
@@ -738,5 +776,21 @@ String _findRepoRoot() {
       fail('Could not find repo root from ${Directory.current.path}');
     }
     d = parent;
+  }
+}
+
+/// Cheap well-formedness check: every `<release>` that is not self-closing has
+/// a matching `</release>`. Enough to catch the orphaned-children shape without
+/// pulling an XML parser into the tooling tests.
+class XmlIsWellFormed {
+  XmlIsWellFormed(this.document);
+
+  final String document;
+
+  bool get result {
+    final int opened =
+        RegExp(r'<release\b[^>]*[^/]>').allMatches(document).length;
+    final int closed = RegExp(r'</release\s*>').allMatches(document).length;
+    return opened == closed;
   }
 }

@@ -400,9 +400,10 @@ the canonical source of truth for what the bump must contain.
    it must match the tag.
 4. **Add the AppStream release entry** at the top of `<releases>` in
    `linux/packaging/io.github.thezupzup.linthra.metainfo.xml`, e.g.
-   `<release version="0.1.0-alpha.31" date="2026-09-09"/>`. Newest entry first;
-   a pre-release also carries `type="development"` so a software centre does
-   not offer an alpha as the current stable build. This is the version
+   `<release version="0.1.0-alpha.31" date="2026-09-09" type="development"/>`.
+   Newest entry first; a pre-release carries `type="development"`, as above, so
+   a software centre does not offer an alpha as the current stable build, and a
+   stable release leaves the attribute off. This is the version
    GNOME Software, KDE Discover and Flathub show for the installed app. Verify
    the whole set agrees with `python3 scripts/check_release_metadata_sync.py`.
 5. **Regenerate committed generated files** (Drift `*.g.dart`) so they match the
