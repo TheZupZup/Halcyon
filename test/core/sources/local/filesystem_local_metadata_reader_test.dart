@@ -47,8 +47,7 @@ void main() {
       ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
       ui.Paint()..color = const ui.Color(0xFF336699),
     );
-    final ui.Image image =
-        await recorder.endRecording().toImage(width, height);
+    final ui.Image image = await recorder.endRecording().toImage(width, height);
     final ByteData? data =
         await image.toByteData(format: ui.ImageByteFormat.png);
     image.dispose();

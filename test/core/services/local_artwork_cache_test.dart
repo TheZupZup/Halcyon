@@ -92,8 +92,7 @@ void main() {
     expect(dir.listSync(), isEmpty);
   });
 
-  test('store returns null for bytes that are not a decodable image',
-      () async {
+  test('store returns null for bytes that are not a decodable image', () async {
     final Uri? uri = await cache.store(
       '/music/song.flac',
       Uint8List.fromList('definitely not an image'.codeUnits),
