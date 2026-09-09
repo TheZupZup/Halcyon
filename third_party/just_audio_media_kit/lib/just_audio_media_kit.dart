@@ -54,6 +54,16 @@ class JustAudioMediaKit extends JustAudioPlatform {
   /// headless audio smoke layers `ao=alsa` on top for an ALSA null device.
   static Map<String, String> mpvProperties = const {};
 
+  /// The live media_kit [Player]s, keyed by the just_audio player id.
+  ///
+  /// just_audio's platform interface models no audio *output device*, so there
+  /// is no way through it to read libmpv's `audio-device-list` or to move a
+  /// playing track onto another sink. Linthra reads this map to do both (see
+  /// `LinuxAudioOutputDeviceService`). An entry appears as soon as the player
+  /// is created and is removed when it is released, so a stale [Player] is
+  /// never handed out.
+  static final Map<String, Player> livePlayers = <String, Player>{};
+
   static final _logger = Logger('JustAudioMediaKit');
   final _players = HashMap<String, MediaKitPlayer>();
 

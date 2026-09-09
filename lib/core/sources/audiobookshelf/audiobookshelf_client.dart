@@ -31,4 +31,14 @@ abstract interface class AudiobookshelfClient {
   Future<List<AudiobookshelfLibraryDto>> fetchLibraries(
     AudiobookshelfSession session,
   );
+
+  /// Fetches one page of the books in [libraryId], title-sorted, with [page]
+  /// zero-based. A library can hold thousands of books, so this is paged
+  /// rather than "everything at once".
+  Future<AudiobookshelfLibraryItemsPage> fetchLibraryItems(
+    AudiobookshelfSession session, {
+    required String libraryId,
+    required int limit,
+    required int page,
+  });
 }

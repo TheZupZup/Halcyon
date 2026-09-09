@@ -204,10 +204,17 @@ source-specific player exists and credentials remain in the existing resolver.
 
 `just_audio_media_kit` is vendored under `third_party/just_audio_media_kit`
 (and wired in through a `dependency_overrides` path entry) rather than pulled
-from pub.dev. The local delta is two hunks that add
-`JustAudioMediaKit.mpvProperties`, an optional map of libmpv properties applied
-at player creation. Linthra uses it for the defaults below, and the headless CI
-smoke target layers `ao=alsa` on top where there is no PipeWire/Pulse device.
+from pub.dev. The local delta is two small additions:
+
+* `JustAudioMediaKit.mpvProperties`, an optional map of libmpv properties
+  applied at player creation. Linthra uses it for the defaults below, and the
+  headless CI smoke target layers `ao=alsa` on top where there is no
+  PipeWire/Pulse device.
+* `JustAudioMediaKit.livePlayers`, a map of the media_kit `Player`s that
+  currently exist. just_audio's platform interface has no concept of an audio
+  output device, and media_kit's `Player` is private to the plugin, so this is
+  how [Audio output device](#audio-output-device) reaches libmpv's
+  `audio-device-list` and `audio-device`.
 
 ### libmpv properties Linthra sets
 
@@ -235,6 +242,86 @@ version and archive digest, what is and isn't vendored, and how to refresh it.
 pinned toolchain and proves — offline — that the tree is still upstream plus
 that recorded patch.
 
+### Audio output device
+
+Settings → Music & playback → **Audio output** lists the outputs the host offers
+(speakers, headset, HDMI, a USB DAC) and moves playback onto the one the
+listener picks ([issue #402](https://github.com/TheZupZup/Linthra/issues/402)).
+Nothing goes around the backend: the list *is* libmpv's `audio-device-list`, and
+the choice *is* its `audio-device`. Android is untouched — output routing there
+belongs to the system, so the seam reports itself unsupported and the card is
+not rendered at all.
+
+| Piece | File |
+| --- | --- |
+| The seam | `lib/core/services/audio_output_device_service.dart` |
+| Linux implementation | `lib/core/services/linux_audio_output_device_service.dart` |
+| Platform split | `lib/core/services/platform_audio_output_device_service.dart` |
+| Policy (restore, fallback, what is remembered) | `lib/features/settings/playback/audio_output_controller.dart` |
+
+Four decisions worth knowing:
+
+* **Switching moves audio that is already playing.** The chosen device is
+  written to every live player through media_kit's `setAudioDevice`, *and* into
+  `JustAudioMediaKit.mpvProperties`, so a player the engine creates afterwards
+  (a stop/start, a suspend/resume reload, a source switch) starts on it too.
+* **A missing device falls back, quietly and safely.** On launch the saved
+  device is looked up in the list the host actually reports. If it is not there
+  — unplugged headset, a different machine, a renamed sink — Linthra stays on
+  the system default, forgets the stored value rather than pushing a name libmpv
+  would reject, and the card says so.
+* **"Did not answer" is never read as "device gone".** A backend that cannot be
+  enumerated — including one that does not publish `audio-device-list` before
+  the probe times out — clears nothing, re-routes nothing, and keeps the live
+  selection; the card just reports that it found no outputs. libmpv seeds its
+  own state with a lone `auto` entry, and treating *that* as the real list is
+  exactly how a transient hiccup would look like an unplugged device, so the
+  timeout is deliberately surfaced as a failure instead.
+* **A refused switch is not recorded as done.** Routing reports whether it took
+  effect. If the backend refuses (the device went away between the list and the
+  tap) nothing is stored, playback is still shown where it actually is, the card
+  says the switch did not happen, and the next attempt at that device is a real
+  attempt rather than a no-op.
+* **Choices are serialized.** Two quick picks queue instead of racing, so the
+  later gesture is the one that ends up playing and stored.
+* **Only stable ids are remembered.** PipeWire/PulseAudio node names and ALSA
+  `CARD=` names are derived from the hardware and survive a reboot, so they are
+  persisted. Numbers are not: ALSA's `alsa/hw:1,0` handles are card *indexes*
+  that renumber when a USB DAC or dock is plugged in, and a bare numeric target
+  (`pipewire/42`) is a runtime object id the daemon reuses for a different sink
+  after a restart. The startup check can only ask whether a saved id still
+  exists, and a reused number exists while meaning something else — so both are
+  applied for the session and deliberately not stored, and the card explains
+  that.
+* **Launch never probes for nothing.** Asking libmpv for its device list is the
+  only slow part, so it happens when the Settings card is opened, or at launch
+  only when there is a saved device to restore. When nothing is playing there is
+  no player to ask, so enumeration builds a short-lived libmpv handle and
+  disposes it — reading the device list never opens an output or makes a sound.
+* **The restore finishes before the first frame.** media_kit builds its player
+  when the first track loads and reads the chosen output at construction, so a
+  restore still in flight then would play the opening seconds on the system
+  default before jumping. Bootstrap waits for it, bounded by a deadline
+  (`_audioOutputRestoreDeadline`) so a wedged backend delays launch by that much
+  and no more; past it the restore still lands and still moves live playback.
+
+The mapping, the fallback and what gets remembered are covered by
+`test/core/models/audio_output_device_test.dart`,
+`test/core/services/linux_audio_output_device_service_test.dart` and
+`test/features/settings/playback/audio_output_controller_test.dart`. What those
+cannot cover is libmpv itself — `flutter test` runs on the Dart VM without the
+native bundle, so a real `Player` is never built. Check that part on a real
+desktop:
+
+| Check | Expected |
+| --- | --- |
+| Open Settings → Music & playback with nothing playing | The list shows your real outputs, and no sound is produced while it enumerates. |
+| Start a track, then switch output | The audio moves to the new device without the track restarting or losing its position. |
+| Switch output, stop, play something else | The new track still comes out of the chosen device. |
+| Plug in a headset, then press Refresh | The new device appears in the list. |
+| Pick a USB output, quit, unplug it, relaunch | Playback uses the system default and the card says the saved output is unavailable. |
+| Pick a USB output, quit, plug it back in, relaunch | Playback goes back to that output on its own. |
+
 libmpv provides broad codec/container support and PulseAudio/PipeWire output.
 It is a native runtime dependency, not a binary downloaded when Linthra starts.
 The Flatpak manifest therefore builds libmpv as a declared module and bundles
@@ -260,6 +347,7 @@ undeclared network access to an isolated `flatpak-builder` build.
 | Lost folder access | Supported | A selected folder that stops resolving (unmounted drive, deleted folder, revoked portal document) is reported as a recoverable "select it again" state on the Local music card, and the indexed catalog is left alone rather than replaced with an empty scan. |
 | Local tag reading | Supported | `FilesystemLocalMetadataReader` reads title, artist, album artist, album, track number and duration from ID3, Vorbis comments, MP4 atoms, APEv2 and RIFF INFO through `audio_metadata_reader` ([issue #407](https://github.com/TheZupZup/Linthra/issues/407)). An unreadable or untagged file still appears, from its filename. Android is deliberately unchanged: its tags come from the native SAF walk. |
 | Local embedded artwork | Unsupported | Tags are read without pulling cover images out of every file during a scan. Extracting and caching embedded art on desktop is [issue #408](https://github.com/TheZupZup/Linthra/issues/408); tracks keep the placeholder until then. |
+| **Audio output device** | Supported | Settings → Music & playback → Audio output lists libmpv's `audio-device-list` and routes playback with `audio-device` ([issue #402](https://github.com/TheZupZup/Linthra/issues/402)). A saved device is re-applied at launch, and one that is no longer present falls back to the system default. See [Audio output device](#audio-output-device). |
 | Chromecast | Android/iOS only | Already gated in `cast_providers.dart`; Linux keeps the honest "cast unavailable" service. |
 | Share sheet, launcher-icon switching | Android-only, by design | No desktop equivalent; the UI simply omits them. |
 | Desktop layout | Supported | The shell swaps its bottom bar for a navigation rail at 900 px, and feature screens adapt on the width they are given — see [How the desktop layout adapts](#how-the-desktop-layout-adapts). |

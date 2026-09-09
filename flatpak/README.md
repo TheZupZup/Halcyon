@@ -158,7 +158,9 @@ connections for user-configured Jellyfin, Navidrome/Subsonic, and Plex servers.
 The full contributor workflow — host tools, build, install, run, rebuild,
 clean/uninstall and debugging, written for Fedora Atomic (Kinoite/Silverblue)
 and usable anywhere else — is
-[docs/flatpak-development.md](../docs/flatpak-development.md). The short
+[docs/flatpak-development.md](../docs/flatpak-development.md). Turning a tagged
+release into a published Flatpak is a different walk, in
+[docs/flathub-update-process.md](../docs/flathub-update-process.md). The short
 version, run from this directory:
 
 ```bash

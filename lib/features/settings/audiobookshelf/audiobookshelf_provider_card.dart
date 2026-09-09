@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../app/routes.dart';
 import '../source/provider_summary_cards.dart';
 import 'audiobookshelf_settings_controller.dart';
 import 'audiobookshelf_settings_section.dart';
@@ -57,7 +59,18 @@ class AudiobookshelfProviderCard extends ConsumerWidget {
       detailIsError: detailIsError,
       onManage: manage,
       actions: connected
-          ? <Widget>[_ManageAction(onPressed: manage)]
+          ? <Widget>[
+              _ManageAction(onPressed: manage),
+              // The way into the books themselves. Pushed, like every other
+              // Settings detail page, so Back returns to this card rather
+              // than to the Settings hub. It sits here only until Audiobooks
+              // gets its own navigation destination, its own change agreed
+              // on the tracking issue.
+              FilledButton(
+                onPressed: () => context.push(AppRoutes.audiobooks),
+                child: const Text('Browse'),
+              ),
+            ]
           : <Widget>[
               FilledButton(onPressed: manage, child: const Text('Connect')),
             ],
@@ -66,8 +79,8 @@ class AudiobookshelfProviderCard extends ConsumerWidget {
 }
 
 /// The card's explicit "Manage" button. The music cards pair Manage with a
-/// "Sync now" action; Audiobookshelf has nothing to sync into the catalog yet,
-/// so this is the only action it offers.
+/// "Sync now" action; Audiobookshelf has nothing to sync into the music
+/// catalog and never will, so it pairs with "Browse" instead.
 class _ManageAction extends StatelessWidget {
   const _ManageAction({required this.onPressed});
 

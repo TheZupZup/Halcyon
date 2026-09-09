@@ -7,8 +7,9 @@ import '../../tool/version_from_tag.dart';
 
 /// Specifies `scripts/prepare_release_bump.py` — the Python helper the
 /// `.github/workflows/prepare-release-bump.yml` workflow calls to update
-/// pubspec.yaml, lib/core/app_info.dart, the Fastlane changelog, and the
-/// F-Droid metadata's `CurrentVersion`/`CurrentVersionCode`.
+/// pubspec.yaml, lib/core/app_info.dart, the Fastlane changelog, the F-Droid
+/// metadata's `CurrentVersion`/`CurrentVersionCode`, and the AppStream
+/// `<release>` entry software centres show.
 ///
 /// The script has to agree forever with `tool/version_from_tag.dart` and
 /// `scripts/release_preflight.sh`, so this suite shells out to it against a
@@ -250,6 +251,65 @@ void main() {
       expect(changelog.readAsStringSync().trim(), 'new content');
     });
 
+    test('--keep-changelog leaves written notes and still fixes the rest',
+        () async {
+      // The partial-bump case: the notes were written by hand, and something
+      // else (here the F-Droid code) still has to be brought into line.
+      final Directory tmp = await _fixtureRepo(
+        pubspecVersion: '0.1.0-alpha.37',
+        pubspecCode: 100037,
+        appInfoVersion: '0.1.0-alpha.37',
+        fdroidBody: 'Name: Linthra\n'
+            'CurrentVersion: 0.1.0-alpha.36\n'
+            'CurrentVersionCode: 100036\n',
+      );
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final File changelog = File(p.join(tmp.path, 'fastlane', 'metadata',
+          'android', 'en-US', 'changelogs', '100037.txt'));
+      changelog.writeAsStringSync('Hand-written release notes.\n');
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.37',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--keep-changelog'],
+      );
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+      expect(changelog.readAsStringSync(), 'Hand-written release notes.\n');
+      expect(
+        File(p.join(tmp.path, 'metadata', 'io.github.thezupzup.linthra.yml'))
+            .readAsStringSync(),
+        contains('CurrentVersionCode: 100037'),
+      );
+    });
+
+    test('--keep-changelog still writes a changelog that is not there yet',
+        () async {
+      final Directory tmp = await _fixtureRepo(
+        pubspecVersion: '0.1.0-alpha.36',
+        pubspecCode: 100036,
+        appInfoVersion: '0.1.0-alpha.36',
+      );
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.37',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--keep-changelog'],
+      );
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+      expect(
+        File(p.join(tmp.path, 'fastlane', 'metadata', 'android', 'en-US',
+                'changelogs', '100037.txt'))
+            .existsSync(),
+        isTrue,
+      );
+    });
+
     test('updates F-Droid CurrentVersion / CurrentVersionCode when present',
         () async {
       final Directory tmp = await _fixtureRepo(
@@ -298,6 +358,238 @@ void main() {
     });
   });
 
+  group('prepare_release_bump.py (AppStream release entry, #452)', () {
+    // What a software centre and Flathub read. Left behind, it advertises the
+    // previous release for the build the user just installed.
+    const String metainfo = '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<component type="desktop-application">\n'
+        '  <id>io.github.thezupzup.linthra</id>\n'
+        '  <releases>\n'
+        '    <release version="0.1.0-alpha.36" date="2026-09-06" '
+        'type="development"/>\n'
+        '  </releases>\n'
+        '</component>\n';
+
+    Future<Directory> fixture({String? body}) => _fixtureRepo(
+          pubspecVersion: '0.1.0-alpha.36',
+          pubspecCode: 100036,
+          appInfoVersion: '0.1.0-alpha.36',
+          metainfoBody: body ?? metainfo,
+        );
+
+    File metainfoFile(Directory dir) => File(p.join(dir.path, 'linux',
+        'packaging', 'io.github.thezupzup.linthra.metainfo.xml'));
+
+    test('adds the new release as the newest entry', () async {
+      final Directory tmp = await fixture();
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.37',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--release-date', '2026-09-09'],
+      );
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+
+      final String after = metainfoFile(tmp).readAsStringSync();
+      expect(
+        after,
+        contains('<release version="0.1.0-alpha.37" date="2026-09-09" '
+            'type="development"/>'),
+      );
+      // Newest first, and the previous entry is kept.
+      expect(after.indexOf('0.1.0-alpha.37'),
+          lessThan(after.indexOf('0.1.0-alpha.36')));
+      expect(after, contains('date="2026-09-06"'));
+    });
+
+    test('marks a stable release as stable', () async {
+      final Directory tmp = await fixture();
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '1.0.0',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--release-date', '2026-09-09'],
+      );
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+      expect(
+        metainfoFile(tmp).readAsStringSync(),
+        contains('<release version="1.0.0" date="2026-09-09"/>'),
+      );
+    });
+
+    test('re-running the same bump does not duplicate the entry', () async {
+      final Directory tmp = await fixture();
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      for (int i = 0; i < 2; i++) {
+        final ProcessResult r = _runScript(
+          script,
+          '0.1.0-alpha.37',
+          repoRoot: tmp.path,
+          extraArgs: <String>['--release-date', '2026-09-09'],
+        );
+        expect(r.exitCode, 0,
+            reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+      }
+
+      final String after = metainfoFile(tmp).readAsStringSync();
+      expect('0.1.0-alpha.37'.allMatches(after).length, 1);
+    });
+
+    test('refreshes an existing entry when a date is given', () async {
+      final Directory tmp = await fixture();
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.36',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--release-date', '2026-09-09'],
+      );
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+
+      final String after = metainfoFile(tmp).readAsStringSync();
+      expect(after, contains('date="2026-09-09"'));
+      expect(after, isNot(contains('date="2026-09-06"')));
+      expect('0.1.0-alpha.36'.allMatches(after).length, 1);
+    });
+
+    test('keeps the recorded date when the bump is re-run', () async {
+      // A release that already shipped keeps its published date, whatever day
+      // the re-run happens on: the prepare workflow passes no --release-date,
+      // so a retry tomorrow must not rewrite release history.
+      final Directory tmp = await fixture();
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.36',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--keep-changelog'],
+      );
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+      expect(
+          metainfoFile(tmp).readAsStringSync(), contains('date="2026-09-06"'));
+    });
+
+    test('an entry that wraps a description keeps it', () async {
+      // AppStream allows child elements inside a <release>. Rewriting only the
+      // opening tag keeps them, where replacing the element would have left
+      // the children and </release> orphaned and the XML malformed.
+      final Directory tmp = await fixture(
+        body: '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<component type="desktop-application">\n'
+            '  <releases>\n'
+            '    <release version="0.1.0-alpha.36" date="2026-09-06" '
+            'type="development">\n'
+            '      <description>\n'
+            '        <p>Folder browsing, and a calmer queue.</p>\n'
+            '      </description>\n'
+            '    </release>\n'
+            '  </releases>\n'
+            '</component>\n',
+      );
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.36',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--release-date', '2026-09-09', '--keep-changelog'],
+      );
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+
+      final String after = metainfoFile(tmp).readAsStringSync();
+      expect(after, contains('<p>Folder browsing, and a calmer queue.</p>'));
+      expect(after, contains('</release>'));
+      expect(after, contains('date="2026-09-09"'));
+      // The rewritten tag still opens the element it opened before.
+      expect(after, isNot(contains('type="development"/>')));
+      expect(XmlIsWellFormed(after).result, isTrue,
+          reason: 'tags left unbalanced:\n$after');
+    });
+
+    test('does nothing when the metainfo file is absent', () async {
+      final Directory tmp = await _fixtureRepo(
+        pubspecVersion: '0.1.0-alpha.36',
+        pubspecCode: 100036,
+        appInfoVersion: '0.1.0-alpha.36',
+      );
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r =
+          _runScript(script, '0.1.0-alpha.37', repoRoot: tmp.path);
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+      expect(metainfoFile(tmp).existsSync(), isFalse);
+    });
+
+    test('refuses a metainfo file with no <releases> block', () async {
+      final Directory tmp = await fixture(
+        body: '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<component type="desktop-application">\n'
+            '  <id>io.github.thezupzup.linthra</id>\n'
+            '</component>\n',
+      );
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r =
+          _runScript(script, '0.1.0-alpha.37', repoRoot: tmp.path);
+      expect(r.exitCode, isNot(0));
+      expect(r.stderr, contains('<releases>'));
+    });
+
+    test('rejects a malformed release date', () async {
+      final Directory tmp = await fixture();
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.37',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--release-date', '09/09/2026'],
+      );
+      expect(r.exitCode, isNot(0));
+      expect(r.stderr, contains('Malformed release date'));
+    });
+  });
+
+  group('prepare-release-bump.yml forwards what the script needs', () {
+    // The workflow is the way this script is normally run, so an option the
+    // script grows is only real once the workflow can pass it.
+    late String workflow;
+
+    setUpAll(() {
+      workflow = File(p.join(
+        repoRoot,
+        '.github',
+        'workflows',
+        'prepare-release-bump.yml',
+      )).readAsStringSync();
+    });
+
+    test('an intended release date can be given and reaches the script', () {
+      // Without it the AppStream entry records the day the workflow ran, and
+      // a re-run keeps that date rather than correcting it (#452).
+      expect(workflow, contains('release_date:'));
+      expect(workflow, contains(r'RELEASE_DATE: ${{ inputs.release_date }}'));
+      expect(workflow, contains(r'args+=("--release-date" "$RELEASE_DATE")'));
+    });
+
+    test('the AppStream file is committed with the rest of the bump', () {
+      expect(workflow, contains('linux/packaging'));
+    });
+  });
+
   group('prepare_release_bump.py — input validation', () {
     test('rejects a leading v', () async {
       final Directory tmp = await _fixtureRepo(
@@ -325,6 +617,42 @@ void main() {
           _runScript(script, '0.1.0-alpha.37+100037', repoRoot: tmp.path);
       expect(r.exitCode, isNot(0));
       expect(r.stderr, contains('"+versionCode"'));
+    });
+
+    test('rejects --keep-changelog together with --force-changelog', () async {
+      final Directory tmp = await _fixtureRepo(
+        pubspecVersion: '0.1.0-alpha.36',
+        pubspecCode: 100036,
+        appInfoVersion: '0.1.0-alpha.36',
+      );
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.37',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--keep-changelog', '--force-changelog'],
+      );
+      expect(r.exitCode, isNot(0));
+      expect(r.stderr, contains('contradict each other'));
+    });
+
+    test('rejects --keep-changelog together with --changelog', () async {
+      final Directory tmp = await _fixtureRepo(
+        pubspecVersion: '0.1.0-alpha.36',
+        pubspecCode: 100036,
+        appInfoVersion: '0.1.0-alpha.36',
+      );
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.37',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--keep-changelog', '--changelog', 'text'],
+      );
+      expect(r.exitCode, isNot(0));
+      expect(r.stderr, contains('would be ignored'));
     });
 
     test('rejects a malformed version', () async {
@@ -395,6 +723,7 @@ Future<Directory> _fixtureRepo({
   String? appInfoVersion,
   String? appInfoBody,
   String? fdroidBody,
+  String? metainfoBody,
 }) async {
   final Directory dir =
       await Directory.systemTemp.createTemp('prepare_release_bump_');
@@ -424,6 +753,14 @@ Future<Directory> _fixtureRepo({
     File(p.join(dir.path, 'metadata', 'io.github.thezupzup.linthra.yml'))
         .writeAsStringSync(fdroidBody);
   }
+  if (metainfoBody != null) {
+    Directory(p.join(dir.path, 'linux', 'packaging')).createSync(
+      recursive: true,
+    );
+    File(p.join(dir.path, 'linux', 'packaging',
+            'io.github.thezupzup.linthra.metainfo.xml'))
+        .writeAsStringSync(metainfoBody);
+  }
   return dir;
 }
 
@@ -439,5 +776,21 @@ String _findRepoRoot() {
       fail('Could not find repo root from ${Directory.current.path}');
     }
     d = parent;
+  }
+}
+
+/// Cheap well-formedness check: every `<release>` that is not self-closing has
+/// a matching `</release>`. Enough to catch the orphaned-children shape without
+/// pulling an XML parser into the tooling tests.
+class XmlIsWellFormed {
+  XmlIsWellFormed(this.document);
+
+  final String document;
+
+  bool get result {
+    final int opened =
+        RegExp(r'<release\b[^>]*[^/]>').allMatches(document).length;
+    final int closed = RegExp(r'</release\s*>').allMatches(document).length;
+    return opened == closed;
   }
 }
