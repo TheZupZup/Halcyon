@@ -424,6 +424,64 @@ void main() {
       expect(client.itemRequests, hasLength(2));
     });
 
+    test('a page nothing could be read from does not end the library',
+        () async {
+      // The middle page's records were all skipped by the parser. Ending the
+      // paging there would strand every book after it.
+      final client = FakeAudiobookshelfClient(
+        libraries: <AudiobookshelfLibraryDto>[_bookLibrary],
+      );
+      client.pagesByLibrary['lib-books'] = <AudiobookshelfLibraryItemsPage>[
+        AudiobookshelfLibraryItemsPage(
+          items: <AudiobookshelfLibraryItemDto>[_book('item-1', 'First')],
+          rawCount: 1,
+          total: 3,
+          page: 0,
+        ),
+        const AudiobookshelfLibraryItemsPage(
+          items: <AudiobookshelfLibraryItemDto>[],
+          rawCount: 1,
+          total: 3,
+          page: 1,
+        ),
+        AudiobookshelfLibraryItemsPage(
+          items: <AudiobookshelfLibraryItemDto>[_book('item-3', 'Last')],
+          rawCount: 1,
+          total: 3,
+          page: 2,
+        ),
+      ];
+      final container = _container(client: client);
+      final AudiobooksLibraryController controller =
+          container.read(audiobooksLibraryControllerProvider.notifier);
+
+      await controller.load();
+      expect(
+        container.read(audiobooksLibraryControllerProvider).hasMore,
+        isTrue,
+      );
+
+      await controller.loadMore();
+      // Nothing was added, but the library is not over.
+      expect(
+        container.read(audiobooksLibraryControllerProvider).books.single.title,
+        'First',
+      );
+      expect(
+        container.read(audiobooksLibraryControllerProvider).hasMore,
+        isTrue,
+      );
+
+      await controller.loadMore();
+      final AudiobooksLibraryState state =
+          container.read(audiobooksLibraryControllerProvider);
+      expect(
+        state.books.map((AudiobookSummary b) => b.title),
+        <String>['First', 'Last'],
+      );
+      expect(state.hasMore, isFalse);
+    });
+
     test('switching library mid-page leaves no spinner behind', () async {
       const int pageSize = AudiobooksLibraryController.pageSize;
       final client = FakeAudiobookshelfClient(

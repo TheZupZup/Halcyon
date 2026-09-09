@@ -190,15 +190,25 @@ class AudiobookshelfLibraryItemDto {
 class AudiobookshelfLibraryItemsPage {
   const AudiobookshelfLibraryItemsPage({
     required this.items,
+    required this.rawCount,
     required this.total,
     required this.page,
   });
 
+  /// The books that could be read. Shorter than [rawCount] when the server
+  /// sent a record this parser had to skip.
   final List<AudiobookshelfLibraryItemDto> items;
 
+  /// How many entries the server actually sent on this page, before any were
+  /// skipped. This, not [items], is what says how far through the library a
+  /// caller has read: a page whose every record was unreadable still consumed
+  /// its slice of the library, and counting the parsed books instead would
+  /// strand everything after it.
+  final int rawCount;
+
   /// How many items the whole (filtered) library has, per the server. Falls
-  /// back to the number parsed on this page when the server omits it, so
-  /// "have we got everything?" never reads as "there are more" forever.
+  /// back to this page's [rawCount] when the server omits it, so "have we got
+  /// everything?" never reads as "there are more" forever.
   final int total;
 
   /// The zero-based page index this response answered.
@@ -211,8 +221,10 @@ class AudiobookshelfLibraryItemsPage {
     final Object? results = json['results'];
     final List<AudiobookshelfLibraryItemDto> items =
         <AudiobookshelfLibraryItemDto>[];
+    int rawCount = 0;
     if (results is List) {
       for (final Object? entry in results) {
+        rawCount++;
         if (entry is! Map<String, dynamic>) continue;
         final AudiobookshelfLibraryItemDto? item =
             AudiobookshelfLibraryItemDto.fromJson(entry);
@@ -225,7 +237,8 @@ class AudiobookshelfLibraryItemsPage {
     final Object? page = json['page'];
     return AudiobookshelfLibraryItemsPage(
       items: items,
-      total: total is int && total >= 0 ? total : items.length,
+      rawCount: rawCount,
+      total: total is int && total >= 0 ? total : rawCount,
       page: page is int && page >= 0 ? page : requestedPage,
     );
   }

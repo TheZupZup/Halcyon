@@ -30,11 +30,13 @@ class FakeAudiobookshelfClient implements AudiobookshelfClient {
   final Map<String, List<AudiobookshelfLibraryItemDto>> itemsByLibrary =
       <String, List<AudiobookshelfLibraryItemDto>>{};
 
-  /// Reports this as the page's `total` instead of the canned list's length,
-  /// so a test can reproduce the real server's disagreement between the two:
-  /// records the parser skipped (half-scanned, no title) are counted by the
-  /// server but never arrive.
-  int? totalOverride;
+  /// Exact pages by library id, for the cases the sliced list above can't
+  /// express: a page the parser skipped every record on (items shorter than
+  /// `rawCount`), or a server total that disagrees with what arrives. Takes
+  /// precedence over [itemsByLibrary]; a page index past the end answers
+  /// empty, as the server would.
+  final Map<String, List<AudiobookshelfLibraryItemsPage>> pagesByLibrary =
+      <String, List<AudiobookshelfLibraryItemsPage>>{};
 
   // Recorded inputs.
   String? lastBaseUrl;
@@ -102,6 +104,19 @@ class FakeAudiobookshelfClient implements AudiobookshelfClient {
     lastSession = session;
     itemRequests.add((libraryId: libraryId, limit: limit, page: page));
     if (libraryItemsError != null) throw libraryItemsError!;
+    final List<AudiobookshelfLibraryItemsPage>? canned =
+        pagesByLibrary[libraryId];
+    if (canned != null) {
+      if (page >= canned.length) {
+        return AudiobookshelfLibraryItemsPage(
+          items: const <AudiobookshelfLibraryItemDto>[],
+          rawCount: 0,
+          total: canned.isEmpty ? 0 : canned.last.total,
+          page: page,
+        );
+      }
+      return canned[page];
+    }
     final List<AudiobookshelfLibraryItemDto> all =
         itemsByLibrary[libraryId] ?? const <AudiobookshelfLibraryItemDto>[];
     // Page the canned list the way the server would, so a test can drive the
@@ -112,7 +127,8 @@ class FakeAudiobookshelfClient implements AudiobookshelfClient {
         : all.sublist(start, (start + limit).clamp(0, all.length));
     return AudiobookshelfLibraryItemsPage(
       items: slice,
-      total: totalOverride ?? all.length,
+      rawCount: slice.length,
+      total: all.length,
       page: page,
     );
   }

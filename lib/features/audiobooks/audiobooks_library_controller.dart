@@ -29,6 +29,12 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
   /// [pageSize] would then ask for the same page again.
   int _nextPage = 1;
 
+  /// How many entries the server has sent for the current library, skipped
+  /// records included. Paging is measured against this rather than against
+  /// the books on screen, so a page nothing could be read from still moves
+  /// the list forward instead of ending it.
+  int _rawRead = 0;
+
   /// Bumped whenever what the screen is showing changes underneath a request:
   /// a different account, a refresh, another library. A response carrying an
   /// older generation is dropped, so no in-flight page can land on a list it
@@ -112,6 +118,7 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
       selectedLibraryId: _pickLibrary(bookLibraries, session),
       books: const <AudiobookSummary>[],
       totalBooks: 0,
+      hasMore: false,
     );
     await _loadFirstPage(generation, session, connection);
   }
@@ -131,6 +138,7 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
     final int generation = _begin(session);
     state = state.copyWith(
       selectedLibraryId: libraryId,
+      hasMore: false,
       books: const <AudiobookSummary>[],
       totalBooks: 0,
       isLoading: true,
@@ -171,17 +179,11 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
               );
       if (_isStale(generation, session, connection)) return;
       _nextPage = nextPage + 1;
-      final List<AudiobookSummary> books = <AudiobookSummary>[
-        ...state.books,
-        ..._toSummaries(page.items),
-      ];
+      _rawRead += page.rawCount;
       state = state.copyWith(
-        books: books,
-        // An empty page means the server has nothing more to give, whatever
-        // its total says (skipped malformed records make the two disagree).
-        // Settling the total on what arrived ends the paging instead of
-        // leaving a "Load more" that fetches nothing forever.
-        totalBooks: page.items.isEmpty ? books.length : page.total,
+        books: <AudiobookSummary>[...state.books, ..._toSummaries(page.items)],
+        totalBooks: page.total,
+        hasMore: _hasMore(page),
         isLoadingMore: false,
       );
     } on AudiobookshelfException catch (error) {
@@ -219,9 +221,11 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
               );
       if (_isStale(generation, session, connection)) return;
       _nextPage = 1;
+      _rawRead = page.rawCount;
       state = state.copyWith(
         books: _toSummaries(page.items),
         totalBooks: page.total,
+        hasMore: _hasMore(page),
         isLoading: false,
         hasLoaded: true,
       );
@@ -247,11 +251,21 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
     return libraries.first.id;
   }
 
+  /// Whether the server has pages left for the library being read.
+  ///
+  /// A page that sent nothing is the end, whatever the total says. Otherwise
+  /// it is what the server has sent so far against what it says is there: a
+  /// page whose records were all skipped still counts as read, so the books
+  /// after it stay reachable.
+  bool _hasMore(AudiobookshelfLibraryItemsPage page) =>
+      page.rawCount > 0 && _rawRead < page.total;
+
   /// Starts a new generation of requests for [session]: whatever was in
   /// flight for the previous one no longer owns the screen.
   int _begin(AudiobookshelfSession session) {
     _loadedFor = session;
     _nextPage = 1;
+    _rawRead = 0;
     return ++_generation;
   }
 
@@ -259,6 +273,7 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
   void _forget() {
     _loadedFor = null;
     _nextPage = 1;
+    _rawRead = 0;
     _generation++;
   }
 

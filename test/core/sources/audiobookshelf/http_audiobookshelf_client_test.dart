@@ -397,6 +397,9 @@ void main() {
       expect(page.items.single.id, 'item-1');
       // The server's own count is kept: it counts the book that was skipped.
       expect(page.total, 2);
+      // And so does the raw count, which is what says how far through the
+      // library this page read.
+      expect(page.rawCount, 2);
     });
 
     test('an unrecognized shape is an empty page, not an error', () async {
@@ -412,6 +415,7 @@ void main() {
       );
 
       expect(page.items, isEmpty);
+      expect(page.rawCount, 0);
       expect(page.total, 0);
       // No page echoed back: the one that was asked for.
       expect(page.page, 2);

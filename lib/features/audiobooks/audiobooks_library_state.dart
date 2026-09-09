@@ -54,6 +54,7 @@ class AudiobooksLibraryState {
     this.selectedLibraryId,
     this.books = const <AudiobookSummary>[],
     this.totalBooks = 0,
+    this.hasMore = false,
     this.errorMessage,
     this.errorKind,
   });
@@ -85,14 +86,19 @@ class AudiobooksLibraryState {
   /// How many books the selected library holds in total, per the server.
   final int totalBooks;
 
+  /// Whether the server still has pages this list hasn't read.
+  ///
+  /// Reported by the controller from how many entries the server actually
+  /// sent, not derived from [books] against [totalBooks]: a page whose every
+  /// record was unreadable leaves those two disagreeing forever, and reading
+  /// exhaustion off them would either loop or strand the rest of the library.
+  final bool hasMore;
+
   /// A friendly error line, when the last attempt failed.
   final String? errorMessage;
 
   /// The kind of that failure, for the UI to branch on without matching text.
   final AudiobookshelfErrorKind? errorKind;
-
-  /// True when the server says there are more books than have been loaded.
-  bool get hasMore => books.length < totalBooks;
 
   AudiobooksLibraryState copyWith({
     bool? isConnected,
@@ -103,6 +109,7 @@ class AudiobooksLibraryState {
     String? selectedLibraryId,
     List<AudiobookSummary>? books,
     int? totalBooks,
+    bool? hasMore,
     String? errorMessage,
     AudiobookshelfErrorKind? errorKind,
   }) {
@@ -115,6 +122,7 @@ class AudiobooksLibraryState {
       selectedLibraryId: selectedLibraryId ?? this.selectedLibraryId,
       books: books ?? this.books,
       totalBooks: totalBooks ?? this.totalBooks,
+      hasMore: hasMore ?? this.hasMore,
       // Errors are cleared explicitly rather than carried: every copyWith
       // that doesn't pass one is starting a fresh attempt, and a stale
       // failure must not sit under a list that has since loaded.

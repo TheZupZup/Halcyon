@@ -126,8 +126,14 @@ void main() {
     final client = FakeAudiobookshelfClient(
       libraries: <AudiobookshelfLibraryDto>[_bookLibrary],
     );
-    client.itemsByLibrary['lib-books'] = <AudiobookshelfLibraryItemDto>[];
-    client.totalOverride = 5;
+    client.pagesByLibrary['lib-books'] = <AudiobookshelfLibraryItemsPage>[
+      const AudiobookshelfLibraryItemsPage(
+        items: <AudiobookshelfLibraryItemDto>[],
+        rawCount: 3,
+        total: 5,
+        page: 0,
+      ),
+    ];
 
     await _pump(tester, client: client);
 
