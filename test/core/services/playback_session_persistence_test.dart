@@ -188,11 +188,69 @@ void main() {
       await persistence.dispose();
       await controller.dispose();
     });
+    test('a volume-only change on a paused track writes nothing', () async {
+      // The session document has no volume or mute field, so re-saving it for
+      // a slider step would be a disk write per pointer move.
+      final _CountingStore store = _CountingStore();
+      final FakePlaybackController controller = FakePlaybackController();
+      final PlaybackSessionPersistence persistence = PlaybackSessionPersistence(
+        store: store,
+        controller: controller,
+        playbackStates: controller.stateStream,
+        localFileExists: (_) => true,
+        positionSaveInterval: Duration.zero,
+      );
+      addTearDown(persistence.dispose);
+      addTearDown(controller.dispose);
+
+      controller.emit(const PlaybackState(
+        status: PlaybackStatus.paused,
+        currentTrack: remote,
+        position: Duration(seconds: 12),
+        duration: Duration(minutes: 3),
+      ));
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      final int afterFirst = store.saves;
+      expect(afterFirst, greaterThan(0));
+
+      controller.setVolume(0.6);
+      controller.setVolume(0.5);
+      controller.setMuted(true);
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(store.saves, afterFirst);
+
+      // A real move still persists.
+      controller.emit(const PlaybackState(
+        status: PlaybackStatus.paused,
+        currentTrack: remote,
+        position: Duration(seconds: 40),
+        duration: Duration(minutes: 3),
+      ));
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(store.saves, greaterThan(afterFirst));
+    });
   });
 }
 
 /// Local engine that throws from [restoreSession] so startup-safety can be
 /// asserted without a real audio backend.
+/// Counts saves, so a test can prove a state change wrote nothing rather than
+/// only that the last document still looks right.
+class _CountingStore extends InMemoryPlaybackSessionStore {
+  int saves = 0;
+
+  @override
+  Future<void> save(PersistedPlaybackSession session) async {
+    saves++;
+    await super.save(session);
+  }
+}
+
 class _ThrowingRestoreController extends FakePlaybackController {
   @override
   Future<void> restoreSession({

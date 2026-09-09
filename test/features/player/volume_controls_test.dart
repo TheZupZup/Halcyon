@@ -1,5 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -218,6 +219,26 @@ void main() {
       await tester.dragFrom(box.center, const Offset(-2000, 0));
       await tester.pumpAndSettle();
       expect(controller.state.volume, 0.0);
+    });
+
+    testWidgets('announces itself as the volume, not a bare percentage',
+        (tester) async {
+      final SemanticsHandle handle = tester.ensureSemantics();
+      final controller = await _pumpControls(tester);
+      controller.setVolume(0.7);
+      await tester.pumpAndSettle();
+
+      // One node carrying both the name and the value: a screen reader landing
+      // on the slider has to hear which slider it is, since Now Playing also
+      // has a position one.
+      final SemanticsData data =
+          tester.getSemantics(find.byType(Slider)).getSemanticsData();
+      expect(data.label, 'Volume');
+      expect(data.value, '70%');
+      expect(data.flagsCollection.isSlider, isTrue);
+      expect(data.hasAction(SemanticsAction.increase), isTrue);
+
+      handle.dispose();
     });
 
     testWidgets('follows a level set somewhere else', (tester) async {

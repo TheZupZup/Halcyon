@@ -41,6 +41,11 @@ class PlaybackVolumePersistence {
   double? _lastSeen;
   bool _disposed = false;
 
+  /// The writes, one after another. Every save joins this chain, so two of them
+  /// can never overlap (and land out of order), and [dispose] has one thing to
+  /// await to know the last level actually reached disk.
+  Future<void> _writes = Future<void>.value();
+
   /// Loads the stored volume and applies it to the controller.
   ///
   /// Best-effort: a store that throws leaves playback at full volume rather
@@ -72,16 +77,20 @@ class PlaybackVolumePersistence {
     });
   }
 
-  Future<void> _persist(double volume) async {
-    try {
-      await _preferences.setVolume(volume);
-    } catch (_) {
-      // Ignore: failing to remember a volume must never break playback.
-    }
+  Future<void> _persist(double volume) {
+    _writes = _writes.then((_) async {
+      try {
+        await _preferences.setVolume(volume);
+      } catch (_) {
+        // Ignore: failing to remember a volume must never break playback.
+      }
+    });
+    return _writes;
   }
 
-  /// Stops listening and flushes a pending save, so a level changed just before
-  /// shutdown is still remembered.
+  /// Stops listening, flushes a pending save, and waits for any write already
+  /// in flight — so a level changed just before shutdown is on disk by the time
+  /// the app is allowed to exit, whether its debounce had fired yet or not.
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
@@ -91,6 +100,7 @@ class PlaybackVolumePersistence {
     await _subscription?.cancel();
     _subscription = null;
     final double? pending = _lastSeen;
-    if (savePending && pending != null) await _persist(pending);
+    if (savePending && pending != null) unawaited(_persist(pending));
+    await _writes;
   }
 }

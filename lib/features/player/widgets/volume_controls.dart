@@ -114,16 +114,24 @@ class _VolumeControlsState extends ConsumerState<VolumeControls> {
             // Wide enough to aim at a level, narrow enough to share a row with
             // the controls it sits beside.
             width: 120,
-            child: Slider(
-              value: sliderValue,
-              onChanged: _onChanged,
-              onChangeEnd: _onChangeEnd,
-              // Names the slider for anyone who lands on it directly.
-              // Semantics only: the value indicator `label` can also drive is
-              // shown `onlyForDiscrete`, and this slider is continuous.
-              label: 'Volume',
-              semanticFormatterCallback: (double value) =>
-                  '${(value * 100).round()}%',
+            // Merged, not just wrapped: a `Semantics` label alone sits on its
+            // own node above the slider's, so a screen reader landing on the
+            // slider hears "70%" with nothing saying of what — next to a
+            // position slider on the same screen, that is unusable. Merging
+            // puts the name on the same node as the value and the
+            // increase/decrease actions. (`Slider.label` is not this: it drives
+            // the visual value indicator, and only for discrete sliders.)
+            child: MergeSemantics(
+              child: Semantics(
+                label: 'Volume',
+                child: Slider(
+                  value: sliderValue,
+                  onChanged: _onChanged,
+                  onChangeEnd: _onChangeEnd,
+                  semanticFormatterCallback: (double value) =>
+                      '${(value * 100).round()}%',
+                ),
+              ),
             ),
           ),
         ],

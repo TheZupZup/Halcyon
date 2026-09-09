@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/playback_state.dart';
 import 'package:linthra/core/repositories/playback_preferences.dart';
@@ -15,6 +17,10 @@ class _RawPreferences implements PlaybackPreferences {
   final List<double> writes = <double>[];
   bool throwOnRead = false;
 
+  /// When set, a write parks here until the test completes it — so a test can
+  /// hold a save in flight and prove shutdown waits for it.
+  Completer<void>? writeGate;
+
   @override
   Future<bool> normalizeVolume() async => false;
 
@@ -29,6 +35,8 @@ class _RawPreferences implements PlaybackPreferences {
 
   @override
   Future<void> setVolume(double value) async {
+    final Completer<void>? gate = writeGate;
+    if (gate != null) await gate.future;
     stored = value;
     writes.add(value);
   }
@@ -150,6 +158,34 @@ void main() {
     await persistence.dispose();
 
     expect(preferences.stored, 0.2);
+  });
+
+  test('dispose waits for a write already in flight', () async {
+    final controller = FakePlaybackController();
+    addTearDown(controller.dispose);
+    final preferences = _RawPreferences(1.0);
+    final persistence = attach(preferences, controller);
+
+    // Hold the write open, then let the debounce fire so a save is genuinely
+    // in flight with no timer left pending.
+    preferences.writeGate = Completer<void>();
+    controller.setVolume(0.3);
+    await pastDebounce();
+    expect(preferences.writes, isEmpty, reason: 'the write is parked');
+
+    bool disposed = false;
+    final Future<void> shutdown =
+        persistence.dispose().then((_) => disposed = true);
+    await Future<void>.delayed(Duration.zero);
+    expect(disposed, isFalse,
+        reason: 'shutdown must not finish while the level is still being '
+            'written');
+
+    preferences.writeGate!.complete();
+    await shutdown;
+
+    expect(disposed, isTrue);
+    expect(preferences.stored, 0.3);
   });
 
   test('stops listening once disposed', () async {
