@@ -330,6 +330,10 @@ NOT publish a release; those still happen manually after the PR is merged.
    resulting APK and smoke-test.
 8. **Update `fdroiddata`** to the new tag/version if the F-Droid submission has
    landed (see [fdroid-submission.md](./fdroid-submission.md)).
+9. **Update the Flatpak/Flathub packaging** from the same tag once Linthra is
+   on Flathub (see
+   [flathub-update-process.md](./flathub-update-process.md)). The version bump
+   in step 1 already wrote the AppStream release entry that listing shows.
 
 > **The workflow never creates the tag.** The tag is created only after the
 > bump PR is merged. Never publish a release tag before the bump PR is
