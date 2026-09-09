@@ -147,8 +147,7 @@ class MiniPlayer extends ConsumerWidget {
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: <Widget>[
-                                    if (showVolume)
-                                      const VolumeControls(),
+                                    if (showVolume) const VolumeControls(),
                                     const _QueueButton(),
                                   ],
                                 ),
