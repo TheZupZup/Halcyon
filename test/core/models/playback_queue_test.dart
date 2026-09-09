@@ -237,6 +237,48 @@ void main() {
       expect(queue.reorderUpNext(-1, 0), same(queue));
     });
 
+    test('repeated reorderUpNext() calls keep the queue whole', () {
+      // A drag-and-drop session is many small moves, each one landing on the
+      // queue the previous one produced. Walking a track down the list and
+      // back up again must return the same set of tracks in a sane order —
+      // never a lost, duplicated, or half-moved entry — with the playing track
+      // where it started.
+      PlaybackQueue queue = PlaybackQueue.of(
+        [_track('a'), _track('b'), _track('c'), _track('d'), _track('e')],
+      );
+
+      for (int i = 0; i < 3; i++) {
+        queue = queue.reorderUpNext(i, i + 1);
+      }
+      expect(
+          queue.upNext, [_track('c'), _track('d'), _track('e'), _track('b')]);
+
+      for (int i = 3; i > 0; i--) {
+        queue = queue.reorderUpNext(i, i - 1);
+      }
+
+      expect(queue.current, _track('a'));
+      expect(
+          queue.upNext, [_track('b'), _track('c'), _track('d'), _track('e')]);
+      expect(queue.currentIndex, 0);
+    });
+
+    test('reorderUpNext() while shuffled leaves the original order alone', () {
+      final queue = PlaybackQueue.of(
+        [_track('a'), _track('b'), _track('c'), _track('d')],
+      ).shuffled(Random(3));
+      final List<Track> before = List<Track>.of(queue.originalOrder!);
+
+      // Reordering the shuffled (effective) order is a change to what plays
+      // next, not to the order shuffle will be undone back to.
+      final updated = queue.reorderUpNext(0, 2);
+
+      expect(updated.isShuffled, isTrue);
+      expect(updated.originalOrder, before);
+      expect(updated.current, queue.current);
+      expect(updated.unshuffled().tracks, before);
+    });
+
     test('jumpToUpNext() makes an upcoming track current', () {
       final queue = PlaybackQueue.of(
         [_track('a'), _track('b'), _track('c'), _track('d')],

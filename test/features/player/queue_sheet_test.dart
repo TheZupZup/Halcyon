@@ -1,5 +1,7 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/semantics.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/playlist.dart';
@@ -72,6 +74,33 @@ Future<void> _dragToEdge(
   await tester.pumpAndSettle();
   await gesture.up();
   await tester.pumpAndSettle();
+}
+
+/// Gives the up-next drag handle at [index] keyboard focus, the way Tab would.
+Future<void> _focusHandle(WidgetTester tester, int index) async {
+  final Finder handles = find.byIcon(Icons.drag_handle);
+  Focus.of(tester.element(handles.at(index))).requestFocus();
+  await tester.pumpAndSettle();
+}
+
+/// Presses Ctrl + Arrow Up/Down, the chord that moves the focused row.
+Future<void> _pressMoveChord(WidgetTester tester, {required bool down}) async {
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+  await tester.sendKeyEvent(
+    down ? LogicalKeyboardKey.arrowDown : LogicalKeyboardKey.arrowUp,
+  );
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  await tester.pumpAndSettle();
+}
+
+/// The custom semantics actions offered on the row rendering [title].
+Set<String> _customActionsOn(WidgetTester tester, String title) {
+  return tester
+      .getSemantics(find.text(title))
+      .getSemanticsData()
+      .customSemanticsActionIds!
+      .map((int id) => CustomSemanticsAction.getAction(id)!.label!)
+      .toSet();
 }
 
 void main() {
@@ -286,6 +315,179 @@ void main() {
       expect(find.textContaining('api_key'), findsNothing);
       expect(find.textContaining('https://'), findsNothing);
       expect(find.textContaining('jellyfin:'), findsNothing);
+    });
+    testWidgets('Ctrl+Arrow moves the focused row without a pointer',
+        (tester) async {
+      final controller = FakePlaybackController();
+      await controller
+          .playTracks([_track('A'), _track('B'), _track('C'), _track('D')]);
+
+      await _open(tester, controller);
+      // Focus B's handle (the first up-next row) and push it down twice.
+      await _focusHandle(tester, 0);
+      await _pressMoveChord(tester, down: true);
+
+      expect(controller.state.upNext.map((Track t) => t.id).toList(),
+          <String>['C', 'B', 'D']);
+      // Focus followed B to its new row, so the second press moves B again
+      // rather than whatever slid into the row it left.
+      await _pressMoveChord(tester, down: true);
+
+      expect(controller.state.upNext.map((Track t) => t.id).toList(),
+          <String>['C', 'D', 'B']);
+      // The current track never moves, and nothing restarted: A is still the
+      // only track playback was ever handed.
+      expect(controller.state.currentTrack, _track('A'));
+      expect(controller.playedTracks, <Track>[_track('A')]);
+    });
+
+    testWidgets('Ctrl+Arrow up walks a row back to the top', (tester) async {
+      final controller = FakePlaybackController();
+      await controller
+          .playTracks([_track('A'), _track('B'), _track('C'), _track('D')]);
+
+      await _open(tester, controller);
+      await _focusHandle(tester, 2); // D
+      await _pressMoveChord(tester, down: false);
+      await _pressMoveChord(tester, down: false);
+
+      expect(controller.state.upNext.map((Track t) => t.id).toList(),
+          <String>['D', 'B', 'C']);
+    });
+
+    testWidgets('a move chord at either end of the queue is a no-op',
+        (tester) async {
+      final controller = FakePlaybackController();
+      await controller.playTracks([_track('A'), _track('B'), _track('C')]);
+
+      await _open(tester, controller);
+      // Up from the first up-next row, and down from the last: both would land
+      // outside the list, so both are dropped rather than clamped onto a
+      // neighbour or pushed past the playing track.
+      await _focusHandle(tester, 0);
+      await _pressMoveChord(tester, down: false);
+      await _focusHandle(tester, 1);
+      await _pressMoveChord(tester, down: true);
+
+      expect(controller.state.upNext.map((Track t) => t.id).toList(),
+          <String>['B', 'C']);
+      expect(controller.state.currentTrack, _track('A'));
+    });
+
+    testWidgets('repeated moves in a row leave the queue coherent',
+        (tester) async {
+      final controller = FakePlaybackController();
+      await controller.playTracks(
+        <Track>[
+          for (final String id in <String>['A', 'B', 'C', 'D', 'E']) _track(id)
+        ],
+      );
+
+      await _open(tester, controller);
+      // Eight moves back to back, changing direction and hitting both ends:
+      // every one lands on the queue the previous one left behind, so a stale
+      // index would show up as a lost or duplicated track.
+      await _focusHandle(tester, 0);
+      for (int i = 0; i < 3; i++) {
+        await _pressMoveChord(tester, down: true);
+      }
+      for (int i = 0; i < 5; i++) {
+        await _pressMoveChord(tester, down: false);
+      }
+
+      expect(controller.state.upNext.map((Track t) => t.id).toList(),
+          <String>['B', 'C', 'D', 'E']);
+      expect(controller.state.currentTrack, _track('A'));
+      expect(controller.playedTracks, <Track>[_track('A')]);
+    });
+
+    testWidgets('shuffled queues reorder the order that is actually playing',
+        (tester) async {
+      final controller = FakePlaybackController();
+      await controller
+          .playTracks([_track('A'), _track('B'), _track('C'), _track('D')]);
+      controller.setShuffleEnabled(true);
+      final List<String> shuffled =
+          controller.state.upNext.map((Track t) => t.id).toList();
+
+      await _open(tester, controller);
+      await _focusHandle(tester, 0);
+      await _pressMoveChord(tester, down: true);
+
+      // The first two swap; shuffle stays on and the current track is untouched.
+      expect(controller.state.upNext.map((Track t) => t.id).toList(),
+          <String>[shuffled[1], shuffled[0], shuffled[2]]);
+      expect(controller.state.shuffleEnabled, isTrue);
+      expect(controller.state.currentTrack, _track('A'));
+    });
+
+    testWidgets('rows offer move actions, and only the ones that exist',
+        (tester) async {
+      final SemanticsHandle handle = tester.ensureSemantics();
+      final controller = FakePlaybackController();
+      await controller
+          .playTracks([_track('A'), _track('B'), _track('C'), _track('D')]);
+
+      await _open(tester, controller);
+
+      // A screen reader gets the same two moves the keyboard chord does.
+      expect(
+          _customActionsOn(tester, 'Song C'), <String>{'Move up', 'Move down'});
+      // The ends of the list only offer the move that goes somewhere.
+      expect(_customActionsOn(tester, 'Song B'), <String>{'Move down'});
+      expect(_customActionsOn(tester, 'Song D'), <String>{'Move up'});
+
+      handle.dispose();
+    });
+
+    testWidgets('the drag handle answers a screen reader move', (tester) async {
+      final SemanticsHandle handle = tester.ensureSemantics();
+      final controller = FakePlaybackController();
+      await controller.playTracks([_track('A'), _track('B'), _track('C')]);
+
+      await _open(tester, controller);
+      final int moveDown = tester
+          .getSemantics(find.text('Song B'))
+          .getSemanticsData()
+          .customSemanticsActionIds!
+          .firstWhere(
+            (int id) =>
+                CustomSemanticsAction.getAction(id)!.label == 'Move down',
+          );
+      tester.semantics.performAction(
+        find.semantics.byLabel(RegExp('Song B')),
+        SemanticsAction.customAction,
+        args: moveDown,
+      );
+      await tester.pumpAndSettle();
+
+      expect(controller.state.upNext.map((Track t) => t.id).toList(),
+          <String>['C', 'B']);
+
+      handle.dispose();
+    });
+
+    testWidgets('the handle shows a grab cursor and a hover hint',
+        (tester) async {
+      final controller = FakePlaybackController();
+      await controller.playTracks([_track('A'), _track('B')]);
+
+      await _open(tester, controller);
+
+      final TestGesture mouse =
+          await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer();
+      addTearDown(mouse.removePointer);
+      await mouse.moveTo(tester.getCenter(find.byIcon(Icons.drag_handle)));
+      await tester.pumpAndSettle();
+
+      // Desktop affordance: the pointer says the handle is draggable before the
+      // drag starts, and hovering spells out the keyboard alternative.
+      expect(
+        RendererBinding.instance.mouseTracker.debugDeviceActiveCursor(1),
+        SystemMouseCursors.grab,
+      );
+      expect(find.textContaining('Ctrl'), findsOneWidget);
     });
   });
 }

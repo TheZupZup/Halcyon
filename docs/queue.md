@@ -48,6 +48,20 @@ Drag an **upcoming** track by its handle to a new position. The current track is
 untouched and keeps playing — reordering only changes the order of what follows.
 History and the current track are not draggable.
 
+On desktop the handle behaves the way a desktop control should: the pointer
+turns into a grab cursor over it, hovering shows what it does, and the row lifts
+onto a shadow while it is being dragged so you can see what you picked up. A
+drop outside the list, or one that would land past either end, simply leaves the
+queue as it was.
+
+**Without a pointer.** Tab to a row's handle and press **Ctrl + ↑ / ↓** (Cmd on
+macOS) to move that row one position. Focus follows the track, so holding the
+chord walks it up or down the queue. The same two moves are exposed to screen
+readers as the row's **Move up** / **Move down** actions, and a row at either
+end only offers the move that goes somewhere. Keyboard, screen reader and drag
+all run through the same queue edit, so nothing behaves differently depending on
+how you reached it.
+
 - **Shuffle stays coherent.** While shuffle is on, you reorder the *shuffled*
   (effective) order. Turning shuffle **off** restores the original
   pre-shuffle order, which drops a manual reorder — that's the defined meaning of
