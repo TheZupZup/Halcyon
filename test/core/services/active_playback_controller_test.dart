@@ -485,4 +485,50 @@ void main() {
       expect(controller.state.currentTrack, _trackB);
     });
   });
+
+  group('volume', () {
+    test('goes to the device engine and shows up in the merged state',
+        () async {
+      final controller = build();
+      addTearDown(controller.dispose);
+
+      controller.setVolume(0.35);
+      await _waitFor(controller, (PlaybackState s) => s.volume == 0.35);
+
+      expect(local.state.volume, 0.35);
+      expect(controller.state.volume, 0.35);
+    });
+
+    test('a mute is the device\'s, and unmute restores the level', () async {
+      final controller = build();
+      addTearDown(controller.dispose);
+
+      controller.setVolume(0.5);
+      controller.setMuted(true);
+      await _waitFor(controller, (PlaybackState s) => s.muted);
+      expect(controller.state.effectiveVolume, 0.0);
+
+      controller.setMuted(false);
+      await _waitFor(controller, (PlaybackState s) => !s.muted);
+      expect(controller.state.effectiveVolume, 0.5);
+    });
+
+    test('while casting it still sets the device level, not the receiver\'s',
+        () async {
+      final controller = build();
+      addTearDown(controller.dispose);
+
+      cast.emit(_casting());
+      await _waitFor(controller,
+          (_) => controller.activeOutput == ActivePlaybackOutput.cast);
+
+      controller.setVolume(0.2);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      // The engine keeps the level for when it takes over again; the receiver's
+      // own volume is the cast sheet's control, not this one.
+      expect(local.state.volume, 0.2);
+      expect(controller.state.volume, 0.2);
+    });
+  });
 }

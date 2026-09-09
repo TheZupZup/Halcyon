@@ -236,6 +236,19 @@ class ActivePlaybackController implements PlaybackController {
   @override
   Future<void> stop() => _local.stop();
 
+  // Volume is this *device's* level, so it always goes to the local engine —
+  // even while casting, where it is retained and applied again when the engine
+  // resumes. A receiver's own volume is a different control with a different
+  // scale, owned by the cast sheet (`CastVolumeControls`) through
+  // [CastService]; routing the device slider onto it would leave the phone or
+  // desktop permanently at whatever level the last cast session ended on.
+
+  @override
+  void setVolume(double volume) => _local.setVolume(volume);
+
+  @override
+  void setMuted(bool muted) => _local.setMuted(muted);
+
   // --- Queue commands always go to the local controller (the queue owner) --
   // While casting it is suspended, so these update the current track/up-next
   // without local audio; the cast service mirrors the change onto the receiver.

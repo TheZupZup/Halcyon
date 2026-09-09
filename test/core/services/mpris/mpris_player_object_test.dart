@@ -491,19 +491,75 @@ void main() {
       expect(controller.state.repeatMode, RepeatMode.off);
     });
 
-    test('Volume and Rate say they are read-only rather than lying', () async {
-      // Linthra's playback seam has neither, so accepting a value and not
-      // applying it would leave a shell's volume slider permanently wrong.
-      expect(
-        await object.setProperty(
-            MprisPlayerObject.playerInterface, 'Volume', const DBusDouble(0.5)),
-        isA<DBusMethodErrorResponse>(),
-      );
+    test('Rate says it is read-only rather than lying', () async {
+      // Linthra's playback seam has no playback rate, so accepting a value and
+      // not applying it would leave a shell's control permanently wrong.
       expect(
         await object.setProperty(
             MprisPlayerObject.playerInterface, 'Rate', const DBusDouble(2)),
         isA<DBusMethodErrorResponse>(),
       );
+    });
+
+    test('Volume reports the level actually heard', () {
+      expect(property('Volume'), const DBusDouble(1.0));
+
+      controller.setVolume(0.4);
+      expect(property('Volume'), const DBusDouble(0.4));
+
+      // Muted reads as silent on the bus, without losing the stored level.
+      controller.setMuted(true);
+      expect(property('Volume'), const DBusDouble(0.0));
+
+      controller.setMuted(false);
+      expect(property('Volume'), const DBusDouble(0.4));
+    });
+
+    test('setting Volume from the bus changes playback', () async {
+      expect(
+        await object.setProperty(MprisPlayerObject.playerInterface, 'Volume',
+            const DBusDouble(0.25)),
+        isA<DBusMethodSuccessResponse>(),
+      );
+
+      expect(controller.state.volume, 0.25);
+      expect(property('Volume'), const DBusDouble(0.25));
+    });
+
+    test('a Volume outside the spec range is clamped, not refused', () async {
+      expect(
+        await object.setProperty(
+            MprisPlayerObject.playerInterface, 'Volume', const DBusDouble(1.4)),
+        isA<DBusMethodSuccessResponse>(),
+      );
+      expect(controller.state.volume, 1.0);
+
+      expect(
+        await object.setProperty(
+            MprisPlayerObject.playerInterface, 'Volume', const DBusDouble(-2)),
+        isA<DBusMethodSuccessResponse>(),
+      );
+      expect(controller.state.volume, 0.0);
+    });
+
+    test('setting Volume above zero unmutes', () async {
+      controller.setVolume(0.6);
+      controller.setMuted(true);
+
+      await object.setProperty(
+          MprisPlayerObject.playerInterface, 'Volume', const DBusDouble(0.3));
+
+      expect(controller.state.muted, isFalse);
+      expect(controller.state.volume, 0.3);
+    });
+
+    test('a Volume of the wrong type is refused', () async {
+      expect(
+        await object.setProperty(MprisPlayerObject.playerInterface, 'Volume',
+            const DBusString('loud')),
+        isA<DBusMethodErrorResponse>(),
+      );
+      expect(controller.state.volume, 1.0);
     });
   });
 

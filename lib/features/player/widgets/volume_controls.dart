@@ -1,0 +1,142 @@
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../core/models/playback_state.dart';
+import '../../../core/services/playback_controller.dart';
+import '../player_providers.dart';
+
+/// How far one scroll notch moves the level. Small enough to fine-tune, large
+/// enough that a few notches cross the range — the step desktop mixers settle
+/// on. (Arrow keys are the Slider's own 10% step, not this one.)
+const double volumeStep = 0.05;
+
+/// The desktop volume control: mute/unmute plus a slider, driven entirely
+/// through the [PlaybackController].
+///
+/// It reads the level from [PlaybackState] rather than keeping its own, so the
+/// UI can never drift from what is actually playing: a change made anywhere
+/// else — the other copy of this widget, a shell's MPRIS slider, a restored
+/// preference at startup — moves this slider too. The only local state is the
+/// in-progress drag, so a state event mid-gesture doesn't fight the pointer.
+///
+/// Desktop only by placement, not by check: the phone layouts don't build it,
+/// because a phone's volume is the system's and belongs to its hardware keys.
+/// It sizes itself to sit in a row of icon buttons — the Now Playing action row
+/// and the mini-player bar both host it that way — so callers add their own
+/// spacing rather than working around padding baked in here.
+class VolumeControls extends ConsumerStatefulWidget {
+  const VolumeControls({super.key});
+
+  @override
+  ConsumerState<VolumeControls> createState() => _VolumeControlsState();
+}
+
+class _VolumeControlsState extends ConsumerState<VolumeControls> {
+  /// The level being dragged right now, or null when the pointer is not down.
+  double? _dragValue;
+
+  PlaybackController get _controller => ref.read(playbackControllerProvider);
+
+  void _onChanged(double value) {
+    // Applied live rather than on release: a volume slider that only takes
+    // effect when you let go gives no feedback while you are choosing a level.
+    // (It is also what makes arrow-key adjustment work — the Slider's keyboard
+    // actions call onChanged and never onChangeEnd.)
+    setState(() => _dragValue = value);
+    _controller.setVolume(value);
+  }
+
+  void _onChangeEnd(double value) {
+    _controller.setVolume(value);
+    setState(() => _dragValue = null);
+  }
+
+  /// Scroll wheel over the control: up is louder, down is quieter.
+  void _onPointerSignal(
+    PointerSignalEvent event, {
+    required double volume,
+    required bool muted,
+  }) {
+    if (event is! PointerScrollEvent) return;
+    // Both axes count: a horizontal wheel or a trackpad's sideways flick over a
+    // horizontal slider means the same thing as a vertical one.
+    final double delta = event.scrollDelta.dy != 0
+        ? -event.scrollDelta.dy
+        : -event.scrollDelta.dx;
+    if (delta == 0) return;
+    final bool louder = delta > 0;
+    // Scrolling down while muted is already what it asks for. Ignoring it keeps
+    // the level mute has to come back to, instead of quietly grinding it to
+    // zero behind a muted icon.
+    if (muted && !louder) return;
+    // Muted, scrolling up: step off the silence rather than off the remembered
+    // level, so one notch is one notch of what you can hear.
+    final double current = muted ? 0.0 : volume;
+    _controller.setVolume(current + (louder ? volumeStep : -volumeStep));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final PlaybackController controller = ref.watch(playbackControllerProvider);
+    final ({double volume, bool muted}) level = ref.watch(
+      playbackStateProvider.select((AsyncValue<PlaybackState> async) {
+        final PlaybackState state = async.valueOrNull ?? controller.state;
+        return (volume: state.volume, muted: state.muted);
+      }),
+    );
+
+    final double effective = level.muted ? 0.0 : level.volume;
+    final double sliderValue = _dragValue ?? effective;
+    final bool silent = effective <= 0.0;
+
+    return Listener(
+      onPointerSignal: (PointerSignalEvent event) => _onPointerSignal(
+        event,
+        volume: level.volume,
+        muted: level.muted,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          IconButton(
+            onPressed: () => controller.setMuted(!level.muted),
+            icon: Icon(_iconFor(silent: silent, volume: effective)),
+            // Selected while muted, so mute reads as the toggle it is rather
+            // than as two buttons that swap places.
+            isSelected: level.muted,
+            iconSize: 22,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+            tooltip: level.muted ? 'Unmute' : 'Mute',
+          ),
+          SizedBox(
+            // Wide enough to aim at a level, narrow enough to share a row with
+            // the controls it sits beside.
+            width: 120,
+            child: Slider(
+              value: sliderValue,
+              onChanged: _onChanged,
+              onChangeEnd: _onChangeEnd,
+              // Names the slider for anyone who lands on it directly.
+              // Semantics only: the value indicator `label` can also drive is
+              // shown `onlyForDiscrete`, and this slider is continuous.
+              label: 'Volume',
+              semanticFormatterCallback: (double value) =>
+                  '${(value * 100).round()}%',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The glyph for the current level: an explicit "off" while silent (muted or
+  /// dragged to zero, which sound the same), and a quieter speaker below
+  /// halfway so the icon carries the level as well as the state.
+  static IconData _iconFor({required bool silent, required double volume}) {
+    if (silent) return Icons.volume_off;
+    if (volume < 0.5) return Icons.volume_down;
+    return Icons.volume_up;
+  }
+}
