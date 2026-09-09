@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - 'tools/large_library/**'
+      - 'test/tooling/large_library_benchmark_test.py'
       - '.github/workflows/large-library-sql.yml'
   push:
     branches: [main]
     paths:
       - 'tools/large_library/**'
+      - 'test/tooling/large_library_benchmark_test.py'
       - '.github/workflows/large-library-sql.yml'
 
 permissions:
@@ -19,6 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+
+      # Cheap and offline, so it runs before the 200k fixture is built: if the
+      # summary block is broken there is no point spending minutes on timings.
+      - name: Test benchmark summary rendering
+        run: python3 test/tooling/large_library_benchmark_test.py
 
       - name: Generate 200k-track catalog
         run: >-

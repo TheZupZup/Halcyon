@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/dimens.dart';
@@ -123,30 +125,7 @@ class QueueSheet extends ConsumerWidget {
                         if (upNext.isEmpty)
                           const SliverToBoxAdapter(child: _NothingUpNext())
                         else
-                          SliverReorderableList(
-                            itemCount: upNext.length,
-                            onReorderItem: (int oldIndex, int newIndex) {
-                              ref
-                                  .read(playbackControllerProvider)
-                                  .reorderQueue(oldIndex, newIndex);
-                            },
-                            itemBuilder: (context, index) => _UpNextTile(
-                              // Index-qualified so the same track queued twice
-                              // never produces a duplicate key (which would crash
-                              // the reorderable list).
-                              key: ValueKey<String>(
-                                'queue-$index-${upNext[index].id}',
-                              ),
-                              track: upNext[index],
-                              index: index,
-                              onPlay: () => ref
-                                  .read(playbackControllerProvider)
-                                  .playFromQueue(index),
-                              onRemove: () => ref
-                                  .read(playbackControllerProvider)
-                                  .removeFromQueue(index),
-                            ),
-                          ),
+                          _UpNextList(tracks: upNext),
                         const SliverToBoxAdapter(
                           child: SizedBox(height: AppSpacing.md),
                         ),
@@ -314,6 +293,209 @@ class _HistoryTile extends StatelessWidget {
   }
 }
 
+/// The reorderable "Up next" list.
+///
+/// Stateful for one reason: keyboard reordering. A pointer drag carries the row
+/// under the pointer, so the framework keeps the gesture aimed at the right
+/// track by itself. A keyboard move is a jump instead — the list rebuilds with
+/// the moved track a row away — so focus has to be handed to the row it landed
+/// on, or a second Ctrl+Arrow would move whatever slid into the old position.
+///
+/// The focus nodes are per *position*, not per track, which is what makes that
+/// work: after the rebuild the node at the destination index is the moved
+/// track's handle. Keying them by track would mean a new node per queue edit,
+/// and a duplicate node whenever the same song is queued twice.
+class _UpNextList extends ConsumerStatefulWidget {
+  const _UpNextList({required this.tracks});
+
+  final List<Track> tracks;
+
+  @override
+  ConsumerState<_UpNextList> createState() => _UpNextListState();
+}
+
+class _UpNextListState extends ConsumerState<_UpNextList> {
+  final List<FocusNode> _handleFocusNodes = <FocusNode>[];
+
+  /// Where a keyboard walk started from and where it has actually put the
+  /// track, while the list catches up.
+  ///
+  /// The queue reaches this sheet through a stream, so a move is applied to the
+  /// queue before any frame rebuilds the rows with it. A held chord repeats
+  /// faster than that: the second press is fired by a handle still carrying the
+  /// pre-move index, and taking it at face value would move the track back
+  /// where it came from. [_walkOrigin] is that stale index, [_walkLanded] is
+  /// where the track really is, and both are dropped the moment the rebuild
+  /// makes the widgets truthful again.
+  int? _walkOrigin;
+  int? _walkLanded;
+
+  @override
+  void didUpdateWidget(_UpNextList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A reorder always produces a new list, so a changed identity means the
+    // rows now carry post-move indices and the walk state has served its turn.
+    if (!identical(widget.tracks, oldWidget.tracks)) {
+      _walkOrigin = null;
+      _walkLanded = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final FocusNode node in _handleFocusNodes) {
+      node.dispose();
+    }
+    super.dispose();
+  }
+
+  /// The handle focus node for row [index], grown on demand. The list only ever
+  /// grows within one sheet: a shrinking queue leaves spare nodes parked, which
+  /// costs nothing and keeps the indices stable.
+  FocusNode _focusNodeAt(int index) {
+    while (_handleFocusNodes.length <= index) {
+      _handleFocusNodes.add(
+        FocusNode(debugLabel: 'queue-handle-${_handleFocusNodes.length}'),
+      );
+    }
+    return _handleFocusNodes[index];
+  }
+
+  /// Moves the up-next track at [from] to [to] (both 0-based into up-next,
+  /// [to] being the destination after removal — the index a normalised
+  /// reorderable list reports, and the one [PlaybackQueue.reorderUpNext] takes).
+  ///
+  /// Out-of-range moves are dropped here as well as in the queue model, so a
+  /// keyboard press at either end of the list, or an index left stale by a
+  /// queue that changed under the open sheet, is simply harmless.
+  bool _move(int from, int to) {
+    final int count = widget.tracks.length;
+    if (from < 0 || from >= count) return false;
+    if (to < 0 || to >= count || to == from) return false;
+    ref.read(playbackControllerProvider).reorderQueue(from, to);
+    return true;
+  }
+
+  /// Moves the track the handle on row [rowIndex] belongs to by [delta]
+  /// positions — the keyboard and screen-reader route.
+  ///
+  /// [rowIndex] is only a starting point: while a walk is in flight the rows
+  /// still report their pre-move indices, so the real source comes from
+  /// [_walkLanded]. The substitution is guarded on [_walkOrigin] so a press on
+  /// some *other* row inside that same window is still taken at face value.
+  void _moveBy(int rowIndex, int delta) {
+    final int from = _walkLanded != null && rowIndex == _walkOrigin
+        ? _walkLanded!
+        : rowIndex;
+    final int to = from + delta;
+    if (!_move(from, to)) return;
+    _walkOrigin = rowIndex;
+    _walkLanded = to;
+    _followWalkTo(to, delta);
+  }
+
+  /// Applies a pointer drop, carrying keyboard focus along with the row that
+  /// held it.
+  ///
+  /// Focus nodes are per position, so a drag changes which track the focused
+  /// node belongs to. Left alone, a Ctrl+Arrow after a drag reorders whichever
+  /// neighbour slid under the focus rather than the track just dropped. The
+  /// remap covers any focused row, not only the dragged one: a drag past a
+  /// focused row shifts that row too.
+  ///
+  /// Nothing happens when no handle has focus, so a plain mouse drag never
+  /// pulls focus into the list.
+  void _moveByPointer(int from, int to) {
+    final int focused =
+        _handleFocusNodes.indexWhere((FocusNode node) => node.hasFocus);
+    if (!_move(from, to)) return;
+    if (focused < 0) return;
+    _followWalkTo(_positionAfterMove(focused, from: from, to: to), to - from);
+  }
+
+  /// Where row [index] ends up once the row at [from] is moved to [to].
+  static int _positionAfterMove(
+    int index, {
+    required int from,
+    required int to,
+  }) {
+    if (index == from) return to;
+    if (from < index && index <= to) return index - 1;
+    if (to <= index && index < from) return index + 1;
+    return index;
+  }
+
+  /// Scrolls the moved track's handle into view and gives it focus, so a held
+  /// chord keeps walking the same track.
+  ///
+  /// The scroll is the part that makes this hold up on a long queue. Focus can
+  /// only land on a row the sliver has actually built, and a walk that never
+  /// scrolls eventually pushes the track past the built range: focus would stay
+  /// behind on the row a *different* track just slid into, and the next press
+  /// would move that one instead. Keeping the walking row on screen keeps its
+  /// destination within the built range, one row at a time.
+  void _followWalkTo(int index, int delta) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || index >= _handleFocusNodes.length) return;
+      final FocusNode node = _handleFocusNodes[index];
+      final BuildContext? handle = node.context;
+      if (handle == null) return;
+      Scrollable.ensureVisible(
+        handle,
+        alignmentPolicy: delta > 0
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtEnd
+            : ScrollPositionAlignmentPolicy.keepVisibleAtStart,
+      );
+      node.requestFocus();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<Track> tracks = widget.tracks;
+    return SliverReorderableList(
+      itemCount: tracks.length,
+      onReorderItem: _moveByPointer,
+      proxyDecorator: _liftedRow,
+      itemBuilder: (context, index) => _UpNextTile(
+        // Index-qualified so the same track queued twice never produces a
+        // duplicate key (which would crash the reorderable list).
+        key: ValueKey<String>('queue-$index-${tracks[index].id}'),
+        track: tracks[index],
+        index: index,
+        count: tracks.length,
+        handleFocusNode: _focusNodeAt(index),
+        onPlay: () => ref.read(playbackControllerProvider).playFromQueue(index),
+        onRemove: () =>
+            ref.read(playbackControllerProvider).removeFromQueue(index),
+        onMoveBy: (int delta) => _moveBy(index, delta),
+      ),
+    );
+  }
+}
+
+/// The row being dragged: lifted off the list on a shadow so it reads as picked
+/// up rather than merely highlighted. Desktop pointers have no haptics and no
+/// long-press wind-up, so this elevation is the only feedback that the drag
+/// actually took.
+Widget _liftedRow(Widget child, int index, Animation<double> animation) {
+  return AnimatedBuilder(
+    animation: animation,
+    builder: (BuildContext context, Widget? child) {
+      final ColorScheme scheme = Theme.of(context).colorScheme;
+      final double t = Curves.easeInOut.transform(animation.value);
+      return Material(
+        elevation: t * 6,
+        color: Color.lerp(scheme.surface, scheme.surfaceContainerHighest, t),
+        shadowColor: scheme.shadow,
+        borderRadius: BorderRadius.circular(AppRadii.sm),
+        child: child,
+      );
+    },
+    child: child,
+  );
+}
+
 /// An upcoming track: tap to play now, an X to remove it from the queue, and a
 /// drag handle to reorder. Removing only drops the queue entry — it never
 /// deletes the track from the library or its offline copy.
@@ -321,15 +503,23 @@ class _UpNextTile extends StatelessWidget {
   const _UpNextTile({
     required this.track,
     required this.index,
+    required this.count,
+    required this.handleFocusNode,
     required this.onPlay,
     required this.onRemove,
+    required this.onMoveBy,
     super.key,
   });
 
   final Track track;
   final int index;
+  final int count;
+  final FocusNode handleFocusNode;
   final VoidCallback onPlay;
   final VoidCallback onRemove;
+
+  /// Moves this row by [delta] positions (-1 up, +1 down).
+  final ValueChanged<int> onMoveBy;
 
   @override
   Widget build(BuildContext context) {
@@ -357,17 +547,145 @@ class _UpNextTile extends StatelessWidget {
               tooltip: 'Remove from queue',
               onPressed: onRemove,
             ),
-            ReorderableDragStartListener(
+            _ReorderHandle(
               index: index,
-              child: const Padding(
-                padding: EdgeInsets.only(left: AppSpacing.xs),
-                child: Icon(
-                  Icons.drag_handle,
-                  semanticLabel: 'Reorder',
-                ),
-              ),
+              count: count,
+              focusNode: handleFocusNode,
+              onMoveBy: onMoveBy,
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The modifier the move chord is spelled with on [platform].
+///
+/// Both modifiers stay registered everywhere — an unused activator costs
+/// nothing — but the hint has to name the one that actually works here. On
+/// macOS Ctrl+Arrow belongs to Mission Control and never reaches the app, so a
+/// hint saying Ctrl there would point people at a chord the OS eats.
+String _moveModifierLabel(TargetPlatform platform) =>
+    platform == TargetPlatform.macOS ? 'Cmd' : 'Ctrl';
+
+/// Asks for the focused queue row to move [delta] positions (-1 up, +1 down).
+class _MoveQueueItemIntent extends Intent {
+  const _MoveQueueItemIntent(this.delta);
+
+  final int delta;
+}
+
+/// The reorder affordance on an up-next row: a pointer drag target that is also
+/// a real focusable control.
+///
+/// Dragging is the fast path and stays exactly what it was. The rest is what a
+/// drag alone cannot serve: **Ctrl + ↑ / ↓** (Cmd on macOS) moves the focused
+/// row without a pointer, and the same two moves are offered as custom
+/// semantics actions so a screen reader can reorder the queue too. Both routes
+/// run through the same controller call the drag does, so there is one reorder
+/// path, not a keyboard copy of one.
+///
+/// The chord takes a modifier on purpose: a bare arrow inside a scrolling sheet
+/// belongs to focus traversal and scrolling, and stealing it would trade one
+/// accessible behaviour for another.
+class _ReorderHandle extends StatelessWidget {
+  const _ReorderHandle({
+    required this.index,
+    required this.count,
+    required this.focusNode,
+    required this.onMoveBy,
+  });
+
+  final int index;
+  final int count;
+  final FocusNode focusNode;
+  final ValueChanged<int> onMoveBy;
+
+  /// Shortcuts sit *above* the focus node, not inside it: a key event travels
+  /// up from the focused node, so a [Shortcuts] below it would never see one.
+  static const Map<ShortcutActivator, Intent> _shortcuts =
+      <ShortcutActivator, Intent>{
+    SingleActivator(LogicalKeyboardKey.arrowUp, control: true):
+        _MoveQueueItemIntent(-1),
+    SingleActivator(LogicalKeyboardKey.arrowDown, control: true):
+        _MoveQueueItemIntent(1),
+    SingleActivator(LogicalKeyboardKey.arrowUp, meta: true):
+        _MoveQueueItemIntent(-1),
+    SingleActivator(LogicalKeyboardKey.arrowDown, meta: true):
+        _MoveQueueItemIntent(1),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final bool canMoveUp = index > 0;
+    final bool canMoveDown = index < count - 1;
+    return Shortcuts(
+      shortcuts: _shortcuts,
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          _MoveQueueItemIntent: CallbackAction<_MoveQueueItemIntent>(
+            onInvoke: (_MoveQueueItemIntent intent) {
+              onMoveBy(intent.delta);
+              return null;
+            },
+          ),
+        },
+        // Not a semantics container: the actions merge up into the row's own
+        // node, so a screen reader reads one row that happens to be movable
+        // rather than a stray control beside it. The ends of the list offer
+        // only the move that exists.
+        child: Semantics(
+          customSemanticsActions: <CustomSemanticsAction, VoidCallback>{
+            if (canMoveUp)
+              const CustomSemanticsAction(label: 'Move up'): () => onMoveBy(-1),
+            if (canMoveDown)
+              const CustomSemanticsAction(label: 'Move down'): () =>
+                  onMoveBy(1),
+          },
+          child: Focus(
+            focusNode: focusNode,
+            child: Builder(
+              builder: (BuildContext context) {
+                final bool focused = Focus.of(context).hasFocus;
+                return MouseRegion(
+                  cursor: SystemMouseCursors.grab,
+                  child: ReorderableDragStartListener(
+                    index: index,
+                    child: Tooltip(
+                      message: 'Reorder (drag, or '
+                          '${_moveModifierLabel(theme.platform)} + ↑ / ↓)',
+                      // Hover only. The default long-press trigger puts a
+                      // long-press recognizer in the arena next to the drag
+                      // listener, and on a handle the press *is* the drag: the
+                      // tooltip wins and the row never lifts. Hover is the
+                      // desktop trigger anyway, and the handle is still named
+                      // for screen readers either way.
+                      triggerMode: TooltipTriggerMode.manual,
+                      child: Container(
+                        margin: const EdgeInsets.only(left: AppSpacing.xs),
+                        padding: const EdgeInsets.all(AppSpacing.xs),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(AppRadii.sm),
+                          border: Border.all(
+                            width: 2,
+                            color: focused
+                                ? theme.colorScheme.primary
+                                : Colors.transparent,
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.drag_handle,
+                          semanticLabel: 'Reorder',
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
         ),
       ),
     );

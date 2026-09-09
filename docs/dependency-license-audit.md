@@ -84,7 +84,7 @@ The specific combinations that need stating rather than assuming:
 
   **No GPL, no LGPL, no proprietary, and no unknown or unverifiable license** in
   the resolved Dart/Flutter set. The single MPL-2.0 package is `dbus 0.7.12`
-  (§3). Counts by dependency kind: 21 direct-main, 3 direct-dev and 134
+  (§3). Counts by dependency kind: 22 direct-main, 3 direct-dev and 133
   transitive hosted packages.
 - **Supersedes the earlier snapshot.** A previous revision of this document
   reported 152 packages against Flutter 3.27.4 and, separately, classified
@@ -139,6 +139,7 @@ published archive (§2).
 | `media_kit_libs_linux`   | `^1.2.1`     | media-kit.dev       | MIT            | Linux native registration for media_kit; links the **system/Flatpak libmpv** built in §5. Ships no prebuilt binary. |
 | `dbus`                   | `^0.7.12`    | canonical.com       | **MPL-2.0**    | D-Bus client behind the Linux MPRIS media session, so desktop shells and media keys can control Linthra. Already in the tree transitively (via `bonsoir_linux`); now declared directly. Compatible with AGPL-3.0-or-later under MPL-2.0 §3.3 — see §1 and §3. |
 | `just_audio_media_kit`   | (vendored)   | — (see §5)          | Unlicense      | Vendored Linux `just_audio` backend. Third-party code — **not** relicensed (§5). |
+| `media_kit`              | `^1.2.6`     | media-kit.dev       | MIT            | The libmpv binding the vendored Linux backend already runs on. Already in the tree transitively (via `just_audio_media_kit`); now declared directly, because Linthra calls its audio output device API for Linux output selection ([#402](https://github.com/thezupzup/linthra/issues/402)). |
 
 > `audio_metadata_reader` was added so a Linux local library shows real titles,
 > artists, albums and durations instead of filenames

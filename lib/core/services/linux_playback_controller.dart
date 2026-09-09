@@ -36,9 +36,11 @@ const Map<String, String> linuxMpvProperties = <String, String>{
 /// [linuxMpvProperties] with anything a caller already configured layered on
 /// top.
 ///
-/// The headless audio smoke sets `ao=alsa` before it builds a controller
-/// (`tool/linux_audio_backend_smoke.dart`). Merging rather than assigning keeps
-/// that working *and* keeps the smoke honest: it exercises the same cache
+/// Two callers configure something. The headless audio smoke sets `ao=alsa`
+/// before it builds a controller (`tool/linux_audio_backend_smoke.dart`), and
+/// `LinuxAudioOutputDeviceService` sets `audio-device` when the listener picks
+/// an output. Merging rather than assigning keeps both working whichever order
+/// they land in — and keeps the smoke honest: it exercises the same cache
 /// configuration production uses, with only the output device swapped.
 Map<String, String> resolveLinuxMpvProperties(Map<String, String> configured) =>
     <String, String>{...linuxMpvProperties, ...configured};

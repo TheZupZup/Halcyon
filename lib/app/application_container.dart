@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/models/theme_mode_preference.dart';
 import '../core/platform/host_platform.dart';
 import '../data/repositories/app_icon_variant_store_provider.dart';
+import '../data/repositories/audio_output_device_service_provider.dart';
 import '../data/repositories/audiobookshelf_session_store_provider.dart';
 import '../data/repositories/default_provider_store_provider.dart';
 import '../data/repositories/desktop_window_controller_provider.dart';
@@ -92,6 +93,7 @@ List<Override> productionApplicationOverrides({
     initialThemeModeProvider.overrideWithValue(storedThemeMode),
     platformLauncherIconServiceOverride,
     platformShareServiceOverride,
+    platformAudioOutputDeviceServiceOverride,
     lyricsServiceOverride,
     // Casting is withheld from production builds by the security
     // containment; see [CastContainment].

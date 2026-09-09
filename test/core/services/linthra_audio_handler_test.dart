@@ -259,6 +259,64 @@ void main() {
         expect(pushed.length, greaterThan(baseline));
       });
 
+      test('a rebuilt but identical queue is still not re-published', () async {
+        // The position-tick fast path recognises unchanged inputs by object
+        // identity. A state that rebuilt its lists for unrelated reasons must
+        // fall through to the full comparison and still not thrash the car's
+        // Up Next list.
+        await controller.playTracks(<Track>[_track('a'), _track('b')]);
+        await _settle();
+
+        final List<List<audio.MediaItem>> pushes = <List<audio.MediaItem>>[];
+        final List<audio.MediaItem?> items = <audio.MediaItem?>[];
+        final subs = <StreamSubscription<void>>[
+          handler.queue.listen(pushes.add),
+          handler.mediaItem.listen(items.add),
+        ];
+        addTearDown(() {
+          for (final StreamSubscription<void> sub in subs) {
+            sub.cancel();
+          }
+        });
+        await _settle();
+        final int queueBaseline = pushes.length;
+        final int itemBaseline = items.length;
+
+        final PlaybackState current = controller.state;
+        controller.emit(current.copyWith(
+          upNext: List<Track>.of(current.upNext),
+          previous: List<Track>.of(current.previous),
+          position: const Duration(milliseconds: 300),
+        ));
+        await _settle();
+
+        expect(pushes.length, queueBaseline);
+        expect(items.length, itemBaseline);
+      });
+
+      test('a duration arriving for the same track still updates the item',
+          () async {
+        // Duration is part of what the session renders, and it lands *after*
+        // the track is already current — the one metadata change a
+        // "nothing but the position moved" shortcut could swallow.
+        await controller.playTracks(<Track>[_track('a')]);
+        await _settle();
+
+        final List<audio.MediaItem?> items = <audio.MediaItem?>[];
+        final sub = handler.mediaItem.listen(items.add);
+        addTearDown(sub.cancel);
+        await _settle();
+        final int baseline = items.length;
+
+        controller.emit(
+          controller.state.copyWith(duration: const Duration(minutes: 4)),
+        );
+        await _settle();
+
+        expect(items.length, greaterThan(baseline));
+        expect(items.last?.duration, const Duration(minutes: 4));
+      });
+
       test('a pause is pushed even when the position is steady', () async {
         await controller.playTracks(<Track>[_track('a')]);
         await _settle();

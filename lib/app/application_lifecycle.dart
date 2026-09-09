@@ -25,6 +25,7 @@ import '../features/settings/audiobookshelf/audiobookshelf_settings_controller.d
 import '../features/settings/desktop/close_behavior_controller.dart';
 import '../features/settings/desktop/desktop_window_providers.dart';
 import '../features/settings/jellyfin/jellyfin_settings_controller.dart';
+import '../features/settings/playback/audio_output_controller.dart';
 import '../features/settings/playback/normalize_volume_controller.dart';
 import '../features/settings/plex/plex_settings_controller.dart';
 import '../features/settings/subsonic/subsonic_settings_controller.dart';
@@ -273,6 +274,33 @@ Future<ApplicationHandle> bootstrapApplication(
       ),
     );
 
+    // Re-apply a saved audio output (Linux) so a chosen headset, DAC or HDMI
+    // sink survives a restart without the listener re-picking it.
+    //
+    // Awaited, because the alternative leaks audio: the media_kit player is
+    // built when the first track loads, and it reads the chosen output at
+    // construction. A restore still in flight at that moment means the opening
+    // seconds play on the system default and only then jump to the right
+    // speakers. Waiting here closes that window — a track cannot be started
+    // before the first frame.
+    //
+    // Bounded, because a wedged audio backend must not hold the window shut:
+    // past the deadline launch continues and the restore lands whenever the
+    // backend answers, moving live playback then. It is owned either way, so
+    // shutdown still waits for it.
+    //
+    // Cheap by design when there is nothing to restore: the controller does not
+    // probe the backend just to confirm the system default, and off Linux the
+    // seam is a no-op that never loads libmpv at all — in both cases this
+    // returns without touching anything.
+    final Future<void> audioOutputRestored = _restoreAudioOutput(container);
+    handle.ownPendingWork(audioOutputRestored);
+    try {
+      await audioOutputRestored.timeout(_audioOutputRestoreDeadline);
+    } on TimeoutException {
+      // Deliberately ignored: see above.
+    }
+
     // Warm the persisted sessions before the first frame so a synced remote
     // track can stream on the first tap. Best-effort and secret-free: a
     // missing/corrupt record loads as "not connected".
@@ -363,5 +391,26 @@ Future<ApplicationHandle> bootstrapApplication(
     // caller sees.
     await handle.shutdown();
     Error.throwWithStackTrace(error, stackTrace);
+  }
+}
+
+/// How long launch waits for a saved audio output to be re-applied.
+///
+/// libmpv publishes its device list while a player initializes, so the normal
+/// cost of this is milliseconds. The deadline exists for the backend that never
+/// answers at all, and is shorter than the enumeration timeout underneath it so
+/// the wait is bounded by *this* value rather than by that one.
+const Duration _audioOutputRestoreDeadline = Duration(milliseconds: 1500);
+
+/// Builds the audio-output controller, which re-applies a saved output device.
+///
+/// Failure is swallowed on purpose: an audio backend that will not answer must
+/// never break launch, and the fallback — the system default — is exactly what
+/// the app does without this.
+Future<void> _restoreAudioOutput(ProviderContainer container) async {
+  try {
+    await container.read(audioOutputControllerProvider.future);
+  } catch (_) {
+    // Ignore: playback stays on the system default.
   }
 }

@@ -4,6 +4,7 @@ import 'dart:developer' as developer;
 import '../models/playback_state.dart';
 import '../models/track.dart';
 import 'media_artwork_source.dart';
+import 'playback_lookahead.dart';
 
 /// Secret-free diagnostic tag for the media-session artwork warm path. View with
 /// `adb logcat | grep Linthra.MediaArtwork`. Logs only structural outcomes
@@ -57,14 +58,14 @@ class MediaArtworkPrewarmService {
   final Set<Uri> _requested = <Uri>{};
   final List<Uri> _queue = <Uri>[];
   bool _running = false;
-  String? _lastKey;
+  PlaybackState? _lastInputs;
 
   void _onState(PlaybackState state) {
-    final String key = _keyFor(state);
     // Only react when the now-playing + look-ahead set changes — not on every
-    // position tick (which re-emits the same key).
-    if (key == _lastKey) return;
-    _lastKey = key;
+    // position tick, which changes neither. The check allocates nothing and
+    // short-circuits on an unchanged queue (see [samePlaybackLookahead]).
+    if (samePlaybackLookahead(state, _lastInputs, ahead: _lookahead)) return;
+    _lastInputs = state;
     // Prioritise the now-playing cover (front of the queue) so it warms before
     // the look-ahead — its delay is the one visible on the now-playing card.
     _enqueue(state.currentTrack?.artworkUri, front: true);
@@ -87,17 +88,6 @@ class MediaArtworkPrewarmService {
     } else {
       _queue.add(art);
     }
-  }
-
-  /// A fingerprint of the now-playing + look-ahead track uris, so warming reacts
-  /// to queue/track changes but not to position/status ticks (same key). Keyed by
-  /// uri (not the bare id) so switching between two providers' same-id copies
-  /// still triggers a warm.
-  String _keyFor(PlaybackState state) {
-    final String current = state.currentTrack?.uri ?? '-';
-    final String ahead =
-        state.upNext.take(_lookahead).map((Track t) => t.uri).join(',');
-    return '$current|$ahead';
   }
 
   Future<void> _drain() async {
