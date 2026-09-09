@@ -50,17 +50,18 @@ History and the current track are not draggable.
 
 On desktop the handle behaves the way a desktop control should: the pointer
 turns into a grab cursor over it, hovering shows what it does, and the row lifts
-onto a shadow while it is being dragged so you can see what you picked up. A
-drop outside the list, or one that would land past either end, simply leaves the
-queue as it was.
+onto a shadow while it is being dragged so you can see what you picked up.
+Dragging past the top or bottom of the list drops the track at that end rather
+than somewhere unexpected, so an overshot drag is never destructive.
 
 **Without a pointer.** Tab to a row's handle and press **Ctrl + ↑ / ↓** (Cmd on
 macOS) to move that row one position. Focus follows the track, so holding the
-chord walks it up or down the queue. The same two moves are exposed to screen
-readers as the row's **Move up** / **Move down** actions, and a row at either
-end only offers the move that goes somewhere. Keyboard, screen reader and drag
-all run through the same queue edit, so nothing behaves differently depending on
-how you reached it.
+chord walks it up or down the queue (the sheet scrolls along to keep the track
+you are moving in view). The same two moves are exposed to screen readers as the
+row's **Move up** / **Move down** actions. Unlike a drag, a keyboard move at an
+endpoint does nothing at all: a row at either end only offers the move that goes
+somewhere. Keyboard, screen reader and drag all run through the same queue edit,
+so nothing behaves differently depending on how you reached it.
 
 - **Shuffle stays coherent.** While shuffle is on, you reorder the *shuffled*
   (effective) order. Turning shuffle **off** restores the original

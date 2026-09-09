@@ -83,6 +83,23 @@ Future<void> _focusHandle(WidgetTester tester, int index) async {
   await tester.pumpAndSettle();
 }
 
+/// Holds Ctrl + Arrow Down for [repeats] extra auto-repeats, with no frame
+/// between them.
+///
+/// The queue reaches the sheet through a stream, so nothing has rebuilt the
+/// rows by the time the repeat arrives: this is the real shape of a held key,
+/// and the one case a press-then-pump test cannot reach.
+Future<void> _holdMoveChordDown(WidgetTester tester, {int repeats = 1}) async {
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowDown);
+  for (int i = 0; i < repeats; i++) {
+    await tester.sendKeyRepeatEvent(LogicalKeyboardKey.arrowDown);
+  }
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowDown);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  await tester.pumpAndSettle();
+}
+
 /// Presses Ctrl + Arrow Up/Down, the chord that moves the focused row.
 Future<void> _pressMoveChord(WidgetTester tester, {required bool down}) async {
   await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
@@ -488,6 +505,48 @@ void main() {
         SystemMouseCursors.grab,
       );
       expect(find.textContaining('Ctrl'), findsOneWidget);
+    });
+    testWidgets('a held chord keeps walking the same track', (tester) async {
+      final controller = FakePlaybackController();
+      await controller
+          .playTracks([_track('A'), _track('B'), _track('C'), _track('D')]);
+
+      await _open(tester, controller);
+      await _focusHandle(tester, 0);
+      // Two presses, no frame in between. Reading the source index off the
+      // handle that fired would apply the second move to the queue the first
+      // one already changed, and land B back where it started.
+      await _holdMoveChordDown(tester);
+
+      expect(controller.state.upNext.map((Track t) => t.id).toList(),
+          <String>['C', 'D', 'B']);
+    });
+
+    testWidgets('a walk past the bottom of the sheet still moves one track',
+        (tester) async {
+      final controller = FakePlaybackController();
+      await controller.playTracks(<Track>[
+        for (int i = 0; i < 30; i++) _track(i.toString().padLeft(2, '0')),
+      ]);
+
+      await _open(tester, controller);
+      await _focusHandle(tester, 0);
+      // Twelve rows is further than the sheet shows at once. Focus can only
+      // land on a row the sliver built, so without scrolling the walk strands
+      // itself partway down and starts moving whichever track slid into the
+      // row it left.
+      for (int i = 0; i < 12; i++) {
+        await _pressMoveChord(tester, down: true);
+      }
+
+      final List<String> upNext =
+          controller.state.upNext.map((Track t) => t.id).toList();
+      expect(upNext.indexOf('01'), 12);
+      // Nothing else moved, and nothing was lost on the way down.
+      expect(upNext.length, 29);
+      expect(upNext..remove('01'), <String>[
+        for (int i = 2; i < 30; i++) i.toString().padLeft(2, '0'),
+      ]);
     });
   });
 }

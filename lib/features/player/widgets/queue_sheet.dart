@@ -317,6 +317,30 @@ class _UpNextList extends ConsumerStatefulWidget {
 class _UpNextListState extends ConsumerState<_UpNextList> {
   final List<FocusNode> _handleFocusNodes = <FocusNode>[];
 
+  /// Where a keyboard walk started from and where it has actually put the
+  /// track, while the list catches up.
+  ///
+  /// The queue reaches this sheet through a stream, so a move is applied to the
+  /// queue before any frame rebuilds the rows with it. A held chord repeats
+  /// faster than that: the second press is fired by a handle still carrying the
+  /// pre-move index, and taking it at face value would move the track back
+  /// where it came from. [_walkOrigin] is that stale index, [_walkLanded] is
+  /// where the track really is, and both are dropped the moment the rebuild
+  /// makes the widgets truthful again.
+  int? _walkOrigin;
+  int? _walkLanded;
+
+  @override
+  void didUpdateWidget(_UpNextList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A reorder always produces a new list, so a changed identity means the
+    // rows now carry post-move indices and the walk state has served its turn.
+    if (!identical(widget.tracks, oldWidget.tracks)) {
+      _walkOrigin = null;
+      _walkLanded = null;
+    }
+  }
+
   @override
   void dispose() {
     for (final FocusNode node in _handleFocusNodes) {
@@ -344,23 +368,53 @@ class _UpNextListState extends ConsumerState<_UpNextList> {
   /// Out-of-range moves are dropped here as well as in the queue model, so a
   /// keyboard press at either end of the list, or an index left stale by a
   /// queue that changed under the open sheet, is simply harmless.
-  void _move(int from, int to, {bool followFocus = false}) {
+  bool _move(int from, int to) {
     final int count = widget.tracks.length;
-    if (from < 0 || from >= count) return;
-    if (to < 0 || to >= count || to == from) return;
+    if (from < 0 || from >= count) return false;
+    if (to < 0 || to >= count || to == from) return false;
     ref.read(playbackControllerProvider).reorderQueue(from, to);
-    if (followFocus) _focusHandleAt(to);
+    return true;
   }
 
-  /// Puts keyboard focus back on the moved track's handle, after the frame that
-  /// rebuilds the list — before it, the destination row is still the old track.
-  /// A row scrolled out of view has no element to focus; skipping is fine,
-  /// the move itself already happened.
-  void _focusHandleAt(int index) {
+  /// Moves the track the handle on row [rowIndex] belongs to by [delta]
+  /// positions — the keyboard and screen-reader route.
+  ///
+  /// [rowIndex] is only a starting point: while a walk is in flight the rows
+  /// still report their pre-move indices, so the real source comes from
+  /// [_walkLanded]. The substitution is guarded on [_walkOrigin] so a press on
+  /// some *other* row inside that same window is still taken at face value.
+  void _moveBy(int rowIndex, int delta) {
+    final int from = _walkLanded != null && rowIndex == _walkOrigin
+        ? _walkLanded!
+        : rowIndex;
+    final int to = from + delta;
+    if (!_move(from, to)) return;
+    _walkOrigin = rowIndex;
+    _walkLanded = to;
+    _followWalkTo(to, delta);
+  }
+
+  /// Scrolls the moved track's handle into view and gives it focus, so a held
+  /// chord keeps walking the same track.
+  ///
+  /// The scroll is the part that makes this hold up on a long queue. Focus can
+  /// only land on a row the sliver has actually built, and a walk that never
+  /// scrolls eventually pushes the track past the built range: focus would stay
+  /// behind on the row a *different* track just slid into, and the next press
+  /// would move that one instead. Keeping the walking row on screen keeps its
+  /// destination within the built range, one row at a time.
+  void _followWalkTo(int index, int delta) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || index >= _handleFocusNodes.length) return;
       final FocusNode node = _handleFocusNodes[index];
-      if (node.context == null) return;
+      final BuildContext? handle = node.context;
+      if (handle == null) return;
+      Scrollable.ensureVisible(
+        handle,
+        alignmentPolicy: delta > 0
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtEnd
+            : ScrollPositionAlignmentPolicy.keepVisibleAtStart,
+      );
       node.requestFocus();
     });
   }
@@ -370,7 +424,7 @@ class _UpNextListState extends ConsumerState<_UpNextList> {
     final List<Track> tracks = widget.tracks;
     return SliverReorderableList(
       itemCount: tracks.length,
-      onReorderItem: _move,
+      onReorderItem: (int oldIndex, int newIndex) => _move(oldIndex, newIndex),
       proxyDecorator: _liftedRow,
       itemBuilder: (context, index) => _UpNextTile(
         // Index-qualified so the same track queued twice never produces a
@@ -383,7 +437,7 @@ class _UpNextListState extends ConsumerState<_UpNextList> {
         onPlay: () => ref.read(playbackControllerProvider).playFromQueue(index),
         onRemove: () =>
             ref.read(playbackControllerProvider).removeFromQueue(index),
-        onMoveBy: (int delta) => _move(index, index + delta, followFocus: true),
+        onMoveBy: (int delta) => _moveBy(index, delta),
       ),
     );
   }
