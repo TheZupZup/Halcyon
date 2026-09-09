@@ -61,11 +61,13 @@ class AudiobookshelfProviderCard extends ConsumerWidget {
       actions: connected
           ? <Widget>[
               _ManageAction(onPressed: manage),
-              // The way into the books themselves. It sits here only until
-              // Audiobooks gets its own navigation destination, its own
-              // change agreed on the tracking issue.
+              // The way into the books themselves. Pushed, like every other
+              // Settings detail page, so Back returns to this card rather
+              // than to the Settings hub. It sits here only until Audiobooks
+              // gets its own navigation destination, its own change agreed
+              // on the tracking issue.
               FilledButton(
-                onPressed: () => context.go(AppRoutes.audiobooks),
+                onPressed: () => context.push(AppRoutes.audiobooks),
                 child: const Text('Browse'),
               ),
             ]

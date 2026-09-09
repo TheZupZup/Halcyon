@@ -225,7 +225,12 @@ class _BookList extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (state.books.isEmpty) {
+    final bool hasFooter = state.hasMore || state.errorMessage != null;
+    // Only really empty when there is also nothing left to fetch. A first
+    // page whose every record was unreadable comes back with no books but
+    // more to come, and calling that "empty" would strand the rest of the
+    // library behind a footer this never drew.
+    if (state.books.isEmpty && !hasFooter) {
       return const EmptyState(
         icon: Icons.menu_book_outlined,
         title: 'No audiobooks yet',
@@ -234,7 +239,6 @@ class _BookList extends ConsumerWidget {
       );
     }
 
-    final bool hasFooter = state.hasMore || state.errorMessage != null;
     return RefreshIndicator(
       onRefresh: () =>
           ref.read(audiobooksLibraryControllerProvider.notifier).refresh(),
@@ -315,6 +319,18 @@ class _ListFooter extends ConsumerWidget {
                   ?.copyWith(color: theme.colorScheme.error),
             ),
             const SizedBox(height: AppSpacing.sm),
+          ] else if (state.books.isEmpty && state.hasMore) ...<Widget>[
+            // Every record on this page was unreadable (a half-scanned book,
+            // say). Say so plainly and keep the next page reachable.
+            Text(
+              "Nothing on this page could be read. There's more in this "
+              'library, though.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.sm),
           ],
           if (state.isLoadingMore)
             const SizedBox.square(
@@ -329,7 +345,10 @@ class _ListFooter extends ConsumerWidget {
                     .loadMore(),
               ),
               child: Text(
-                'Load more (${state.books.length} of ${state.totalBooks})',
+                state.books.isEmpty
+                    ? 'Load the next page'
+                    : 'Load more (${state.books.length} of '
+                        '${state.totalBooks})',
               ),
             ),
         ],

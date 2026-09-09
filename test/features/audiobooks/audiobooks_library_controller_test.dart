@@ -8,6 +8,7 @@ import 'package:linthra/data/repositories/audiobookshelf_session_store_provider.
 import 'package:linthra/data/repositories/in_memory_audiobookshelf_session_store.dart';
 import 'package:linthra/features/audiobooks/audiobooks_library_controller.dart';
 import 'package:linthra/features/audiobooks/audiobooks_library_state.dart';
+import 'package:linthra/features/settings/audiobookshelf/audiobookshelf_settings_controller.dart';
 import 'package:linthra/features/settings/audiobookshelf/audiobookshelf_settings_providers.dart';
 
 import '../../core/sources/audiobookshelf/fake_audiobookshelf_client.dart';
@@ -242,6 +243,91 @@ void main() {
     });
   });
 
+  group('a different account', () {
+    test('never shows the previous account its books or library names',
+        () async {
+      final client = FakeAudiobookshelfClient(
+        serverStatus: const AudiobookshelfServerStatus(
+          serverVersion: '2.17.0',
+          isInitialized: true,
+        ),
+        authResult: const AudiobookshelfAuthResult(
+          userId: 'user-2',
+          accessToken: 'tok-2',
+          userName: 'bob',
+          defaultLibraryId: 'lib-bob',
+        ),
+        libraries: <AudiobookshelfLibraryDto>[_bookLibrary],
+      );
+      client.itemsByLibrary['lib-books'] = <AudiobookshelfLibraryItemDto>[
+        _book('item-1', 'Alice only'),
+      ];
+      final container = _container(client: client);
+      final AudiobooksLibraryController controller =
+          container.read(audiobooksLibraryControllerProvider.notifier);
+      final AudiobookshelfSettingsController connection =
+          container.read(audiobookshelfSettingsControllerProvider.notifier);
+
+      await controller.load();
+      expect(
+        container.read(audiobooksLibraryControllerProvider).books.single.title,
+        'Alice only',
+      );
+
+      // Sign out, then sign in as somebody else on the same device.
+      await connection.clear();
+      client.libraries = const <AudiobookshelfLibraryDto>[
+        AudiobookshelfLibraryDto(
+          id: 'lib-bob',
+          name: "Bob's books",
+          mediaType: 'book',
+        ),
+      ];
+      client.itemsByLibrary['lib-bob'] = <AudiobookshelfLibraryItemDto>[
+        _book('item-9', 'Bob only'),
+      ];
+      await connection.signIn(
+        url: 'https://audiobooks.example.com',
+        username: 'bob',
+        password: 'hunter2',
+      );
+
+      // No force: the screen just being reopened must still re-fetch.
+      await controller.load();
+
+      final AudiobooksLibraryState state =
+          container.read(audiobooksLibraryControllerProvider);
+      expect(state.books.single.title, 'Bob only');
+      expect(state.selectedLibraryId, 'lib-bob');
+      expect(
+        state.libraries.map((AudiobookLibrarySummary l) => l.name),
+        <String>["Bob's books"],
+      );
+    });
+
+    test('a sign-out empties the browser', () async {
+      final client = FakeAudiobookshelfClient(
+        libraries: <AudiobookshelfLibraryDto>[_bookLibrary],
+      );
+      client.itemsByLibrary['lib-books'] = _books(1);
+      final container = _container(client: client);
+      final AudiobooksLibraryController controller =
+          container.read(audiobooksLibraryControllerProvider.notifier);
+
+      await controller.load();
+      await container
+          .read(audiobookshelfSettingsControllerProvider.notifier)
+          .clear();
+      await controller.load();
+
+      final AudiobooksLibraryState state =
+          container.read(audiobooksLibraryControllerProvider);
+      expect(state.isConnected, isFalse);
+      expect(state.books, isEmpty);
+      expect(state.libraries, isEmpty);
+    });
+  });
+
   group('selectLibrary', () {
     test('switches library and replaces the list', () async {
       final client = FakeAudiobookshelfClient(
@@ -336,6 +422,36 @@ void main() {
       // Nothing left to ask for.
       await controller.loadMore();
       expect(client.itemRequests, hasLength(2));
+    });
+
+    test('switching library mid-page leaves no spinner behind', () async {
+      const int pageSize = AudiobooksLibraryController.pageSize;
+      final client = FakeAudiobookshelfClient(
+        libraries: <AudiobookshelfLibraryDto>[_bookLibrary, _otherBookLibrary],
+      );
+      client.itemsByLibrary['lib-books'] = _books(pageSize + 5);
+      client.itemsByLibrary['lib-kids'] = <AudiobookshelfLibraryItemDto>[
+        _book('kid-1', 'Matilda'),
+      ];
+      final container = _container(client: client);
+      final AudiobooksLibraryController controller =
+          container.read(audiobooksLibraryControllerProvider.notifier);
+
+      await controller.load();
+
+      // The next page of the first library is still in flight when the user
+      // picks another one.
+      final Future<void> pending = controller.loadMore();
+      final Future<void> switched = controller.selectLibrary('lib-kids');
+      await Future.wait(<Future<void>>[pending, switched]);
+
+      final AudiobooksLibraryState state =
+          container.read(audiobooksLibraryControllerProvider);
+      expect(state.selectedLibraryId, 'lib-kids');
+      expect(state.books.single.title, 'Matilda');
+      // The abandoned page must not leave the footer spinning, which would
+      // also block every later page.
+      expect(state.isLoadingMore, isFalse);
     });
 
     test('a failed page keeps the books already on screen', () async {

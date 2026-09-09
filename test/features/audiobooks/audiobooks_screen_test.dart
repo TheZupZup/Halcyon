@@ -118,6 +118,23 @@ void main() {
     expect(find.text('No audiobooks yet'), findsOneWidget);
   });
 
+  testWidgets('a page of unreadable records keeps the rest reachable',
+      (tester) async {
+    // Every record on the first page was skipped by the parser (half-scanned
+    // books), but the server says the library has more. Calling that "empty"
+    // would strand the books on the next page.
+    final client = FakeAudiobookshelfClient(
+      libraries: <AudiobookshelfLibraryDto>[_bookLibrary],
+    );
+    client.itemsByLibrary['lib-books'] = <AudiobookshelfLibraryItemDto>[];
+    client.totalOverride = 5;
+
+    await _pump(tester, client: client);
+
+    expect(find.text('No audiobooks yet'), findsNothing);
+    expect(find.text('Load the next page'), findsOneWidget);
+  });
+
   testWidgets('a failed listing offers a retry', (tester) async {
     final client = FakeAudiobookshelfClient(
       libraries: <AudiobookshelfLibraryDto>[_bookLibrary],

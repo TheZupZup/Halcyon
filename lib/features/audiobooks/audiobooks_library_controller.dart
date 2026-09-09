@@ -29,6 +29,17 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
   /// [pageSize] would then ask for the same page again.
   int _nextPage = 1;
 
+  /// Bumped whenever what the screen is showing changes underneath a request:
+  /// a different account, a refresh, another library. A response carrying an
+  /// older generation is dropped, so no in-flight page can land on a list it
+  /// doesn't belong to (or leave a spinner running on one).
+  int _generation = 0;
+
+  /// The session the loaded state belongs to. A session that isn't this exact
+  /// one means a different sign-in owns the screen now, and none of the books
+  /// or library names on it may be shown to it.
+  AudiobookshelfSession? _loadedFor;
+
   @override
   AudiobooksLibraryState build() => const AudiobooksLibraryState();
 
@@ -36,7 +47,8 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
   ///
   /// Called when the screen opens. Already-loaded state is kept unless
   /// [force] is set (pull to refresh / the refresh action), so returning to
-  /// the screen doesn't re-fetch the whole library.
+  /// the screen doesn't re-fetch the whole library. A sign-in as somebody
+  /// else always re-fetches: the cache belongs to the account that filled it.
   Future<void> load({bool force = false}) async {
     final AudiobookshelfSettingsController connection =
         ref.read(audiobookshelfSettingsControllerProvider.notifier);
@@ -45,21 +57,38 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
     await connection.ensureLoaded();
     final AudiobookshelfSession? session = connection.session;
     if (session == null) {
+      _forget();
       state = const AudiobooksLibraryState();
       return;
     }
-    if (state.hasLoaded && !force && state.errorMessage == null) return;
+    final bool sameAccount = identical(session, _loadedFor);
+    if (sameAccount &&
+        state.hasLoaded &&
+        !force &&
+        state.errorMessage == null) {
+      return;
+    }
 
-    state = state.copyWith(isConnected: true, isLoading: true);
+    final int generation = _begin(session);
+    // A different account: nothing of the previous one survives into this
+    // load, not its books, not its library names, not which library was open.
+    state = sameAccount
+        ? state.copyWith(
+            isConnected: true,
+            isLoading: true,
+            isLoadingMore: false,
+          )
+        : const AudiobooksLibraryState(isConnected: true, isLoading: true);
+
     final List<AudiobookshelfLibraryDto> libraries;
     try {
       libraries =
           await ref.read(audiobookshelfClientProvider).fetchLibraries(session);
     } on AudiobookshelfException catch (error) {
-      _fail(session, connection, error);
+      _fail(generation, session, connection, error);
       return;
     }
-    if (_isStale(session, connection)) return;
+    if (_isStale(generation, session, connection)) return;
 
     final List<AudiobookLibrarySummary> bookLibraries =
         <AudiobookLibrarySummary>[
@@ -84,7 +113,7 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
       books: const <AudiobookSummary>[],
       totalBooks: 0,
     );
-    await _loadFirstPage(session, connection);
+    await _loadFirstPage(generation, session, connection);
   }
 
   /// Switches to another library and loads its first page. A no-op for the
@@ -95,16 +124,21 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
         ref.read(audiobookshelfSettingsControllerProvider.notifier);
     final AudiobookshelfSession? session = connection.session;
     if (session == null) {
+      _forget();
       state = const AudiobooksLibraryState();
       return;
     }
+    final int generation = _begin(session);
     state = state.copyWith(
       selectedLibraryId: libraryId,
       books: const <AudiobookSummary>[],
       totalBooks: 0,
       isLoading: true,
+      // A page still in flight for the previous library is abandoned by the
+      // new generation, so its spinner must not be left running here.
+      isLoadingMore: false,
     );
-    await _loadFirstPage(session, connection);
+    await _loadFirstPage(generation, session, connection);
   }
 
   /// Appends the next page. A no-op when everything is already loaded or a
@@ -117,10 +151,14 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
         ref.read(audiobookshelfSettingsControllerProvider.notifier);
     final AudiobookshelfSession? session = connection.session;
     if (session == null) {
+      _forget();
       state = const AudiobooksLibraryState();
       return;
     }
 
+    // A continuation of what is already on screen, so it joins the current
+    // generation rather than starting one.
+    final int generation = _generation;
     final int nextPage = _nextPage;
     state = state.copyWith(isLoadingMore: true);
     try {
@@ -131,10 +169,7 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
                 limit: pageSize,
                 page: nextPage,
               );
-      if (_isStale(session, connection)) return;
-      // The library it was fetched for may have been switched away from
-      // while this was in flight; those books belong to the other list.
-      if (libraryId != state.selectedLibraryId) return;
+      if (_isStale(generation, session, connection)) return;
       _nextPage = nextPage + 1;
       final List<AudiobookSummary> books = <AudiobookSummary>[
         ...state.books,
@@ -150,7 +185,7 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
         isLoadingMore: false,
       );
     } on AudiobookshelfException catch (error) {
-      if (_isStale(session, connection)) return;
+      if (_isStale(generation, session, connection)) return;
       // The books already on screen stay there; only the footer reports that
       // the next page didn't come.
       state = state.copyWith(
@@ -165,6 +200,7 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
   Future<void> refresh() => load(force: true);
 
   Future<void> _loadFirstPage(
+    int generation,
     AudiobookshelfSession session,
     AudiobookshelfSettingsController connection,
   ) async {
@@ -181,8 +217,7 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
                 limit: pageSize,
                 page: 0,
               );
-      if (_isStale(session, connection)) return;
-      if (libraryId != state.selectedLibraryId) return;
+      if (_isStale(generation, session, connection)) return;
       _nextPage = 1;
       state = state.copyWith(
         books: _toSummaries(page.items),
@@ -191,7 +226,7 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
         hasLoaded: true,
       );
     } on AudiobookshelfException catch (error) {
-      _fail(session, connection, error);
+      _fail(generation, session, connection, error);
     }
   }
 
@@ -212,12 +247,28 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
     return libraries.first.id;
   }
 
+  /// Starts a new generation of requests for [session]: whatever was in
+  /// flight for the previous one no longer owns the screen.
+  int _begin(AudiobookshelfSession session) {
+    _loadedFor = session;
+    _nextPage = 1;
+    return ++_generation;
+  }
+
+  /// Drops everything tied to a session that is gone.
+  void _forget() {
+    _loadedFor = null;
+    _nextPage = 1;
+    _generation++;
+  }
+
   void _fail(
+    int generation,
     AudiobookshelfSession session,
     AudiobookshelfSettingsController connection,
     AudiobookshelfException error,
   ) {
-    if (_isStale(session, connection)) return;
+    if (_isStale(generation, session, connection)) return;
     state = state.copyWith(
       isLoading: false,
       isLoadingMore: false,
@@ -227,14 +278,16 @@ class AudiobooksLibraryController extends Notifier<AudiobooksLibraryState> {
     );
   }
 
-  /// Whether a sign-out (or a sign-in as somebody else) landed while a
-  /// request was in flight. The response belongs to the old account, so it is
-  /// dropped rather than painted over whatever owns the screen now.
+  /// Whether a response still belongs on screen: a newer generation (a
+  /// refresh, another library, another account) or a sign-out that landed
+  /// while it was in flight means it doesn't, so it is dropped rather than
+  /// painted over whatever owns the screen now.
   bool _isStale(
+    int generation,
     AudiobookshelfSession session,
     AudiobookshelfSettingsController connection,
   ) =>
-      !identical(connection.session, session);
+      generation != _generation || !identical(connection.session, session);
 
   List<AudiobookSummary> _toSummaries(
     List<AudiobookshelfLibraryItemDto> items,

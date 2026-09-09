@@ -30,6 +30,12 @@ class FakeAudiobookshelfClient implements AudiobookshelfClient {
   final Map<String, List<AudiobookshelfLibraryItemDto>> itemsByLibrary =
       <String, List<AudiobookshelfLibraryItemDto>>{};
 
+  /// Reports this as the page's `total` instead of the canned list's length,
+  /// so a test can reproduce the real server's disagreement between the two:
+  /// records the parser skipped (half-scanned, no title) are counted by the
+  /// server but never arrive.
+  int? totalOverride;
+
   // Recorded inputs.
   String? lastBaseUrl;
   String? lastUsername;
@@ -106,7 +112,7 @@ class FakeAudiobookshelfClient implements AudiobookshelfClient {
         : all.sublist(start, (start + limit).clamp(0, all.length));
     return AudiobookshelfLibraryItemsPage(
       items: slice,
-      total: all.length,
+      total: totalOverride ?? all.length,
       page: page,
     );
   }
