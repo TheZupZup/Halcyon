@@ -1,6 +1,6 @@
 --- a/lib/just_audio_media_kit.dart
 +++ b/lib/just_audio_media_kit.dart
-@@ -48,6 +48,12 @@
+@@ -48,6 +48,22 @@
    /// [the related issue](https://github.com/Pato05/just_audio_media_kit/issues/11) for more information
    static bool prefetchPlaylist = false;
  
@@ -10,12 +10,22 @@
 +  /// headless audio smoke layers `ao=alsa` on top for an ALSA null device.
 +  static Map<String, String> mpvProperties = const {};
 +
++  /// The live media_kit [Player]s, keyed by the just_audio player id.
++  ///
++  /// just_audio's platform interface models no audio *output device*, so there
++  /// is no way through it to read libmpv's `audio-device-list` or to move a
++  /// playing track onto another sink. Linthra reads this map to do both (see
++  /// `LinuxAudioOutputDeviceService`). An entry appears as soon as the player
++  /// is created and is removed when it is released, so a stale [Player] is
++  /// never handed out.
++  static final Map<String, Player> livePlayers = <String, Player>{};
++
    static final _logger = Logger('JustAudioMediaKit');
    final _players = HashMap<String, MediaKitPlayer>();
  
 --- a/lib/mediakit_player.dart
 +++ b/lib/mediakit_player.dart
-@@ -61,6 +61,10 @@
+@@ -61,6 +61,12 @@
        ready: () => _readyCompleter.complete(),
      ));
  
@@ -23,6 +33,16 @@
 +      setProperty(_player, entry.key, entry.value);
 +    }
 +
++    JustAudioMediaKit.livePlayers[id] = _player;
++
      if (JustAudioMediaKit.prefetchPlaylist) {
        setProperty(_player, 'prefetch-playlist', 'yes');
      }
+@@ -390,6 +396,7 @@
+   /// Release the resources used by this player.
+   Future<void> release() async {
+     _logger.info('releasing player resources');
++    JustAudioMediaKit.livePlayers.remove(id);
+     _mediaOpened = false;
+     await _player.dispose();
+     // cancel all stream subscriptions
