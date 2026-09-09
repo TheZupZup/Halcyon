@@ -57,6 +57,60 @@ touches the network.)
 - Searching only filters what's shown; it **never changes playback**. Whatever
   is playing keeps playing, and the mini-player keeps working.
 
+### Quick search (Ctrl+K)
+
+Above the Library's own box there is a second, app-wide way in: **Ctrl+K** (or
+**Ctrl+F**) opens a quick-search overlay from anywhere in the app frame, on any
+tab. It is a dialog over whatever is on screen, so the page underneath keeps its
+scroll position, its selection, and any query already typed into the Library box
+— close the overlay and you are exactly where you were.
+
+- It searches **songs, albums, artists and playlists at once**, grouped under
+  headings, and shows the best five of each.
+- Results are **ranked**, not just filtered: an exact name beats a prefix, which
+  beats a match at the start of a later word, which beats a match inside one, and
+  a hit on an item's own title beats a hit on its artist or album. Typing three
+  letters of a song you know puts it on the first row.
+- **↑ / ↓** move the selection (wrapping at both ends), **Enter** opens it,
+  **Esc** closes. The box keeps focus the whole time, so you never have to reach
+  for the mouse. Clicking or hovering a row works too. A key press applies a
+  pending debounce first, so typing three letters and hitting Enter straight
+  away opens the best match for what you typed, never for the previous query.
+- Opening a result uses the routes the rest of the app uses: an album, an artist
+  or a playlist opens its existing detail screen. A song plays and opens Now
+  Playing, with the song matches becoming the queue positioned at the row you
+  chose: Next walks the matches below it and Previous the ones above, exactly as
+  tapping a row in the Library's own list behaves.
+- Ranking is **debounced** (200 ms), so a large library is ranked when you pause
+  rather than on every keystroke. The states are distinct and honest: a prompt
+  before you type, "Searching…" while the debounce is pending, "Loading your
+  library…" while the catalog or your playlists are still loading, and "Some of
+  your library could not be loaded" when one of them failed. "No results for …"
+  is only ever shown when everything loaded and nothing matched — an outage
+  never gets reported as an empty library. Whatever *did* load is still
+  searchable meanwhile, so an unreachable server does not hide your local songs.
+
+It reads the same providers the tabs browse — the unified (de-duplicated)
+catalog, the albums and artists derived from it, and your playlists — so there is
+no second catalog to keep in sync, and quick search can never disagree with what
+the Library shows. Nothing is gated on the platform: the shortcut only fires when
+a real keyboard sends it, so a phone is unaffected and a tablet with a keyboard
+gets it for free.
+
+The binding sits **above the router**, wrapping everything the app shows, rather
+than inside the navigation shell. Key events travel up from whatever holds focus,
+so a binding under the shell would be invisible to routes pushed over it — Now
+Playing above all, which is exactly where opening a song from quick search leaves
+you.
+
+Code: `lib/features/library/quick_search.dart` (the pure ranking),
+`quick_search_providers.dart` (what it reads and whether it is all there),
+`widgets/quick_search_overlay.dart` (the overlay), and
+`lib/app/quick_search_shortcuts.dart` (the key bindings).
+Tests: `test/features/library/quick_search_test.dart`,
+`quick_search_overlay_test.dart`, `quick_search_availability_test.dart`, and
+`test/app/quick_search_shortcuts_test.dart`.
+
 ### Fast-scroll rail
 
 The A–Z fast-scroller is kept on the **Songs** tab, where an alphabetical track

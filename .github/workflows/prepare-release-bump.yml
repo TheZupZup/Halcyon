@@ -33,6 +33,11 @@ on:
         required: false
         type: boolean
         default: false
+      release_date:
+        description: "AppStream release date, YYYY-MM-DD (UTC). Empty uses the day this runs; set it when the release will be published on another day."
+        required: false
+        type: string
+        default: ""
 
 # Need write to push the release branch and open the PR. Nothing else is touched.
 permissions:
@@ -109,6 +114,7 @@ jobs:
           VERSION_NAME: ${{ inputs.version_name }}
           CHANGELOG_TEXT: ${{ inputs.changelog_text }}
           FORCE_CHANGELOG: ${{ inputs.force_changelog }}
+          RELEASE_DATE: ${{ inputs.release_date }}
         run: |
           set -euo pipefail
           args=("$VERSION_NAME")
@@ -117,6 +123,14 @@ jobs:
           fi
           if [ "${FORCE_CHANGELOG}" = "true" ]; then
             args+=("--force-changelog")
+          fi
+          # The AppStream entry records when the release is *published*, which
+          # is not necessarily the day this workflow runs: the bump PR still has
+          # to be reviewed, merged and tagged. Left empty it stamps today, and
+          # a re-run keeps whatever date is already recorded, so a release that
+          # lands later is corrected by passing the date here (#452).
+          if [ -n "${RELEASE_DATE}" ]; then
+            args+=("--release-date" "$RELEASE_DATE")
           fi
           python3 scripts/prepare_release_bump.py "${args[@]}"
 
@@ -127,6 +141,17 @@ jobs:
           set -euo pipefail
           chmod +x scripts/release_preflight.sh
           ./scripts/release_preflight.sh "v${VERSION_NAME}"
+
+      # Every surface that names the version has to agree before the PR is
+      # opened: the About screen, the Play changelog, the F-Droid entry and the
+      # AppStream release entry a software centre shows (#452). Local twin:
+      # `python3 scripts/check_release_metadata_sync.py`.
+      - name: Check release metadata is in sync
+        env:
+          VERSION_NAME: ${{ inputs.version_name }}
+        run: |
+          set -euo pipefail
+          python3 scripts/check_release_metadata_sync.py --tag "v${VERSION_NAME}"
 
       - name: Fail if nothing changed
         env:
@@ -154,7 +179,8 @@ jobs:
           # has the remote-tracking ref it needs; silently ignore if absent.
           git fetch origin "$BRANCH" 2>/dev/null || true
           git checkout -B "$BRANCH"
-          git add -A pubspec.yaml lib/core/app_info.dart fastlane/metadata metadata
+          git add -A pubspec.yaml lib/core/app_info.dart fastlane/metadata metadata \
+            linux/packaging
           git commit -m "chore(release): prepare v${VERSION_NAME}"
           git push --force-with-lease -u origin "$BRANCH"
 

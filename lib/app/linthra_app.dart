@@ -24,6 +24,7 @@ import '../features/support/support_actions_provider.dart';
 import '../features/support/supporter_entitlement.dart';
 import 'application_lifecycle.dart';
 import 'brand_theme.dart';
+import 'quick_search_shortcuts.dart';
 import 'router.dart';
 import 'theme.dart';
 
@@ -198,6 +199,15 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
       darkTheme: darkTheme,
       themeMode: themeMode.materialThemeMode,
       routerConfig: router,
+      // Keyboard shortcuts wrap the router rather than living inside the
+      // navigation shell. Key events travel up from whatever holds focus, so a
+      // binding under the shell would be invisible to routes pushed over it —
+      // Now Playing above all, which is where opening a song from quick search
+      // lands you. Here every route is a descendant.
+      builder: (BuildContext context, Widget? child) => QuickSearchShortcuts(
+        navigatorKey: ref.watch(rootNavigatorKeyProvider),
+        child: child ?? const SizedBox.shrink(),
+      ),
     );
   }
 }
