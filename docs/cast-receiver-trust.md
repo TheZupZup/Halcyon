@@ -55,6 +55,16 @@ protocol rather than about the app's plumbing:
   unexpected) is a failure, never a pass. The shipped implementation is
   `UnverifiedCastReceiverAuthenticator`, which refuses every receiver, because
   nothing here can yet prove one.
+- **`CastReceiverPinStore`** (`lib/core/services/cast/cast_receiver_pinning.dart`)
+  — the layer authentication does not cover. A Cast handshake proves the peer is
+  *a* genuine receiver, never that it is the one the user meant: discovery is a
+  friendly name on a LAN, so another real Cast device can answer to it and pass
+  the handshake honestly. So the fingerprint a device first proved itself with is
+  recorded and required to match afterwards, a store that cannot answer refuses
+  rather than re-pins, a mismatch never overwrites, and replacing a pin is an
+  explicit `forget()` by the user. The shipped default keeps pins in memory,
+  chosen so a missing store shortens the memory rather than removing the check;
+  a restoration supplies a persistent one.
 - **`TrustGatedCastTransport`** (`lib/core/services/cast/trust_gated_cast_transport.dart`)
   — the readiness boundary. It wraps a `CastTransport`: a session is only handed
   out after the receiver authenticated *and* the identity matches both the
@@ -89,8 +99,12 @@ loaded, and no refusal message carries anything from the handshake.
 
 ## Choosing an implementation
 
-The restoration needs something that actually performs the handshake. The
-options, with the trade-offs that matter for Linthra:
+The restoration needs something that actually performs the handshake.
+[cast-hardened-design.md](cast-hardened-design.md) works that through in detail:
+the device-authentication exchange step by step, the two pinned Cast roots with
+their digests, why the current dependency's protocol definitions cannot express
+the modern challenge at all, where the certificate-path validation would come
+from, and what the design still does not fix. The options it weighs, in summary:
 
 | Option | Why it might work | What it costs |
 | --- | --- | --- |
@@ -138,6 +152,9 @@ Restoring casting is one reviewed change, not a revert. It has to:
       handshake, reviewed in the advisory;
 - [ ] put the trust gate in front of the live transport in the production
       wiring, with no path around it and no runtime flag that skips it;
+- [ ] ship a persistent `CastReceiverPinStore` and the cast sheet's "forget this
+      device" action, so pinning survives a restart and a genuinely replaced
+      receiver has a way back that is not a bypass;
 - [ ] flip `CastContainment.isActive` and update the production wiring, the
       transport guards, `scripts/check_cast_containment.py` and
       `scripts/verify_release_containment.py` together — the containment

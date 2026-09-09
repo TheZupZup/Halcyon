@@ -4,6 +4,7 @@ import '../../models/cast_media.dart';
 import '../../models/cast_playback_status.dart';
 import '../../models/cast_state.dart';
 import '../../models/cast_volume.dart';
+import 'cast_receiver_pinning.dart';
 import 'cast_receiver_trust.dart';
 import 'cast_transport.dart';
 
@@ -21,6 +22,12 @@ import 'cast_transport.dart';
 /// proof made over some other connection, an authentication that never
 /// finishes, a session that dies mid-handshake or after it) is a unit test
 /// rather than a code review.
+///
+/// It also narrows what authentication can honestly claim. A Cast handshake
+/// proves the peer is *a* genuine receiver, not that it is the receiver the user
+/// meant, so the gate additionally pins each device to the certificate it first
+/// proved itself with ([CastReceiverPinStore]) and refuses a device that comes
+/// back as different hardware. See docs/cast-hardened-design.md.
 ///
 /// It also owns what the user is told. A refusal keeps its
 /// [CastTrustFailureKind] and nothing else: the message the sheet shows is
@@ -44,20 +51,35 @@ class TrustGatedCastTransport implements CastTransport {
     required CastTransport delegate,
     CastReceiverAuthenticator authenticator =
         const UnverifiedCastReceiverAuthenticator(),
+    CastReceiverPinStore? pins,
     Duration authenticationTimeout = const Duration(seconds: 10),
+    Duration pinTimeout = const Duration(seconds: 5),
     Duration cleanupTimeout = const Duration(seconds: 5),
   })  : _delegate = delegate,
         _authenticator = authenticator,
+        _pins = pins ?? InMemoryCastReceiverPinStore(),
         _authenticationTimeout = authenticationTimeout,
+        _pinTimeout = pinTimeout,
         _cleanupTimeout = cleanupTimeout;
 
   final CastTransport _delegate;
   final CastReceiverAuthenticator _authenticator;
 
+  /// Which receiver each device is known to be. Defaulted rather than optional
+  /// on purpose: leaving it out shortens how long the app remembers, it never
+  /// turns the check off. A restoration is expected to pass a persistent store.
+  final CastReceiverPinStore _pins;
+
   /// How long a receiver has to prove itself. A handshake that hangs is not a
   /// slow success: it expires as [CastTrustFailureKind.incomplete], the session
   /// is closed, and nothing is handed over.
   final Duration _authenticationTimeout;
+
+  /// How long the pin store gets to answer. Reading which receiver a device is
+  /// supposed to be sits on the connect path, so a store that hangs (a slow
+  /// disk, a lock someone else is holding) must expire into a refusal rather
+  /// than leave the user watching "connecting" forever.
+  final Duration _pinTimeout;
 
   /// How long the refused session gets to close before the refusal is returned
   /// anyway. Closing is cleanup on a path that has already failed, so an
@@ -94,6 +116,13 @@ class TrustGatedCastTransport implements CastTransport {
         _messageFor(CastTrustFailureKind.identityMismatch),
         kind: CastTrustFailureKind.identityMismatch,
       );
+    }
+
+    try {
+      await _checkPin(device, proof.identity);
+    } catch (_) {
+      await _close(session);
+      rethrow;
     }
 
     // The readiness seen during the handshake is carried over deliberately: the
@@ -195,6 +224,86 @@ class TrustGatedCastTransport implements CastTransport {
     }
   }
 
+  /// Narrows "a receiver that authenticated" to "the receiver this device has
+  /// always been".
+  ///
+  /// Authentication proves the peer holds a genuine Cast certificate; it does
+  /// not say which genuine device it is, and discovery, being a friendly name
+  /// on a LAN, says nothing at all. So the fingerprint the proof carries is
+  /// recorded on first use and required to match every time after.
+  ///
+  /// Every uncertainty here is a refusal. A store that throws or hangs is not
+  /// "no pin yet": it cannot tell a first use apart from a swap, so re-pinning
+  /// on its silence would hand an attacker a way to erase the check by breaking
+  /// it. A mismatch never overwrites the pin either: replacing one is
+  /// [CastReceiverPinStore.forget], behind a deliberate user action.
+  Future<void> _checkPin(
+    CastDevice device,
+    CastReceiverIdentity identity,
+  ) async {
+    final String fingerprint = normalizeCastFingerprint(identity.fingerprint);
+    if (fingerprint.isEmpty) {
+      // An identity with nothing to pin would match every device forever. That
+      // is an authenticator bug, and it fails here rather than being recorded.
+      throw CastReceiverTrustException(
+        _messageFor(CastTrustFailureKind.rejected),
+        kind: CastTrustFailureKind.rejected,
+      );
+    }
+
+    final String? known;
+    try {
+      known = await _pins.pinFor(device.id).timeout(_pinTimeout);
+    } catch (_) {
+      throw CastReceiverTrustException(
+        _messageFor(CastTrustFailureKind.incomplete),
+        kind: CastTrustFailureKind.incomplete,
+      );
+    }
+
+    if (known == null) {
+      final String? recorded;
+      try {
+        await _pins.remember(device.id, fingerprint).timeout(_pinTimeout);
+        // Read back rather than assume. Two connections to the same entry can
+        // race here, and a store that refuses to overwrite (as the contract
+        // requires) will have kept the other one's fingerprint: without this,
+        // the loser of that race would carry on believing it had pinned itself.
+        // It also catches a store that accepts a write and drops it.
+        recorded = await _pins.pinFor(device.id).timeout(_pinTimeout);
+      } catch (_) {
+        // Refusing on a failed write keeps the two states the app can be in
+        // honest: either this device is pinned, or it has never been cast to.
+        // Handing out a session that was never recorded would silently pin the
+        // *next* receiver instead, whichever one that is.
+        throw CastReceiverTrustException(
+          _messageFor(CastTrustFailureKind.incomplete),
+          kind: CastTrustFailureKind.incomplete,
+        );
+      }
+      if (recorded == null) {
+        throw CastReceiverTrustException(
+          _messageFor(CastTrustFailureKind.incomplete),
+          kind: CastTrustFailureKind.incomplete,
+        );
+      }
+      if (normalizeCastFingerprint(recorded) != fingerprint) {
+        throw CastReceiverTrustException(
+          _messageFor(CastTrustFailureKind.changedReceiver),
+          kind: CastTrustFailureKind.changedReceiver,
+        );
+      }
+      return;
+    }
+
+    if (normalizeCastFingerprint(known) != fingerprint) {
+      throw CastReceiverTrustException(
+        _messageFor(CastTrustFailureKind.changedReceiver),
+        kind: CastTrustFailureKind.changedReceiver,
+      );
+    }
+  }
+
   /// The only wording a refusal ever reaches the user with. Owned here, chosen
   /// by [CastTrustFailureKind] alone, so nothing an implementation writes into
   /// an exception can travel to the cast sheet.
@@ -208,6 +317,8 @@ class TrustGatedCastTransport implements CastTransport {
       case CastTrustFailureKind.identityMismatch:
         return "Linthra couldn't confirm that this is the device you picked, "
             'so it stopped.';
+      case CastTrustFailureKind.changedReceiver:
+        return _changedReceiverMessage;
       case CastTrustFailureKind.incomplete:
         return _incompleteMessage;
     }
@@ -216,6 +327,10 @@ class TrustGatedCastTransport implements CastTransport {
   static const String _incompleteMessage =
       "Linthra couldn't finish checking that device, so it didn't send "
       'anything to it.';
+
+  static const String _changedReceiverMessage =
+      "This isn't the same device Linthra cast to before, so it stopped. If you "
+      'replaced it, forget it in the cast list and try again.';
 
   static const String _rejectedMessage =
       "Linthra couldn't verify that device, so it didn't send anything to it.";
