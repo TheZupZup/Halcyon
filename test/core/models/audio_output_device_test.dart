@@ -91,6 +91,24 @@ void main() {
       );
     });
 
+    test('does not remember a bare numeric target', () {
+      // A PipeWire/PulseAudio object id, not a name: the daemon hands the same
+      // number to a different sink after a restart, and the startup check can
+      // only ask whether the id still exists — which it does, meaning something
+      // else. No real sink is named by a bare integer.
+      expect(AudioOutputDevice.isPersistableId('pipewire/42'), isFalse);
+      expect(AudioOutputDevice.isPersistableId('pulse/7'), isFalse);
+      expect(AudioOutputDevice.isPersistableId('42'), isFalse);
+    });
+
+    test('still remembers a name that merely contains digits', () {
+      expect(
+        AudioOutputDevice.isPersistableId('pipewire/alsa_output.usb-DAC_2'),
+        isTrue,
+      );
+      expect(AudioOutputDevice.isPersistableId('pulse/hdmi2'), isTrue);
+    });
+
     test('does not remember numeric ALSA card handles', () {
       // hw:1,0 is a card *index*: plugging in a USB DAC renumbers it, so a
       // stored value would silently route to a different device next boot.

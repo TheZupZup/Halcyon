@@ -123,14 +123,18 @@ class LinuxAudioOutputDeviceService implements AudioOutputDeviceService {
           devices.single.name == AudioOutputDevice.systemDefaultId);
 
   static Future<void> _applyThroughMediaKit(String deviceId) async {
+    // Live players first, the property last, and the order is the point: a
+    // player that refuses the device throws out of here before the property is
+    // written, so the *next* player the engine builds does not inherit an id
+    // the backend has just rejected and start up unable to open audio.
+    for (final Player player in JustAudioMediaKit.livePlayers.values.toList()) {
+      await player.setAudioDevice(AudioDevice(deviceId, ''));
+    }
     // Merged, not assigned: `cache-on-disk=no` (and the smoke's `ao=alsa`) live
     // in the same map and must survive an output change.
     JustAudioMediaKit.mpvProperties = <String, String>{
       ...JustAudioMediaKit.mpvProperties,
       'audio-device': deviceId,
     };
-    for (final Player player in JustAudioMediaKit.livePlayers.values.toList()) {
-      await player.setAudioDevice(AudioDevice(deviceId, ''));
-    }
   }
 }

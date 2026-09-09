@@ -34,23 +34,33 @@ class AudioOutputDevice {
 
   /// Whether [id] is stable enough to remember across restarts.
   ///
-  /// PipeWire and PulseAudio node names are derived from the hardware path
+  /// PipeWire and PulseAudio node names are derived from the hardware
   /// (`pipewire/alsa_output.pci-0000_00_1f.3.analog-stereo`,
   /// `pulse/bluez_output.AC_12_2F_...`) and name the same sink after a reboot.
-  /// ALSA's numeric handles do not: `alsa/hw:1,0` is a card *index*, and
-  /// plugging in a USB DAC or a dock renumbers the cards, so a stored one can
-  /// silently point at a different device. Those stay a session-only choice —
-  /// the user can still pick them, Linthra just does not remember them.
+  ///
+  /// Numbers do not. Two shapes are rejected for the same reason:
+  ///
+  ///  * `alsa/hw:1,0` and `alsa/plughw:2,0` are ALSA card/device *indexes*, and
+  ///    plugging in a USB DAC or a dock renumbers the cards.
+  ///  * a device part that is nothing but digits (`pipewire/42`) is a runtime
+  ///    object id, handed out by the daemon and reused for a different sink
+  ///    after it restarts.
+  ///
+  /// Either one can still be *picked* — it just is not remembered, because the
+  /// startup check can only ask whether the saved id still exists, and a reused
+  /// number exists while meaning something else entirely. No real sink is named
+  /// by a bare integer, so nothing stable is lost by this.
   static bool isPersistableId(String id) {
     if (id.isEmpty || id == systemDefaultId) return false;
     final int separator = id.indexOf('/');
     final String device = separator < 0 ? id : id.substring(separator + 1);
     if (device.isEmpty) return false;
-    return !_numericAlsaHandle.hasMatch(device);
+    return !_numericHandle.hasMatch(device);
   }
 
-  /// `hw:1`, `hw:1,0`, `plughw:2,0` — ALSA card/device *indexes*.
-  static final RegExp _numericAlsaHandle = RegExp(r'^(plug)?hw:\d+(,\d+)*$');
+  /// `hw:1`, `hw:1,0`, `plughw:2,0` — ALSA card/device *indexes* — and `42`,
+  /// a bare runtime object id.
+  static final RegExp _numericHandle = RegExp(r'^((plug)?hw:)?\d+(,\d+)*$');
 
   @override
   bool operator ==(Object other) =>

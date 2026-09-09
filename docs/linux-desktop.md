@@ -286,14 +286,24 @@ Four decisions worth knowing:
   later gesture is the one that ends up playing and stored.
 * **Only stable ids are remembered.** PipeWire/PulseAudio node names and ALSA
   `CARD=` names are derived from the hardware and survive a reboot, so they are
-  persisted. ALSA's numeric handles (`alsa/hw:1,0`) are card *indexes* that
-  renumber when a USB DAC or dock is plugged in; those are applied for the
-  session and deliberately not stored, and the card explains that.
+  persisted. Numbers are not: ALSA's `alsa/hw:1,0` handles are card *indexes*
+  that renumber when a USB DAC or dock is plugged in, and a bare numeric target
+  (`pipewire/42`) is a runtime object id the daemon reuses for a different sink
+  after a restart. The startup check can only ask whether a saved id still
+  exists, and a reused number exists while meaning something else — so both are
+  applied for the session and deliberately not stored, and the card explains
+  that.
 * **Launch never probes for nothing.** Asking libmpv for its device list is the
   only slow part, so it happens when the Settings card is opened, or at launch
   only when there is a saved device to restore. When nothing is playing there is
   no player to ask, so enumeration builds a short-lived libmpv handle and
   disposes it — reading the device list never opens an output or makes a sound.
+* **The restore finishes before the first frame.** media_kit builds its player
+  when the first track loads and reads the chosen output at construction, so a
+  restore still in flight then would play the opening seconds on the system
+  default before jumping. Bootstrap waits for it, bounded by a deadline
+  (`_audioOutputRestoreDeadline`) so a wedged backend delays launch by that much
+  and no more; past it the restore still lands and still moves live playback.
 
 The mapping, the fallback and what gets remembered are covered by
 `test/core/models/audio_output_device_test.dart`,
