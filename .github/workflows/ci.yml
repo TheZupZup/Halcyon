@@ -110,6 +110,18 @@ jobs:
       - name: Test the release artifact verifier
         run: python3 test/tooling/verify_release_containment_test.py
 
+      # The release version is written down in five places (pubspec, the About
+      # screen, the Play changelog, the F-Droid entry, the AppStream release
+      # entry a software centre shows). Nothing fails to build when one of them
+      # is left behind (the listing just tells people the wrong thing), so it
+      # is checked here rather than at submission time (#452). Local twin:
+      # `python3 scripts/check_release_metadata_sync.py`.
+      - name: Check release metadata is in sync
+        run: python3 scripts/check_release_metadata_sync.py
+
+      - name: Test the release metadata checker
+        run: python3 test/tooling/check_release_metadata_sync_test.py
+
   release-bump-guard:
     name: Release bump touches only version files
     runs-on: ubuntu-latest

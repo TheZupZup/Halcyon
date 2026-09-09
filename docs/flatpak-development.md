@@ -6,7 +6,7 @@ variant) without layering anything onto the host image. Everything here also
 works on Fedora Workstation and other distributions — see
 [Other distributions](#other-distributions) for the one command that differs.
 
-Three docs, three jobs:
+Four docs, four jobs:
 
 * **This page** — the contributor workflow: host tools, build, install, run,
   rebuild, clean, debug.
@@ -16,6 +16,9 @@ Three docs, three jobs:
 * [`linux-desktop.md`](./linux-desktop.md) — the **native** Flutter Linux
   build, which is a different thing with different dependencies. See
   [Native Linux vs Flatpak](#native-linux-vs-flatpak) before mixing the two.
+* [`flathub-update-process.md`](./flathub-update-process.md): how a tagged
+  Linthra release becomes a reviewed Flathub update, and which repository each
+  step happens in.
 
 > Flatpak packaging is in progress ([issue #376](https://github.com/TheZupZup/Linthra/issues/376)).
 > The committed manifest builds, installs and launches the real app with
