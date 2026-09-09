@@ -36,7 +36,7 @@ The full index of Linthra's docs. New to the project? Start with the
 | Playlists & safe removal | [playlists-and-delete.md](./playlists-and-delete.md) |
 | Smart mixes (automatic playlists) | [smart-mixes.md](./smart-mixes.md) |
 | Backup & restore (file format) | [backup-restore-format.md](./backup-restore-format.md) |
-| Battery usage | [battery.md](./battery.md) |
+| Battery usage | [battery.md](./battery.md) · [playback audit](./battery-playback-audit.md) |
 | App icon & branding (in-app + real Android launcher icon) | [app-icon-branding.md](./app-icon-branding.md) |
 
 ## Quality & releases
@@ -50,6 +50,7 @@ The full index of Linthra's docs. New to the project? Start with the
 | PR security surface guard | [pr-security-guard.md](./pr-security-guard.md) |
 | F-Droid readiness | [fdroid-readiness.md](./fdroid-readiness.md) |
 | Google Play readiness | [play-store-readiness.md](./play-store-readiness.md) |
+| Flathub updates (release to published Flatpak) | [flathub-update-process.md](./flathub-update-process.md) |
 
 ## Licensing & legal
 

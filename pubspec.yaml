@@ -40,6 +40,12 @@ dependencies:
   # the federated adapter means Linux reuses Linthra's existing resolver,
   # fallback, queue and completion controller while Android stays on ExoPlayer.
   just_audio_media_kit: ^2.1.0
+  # Already pulled in by just_audio_media_kit; declared directly because Linthra
+  # calls media_kit's own API for the one thing just_audio's platform interface
+  # does not model — Linux audio output device enumeration and selection (see
+  # LinuxAudioOutputDeviceService). No new code ships for this: it is the same
+  # libmpv binding the Linux engine already runs on.
+  media_kit: ^1.2.6
   # Supplies media_kit's Linux native registration. libmpv is an explicit
   # system/Flatpak runtime dependency; Linthra disables this package's optional
   # mimalloc download in linux/CMakeLists.txt for network-isolated builds.

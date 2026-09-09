@@ -66,6 +66,12 @@ abstract final class AppRoutes {
   /// Navidrome/Subsonic, local files). A child of [settings].
   static const String settingsConnections = '/settings/connections';
 
+  /// The audiobook browser for a connected Audiobookshelf server. Reached
+  /// from the connection card on [settingsConnections], so it is a child of
+  /// [settings] and keeps the bottom nav. It lives here only until Audiobooks
+  /// gets its own destination (its own change, agreed on issue #484).
+  static const String audiobooks = '/settings/audiobooks';
+
   /// "Music & playback" — default source and playback behaviour. A child of
   /// [settings].
   static const String settingsPlayback = '/settings/playback';

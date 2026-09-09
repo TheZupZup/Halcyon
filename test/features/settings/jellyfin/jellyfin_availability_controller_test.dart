@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:linthra/core/lifecycle/app_visibility.dart';
 import 'package:linthra/core/models/jellyfin_session.dart';
 import 'package:linthra/core/services/reachability.dart';
 import 'package:linthra/core/sources/jellyfin/jellyfin_exception.dart';
@@ -185,6 +186,73 @@ void main() {
     expect(container.read(jellyfinAvailabilityProvider).status,
         SourceAvailability.available);
     expect(client.verifyCount, greaterThan(1));
+  });
+
+  group('the poll follows app visibility (battery)', () {
+    test('stops while the app is off screen, without probing on the way out',
+        () async {
+      final client = FakeJellyfinClient();
+      final container = _container(
+        saved: _session,
+        client: client,
+        poll: const Duration(milliseconds: 20),
+      );
+      await _settle();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await _settle();
+      final int whileVisible = client.verifyCount;
+      expect(whileVisible, greaterThan(1), reason: 'polling while on screen');
+
+      // Screen off: playback keeps this isolate alive, so an ungated timer
+      // would keep probing the server for the whole session.
+      container.read(appVisibilityProvider.notifier).onHidden();
+      await _settle();
+      expect(client.verifyCount, whileVisible,
+          reason: 'going off screen must not itself probe');
+
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      await _settle();
+      expect(client.verifyCount, whileVisible,
+          reason: 'no background probes while the UI is hidden');
+
+      // And nothing was hidden by standing down: the last answer still stands.
+      expect(container.read(jellyfinAvailabilityProvider).status,
+          SourceAvailability.available);
+    });
+
+    test('resumes polling when the app comes back', () async {
+      final client = FakeJellyfinClient();
+      final container = _container(
+        saved: _session,
+        client: client,
+        poll: const Duration(milliseconds: 20),
+      );
+      await _settle();
+      container.read(appVisibilityProvider.notifier).onHidden();
+      await _settle();
+      final int whileHidden = client.verifyCount;
+
+      container.read(appVisibilityProvider.notifier).onShown();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await _settle();
+      expect(client.verifyCount, greaterThan(whileHidden));
+    });
+
+    test('a visibility flip never blinks the library back to checking',
+        () async {
+      final client = FakeJellyfinClient();
+      final container = _container(saved: _session, client: client);
+      await _settle();
+      expect(container.read(jellyfinAvailabilityProvider).status,
+          SourceAvailability.available);
+
+      container.read(appVisibilityProvider.notifier).onHidden();
+      container.read(appVisibilityProvider.notifier).onShown();
+      await _settle();
+
+      expect(container.read(jellyfinAvailabilityProvider).status,
+          SourceAvailability.available);
+    });
   });
 }
 

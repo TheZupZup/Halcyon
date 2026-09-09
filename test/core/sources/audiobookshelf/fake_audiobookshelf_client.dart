@@ -14,6 +14,7 @@ class FakeAudiobookshelfClient implements AudiobookshelfClient {
     this.serverStatusError,
     this.authError,
     this.librariesError,
+    this.libraryItemsError,
   });
 
   AudiobookshelfServerStatus? serverStatus;
@@ -22,6 +23,20 @@ class FakeAudiobookshelfClient implements AudiobookshelfClient {
   AudiobookshelfException? serverStatusError;
   AudiobookshelfException? authError;
   AudiobookshelfException? librariesError;
+  AudiobookshelfException? libraryItemsError;
+
+  /// Canned item pages by library id. A library with no entry here answers
+  /// with an empty page, the same as a library with nothing in it.
+  final Map<String, List<AudiobookshelfLibraryItemDto>> itemsByLibrary =
+      <String, List<AudiobookshelfLibraryItemDto>>{};
+
+  /// Exact pages by library id, for the cases the sliced list above can't
+  /// express: a page the parser skipped every record on (items shorter than
+  /// `rawCount`), or a server total that disagrees with what arrives. Takes
+  /// precedence over [itemsByLibrary]; a page index past the end answers
+  /// empty, as the server would.
+  final Map<String, List<AudiobookshelfLibraryItemsPage>> pagesByLibrary =
+      <String, List<AudiobookshelfLibraryItemsPage>>{};
 
   // Recorded inputs.
   String? lastBaseUrl;
@@ -33,6 +48,11 @@ class FakeAudiobookshelfClient implements AudiobookshelfClient {
   /// authenticator reuses a status the caller already fetched instead of
   /// asking again.
   int serverStatusCallCount = 0;
+
+  /// Every [fetchLibraryItems] call, in order, so a test can assert what was
+  /// asked for (which library, which page).
+  final List<({String libraryId, int limit, int page})> itemRequests =
+      <({String libraryId, int limit, int page})>[];
 
   @override
   Future<AudiobookshelfServerStatus> fetchServerStatus(
@@ -72,5 +92,44 @@ class FakeAudiobookshelfClient implements AudiobookshelfClient {
     lastSession = session;
     if (librariesError != null) throw librariesError!;
     return libraries;
+  }
+
+  @override
+  Future<AudiobookshelfLibraryItemsPage> fetchLibraryItems(
+    AudiobookshelfSession session, {
+    required String libraryId,
+    required int limit,
+    required int page,
+  }) async {
+    lastSession = session;
+    itemRequests.add((libraryId: libraryId, limit: limit, page: page));
+    if (libraryItemsError != null) throw libraryItemsError!;
+    final List<AudiobookshelfLibraryItemsPage>? canned =
+        pagesByLibrary[libraryId];
+    if (canned != null) {
+      if (page >= canned.length) {
+        return AudiobookshelfLibraryItemsPage(
+          items: const <AudiobookshelfLibraryItemDto>[],
+          rawCount: 0,
+          total: canned.isEmpty ? 0 : canned.last.total,
+          page: page,
+        );
+      }
+      return canned[page];
+    }
+    final List<AudiobookshelfLibraryItemDto> all =
+        itemsByLibrary[libraryId] ?? const <AudiobookshelfLibraryItemDto>[];
+    // Page the canned list the way the server would, so a test can drive the
+    // real "load more" path instead of a special case.
+    final int start = page * limit;
+    final List<AudiobookshelfLibraryItemDto> slice = start >= all.length
+        ? const <AudiobookshelfLibraryItemDto>[]
+        : all.sublist(start, (start + limit).clamp(0, all.length));
+    return AudiobookshelfLibraryItemsPage(
+      items: slice,
+      rawCount: slice.length,
+      total: all.length,
+      page: page,
+    );
   }
 }

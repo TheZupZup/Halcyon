@@ -94,8 +94,9 @@ lib/
   network. Each source carries a `SourceAvailability`
   (`notConfigured` / `checking` / `available` / `unreachable` /
   `authenticationError`), established by a cheap session probe on startup, on app
-  resume, on a background poll, and from what the playback path already
-  discovered. `selectAvailableTracks` then narrows the stored catalog to the
+  resume, on a periodic re-probe while the app is on screen (it stands down
+  while hidden — see [battery.md](battery.md)), and from what the playback path
+  already discovered. `selectAvailableTracks` then narrows the stored catalog to the
   *active library* before de-duplication, so an unreachable server's streamed
   tracks drop out of every browse surface at once — while its downloaded copies
   stay playable and local music is untouched. It is a **view, never a removal**:

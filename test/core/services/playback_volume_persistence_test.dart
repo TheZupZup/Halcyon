@@ -34,6 +34,12 @@ class _RawPreferences implements PlaybackPreferences {
   }
 
   @override
+  Future<String?> audioOutputDeviceId() async => null;
+
+  @override
+  Future<void> setAudioOutputDeviceId(String? id) async {}
+
+  @override
   Future<void> setVolume(double value) async {
     final Completer<void>? gate = writeGate;
     if (gate != null) await gate.future;

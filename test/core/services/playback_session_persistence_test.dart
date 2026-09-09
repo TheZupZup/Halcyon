@@ -166,6 +166,89 @@ void main() {
       await controller.dispose();
     });
 
+    group('position saves are coalesced (battery)', () {
+      // Every save re-encodes the whole logical queue and rewrites the store's
+      // single document. A run of position ticks — several a second while
+      // playing — must therefore cost exactly one write, and that write must
+      // carry the position at the moment it happens rather than the older one
+      // that armed the timer.
+      test('a run of ticks costs one save, carrying the freshest position',
+          () async {
+        final _CountingStore store = _CountingStore();
+        final FakePlaybackController controller = FakePlaybackController();
+        final PlaybackSessionPersistence persistence =
+            PlaybackSessionPersistence(
+          store: store,
+          controller: controller,
+          playbackStates: controller.stateStream,
+          localFileExists: (_) => true,
+          positionSaveInterval: const Duration(milliseconds: 40),
+        );
+
+        controller.emit(const PlaybackState(
+          status: PlaybackStatus.playing,
+          currentTrack: remote,
+          position: Duration(seconds: 1),
+        ));
+        await Future<void>.delayed(Duration.zero);
+        // The first emission is a structural change (a new track): it persists
+        // straight away, and only the ticks after it are debounced.
+        final int structuralSaves = store.saves;
+        expect(structuralSaves, 1);
+
+        for (int second = 2; second <= 6; second++) {
+          controller.emit(PlaybackState(
+            status: PlaybackStatus.playing,
+            currentTrack: remote,
+            position: Duration(seconds: second),
+          ));
+          await Future<void>.delayed(Duration.zero);
+        }
+        expect(store.saves, structuralSaves,
+            reason: 'ticks inside the interval must not each write');
+
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        expect(store.saves, structuralSaves + 1);
+        expect((await store.load())!.position, const Duration(seconds: 6));
+
+        await persistence.dispose();
+        await controller.dispose();
+      });
+
+      test('a clean shutdown persists the position still waiting', () async {
+        final _CountingStore store = _CountingStore();
+        final FakePlaybackController controller = FakePlaybackController();
+        final PlaybackSessionPersistence persistence =
+            PlaybackSessionPersistence(
+          store: store,
+          controller: controller,
+          playbackStates: controller.stateStream,
+          localFileExists: (_) => true,
+          positionSaveInterval: const Duration(minutes: 1),
+        );
+
+        controller.emit(const PlaybackState(
+          status: PlaybackStatus.playing,
+          currentTrack: remote,
+          position: Duration(seconds: 1),
+        ));
+        await Future<void>.delayed(Duration.zero);
+        controller.emit(const PlaybackState(
+          status: PlaybackStatus.playing,
+          currentTrack: remote,
+          position: Duration(seconds: 42),
+        ));
+        await Future<void>.delayed(Duration.zero);
+
+        // Quitting the app mustn't throw away where playback actually was just
+        // because the debounce hadn't elapsed.
+        await persistence.dispose();
+        expect((await store.load())!.position, const Duration(seconds: 42));
+
+        await controller.dispose();
+      });
+    });
+
     test('restore failure clears the store and never throws', () async {
       final InMemoryPlaybackSessionStore store = InMemoryPlaybackSessionStore(
         const PersistedPlaybackSession(
@@ -237,10 +320,8 @@ void main() {
   });
 }
 
-/// Local engine that throws from [restoreSession] so startup-safety can be
-/// asserted without a real audio backend.
-/// Counts saves, so a test can prove a state change wrote nothing rather than
-/// only that the last document still looks right.
+/// A store that counts writes, so a test can assert how often the session
+/// document is actually rewritten (the cost the debounce exists to bound).
 class _CountingStore extends InMemoryPlaybackSessionStore {
   int saves = 0;
 
@@ -251,6 +332,8 @@ class _CountingStore extends InMemoryPlaybackSessionStore {
   }
 }
 
+/// Local engine that throws from [restoreSession] so startup-safety can be
+/// asserted without a real audio backend.
 class _ThrowingRestoreController extends FakePlaybackController {
   @override
   Future<void> restoreSession({

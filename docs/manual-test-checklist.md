@@ -142,6 +142,11 @@ check in §4 #14b):
 - ☐ **Paused ≥ 30 min** (Bluetooth connected, screen off): Linthra's background CPU
   is **negligible** — confirming the position flush stopped on pause and nothing
   polls while idle. This is the key "no unnecessary polling/wake-ups" check.
+- ☐ **Screen-off playback with a Jellyfin server configured**: on the server's
+  own access log (or a proxy log), Linthra makes **no** availability probes
+  while the app is off screen — only the playback reports for a streamed track.
+  Returning to the app probes once, immediately, and the library is intact
+  either way. This is the visibility gate from issue #344.
 
 ## 3b. Server playback reporting (Now Playing on your server)
 

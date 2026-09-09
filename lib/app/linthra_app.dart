@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/app_info.dart';
+import '../core/lifecycle/app_visibility.dart';
 import '../core/lifecycle/platform_shutdown_policy.dart';
 import '../core/platform/host_platform.dart';
 import '../core/services/active_playback_controller.dart';
@@ -23,6 +24,7 @@ import '../features/support/support_actions_provider.dart';
 import '../features/support/supporter_entitlement.dart';
 import 'application_lifecycle.dart';
 import 'brand_theme.dart';
+import 'quick_search_shortcuts.dart';
 import 'router.dart';
 import 'theme.dart';
 
@@ -106,6 +108,12 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.inactive) {
+      if (state != AppLifecycleState.inactive) {
+        // The UI is off screen. Background work that only serves the visible UI
+        // stands down here — with playback keeping the isolate alive, a poll
+        // nobody can see is a pure wake-up. Playback itself is untouched.
+        ref.read(appVisibilityProvider.notifier).onHidden();
+      }
       final controller = ref.read(playbackControllerProvider);
       StabilityDiagnostics.backgroundPlaybackState(
           controller.state.status.name);
@@ -117,6 +125,7 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
       }
     }
     if (state == AppLifecycleState.resumed) {
+      ref.read(appVisibilityProvider.notifier).onShown();
       final controller = ref.read(playbackControllerProvider);
       if (controller is ActivePlaybackController) {
         controller.onAppResumed();
@@ -190,6 +199,15 @@ class _LinthraAppState extends ConsumerState<LinthraApp>
       darkTheme: darkTheme,
       themeMode: themeMode.materialThemeMode,
       routerConfig: router,
+      // Keyboard shortcuts wrap the router rather than living inside the
+      // navigation shell. Key events travel up from whatever holds focus, so a
+      // binding under the shell would be invisible to routes pushed over it —
+      // Now Playing above all, which is where opening a song from quick search
+      // lands you. Here every route is a descendant.
+      builder: (BuildContext context, Widget? child) => QuickSearchShortcuts(
+        navigatorKey: ref.watch(rootNavigatorKeyProvider),
+        child: child ?? const SizedBox.shrink(),
+      ),
     );
   }
 }

@@ -63,6 +63,28 @@ The only periodic timers in the app are tightly scoped and self-cancelling:
   receiver is actually playing**, and stop the moment it pauses. See
   `chromecast_cast_transport.dart` and `ActivePlaybackController._syncTicker`.
 
+### The services under playback ignore position ticks
+
+A position tick is the most frequent thing the app produces, and several
+services listen to the same state stream. Each of them decides *first* whether
+anything it cares about actually moved, and the check itself is written to cost
+nothing:
+
+- **The media-session bridge** re-publishes the now-playing item and the car's
+  "Up Next" window only when the track, the queue, or the duration changes. A
+  position tick is recognised by object identity — the state stream hands the
+  same queue objects through — so a tick never rebuilds the published window,
+  whatever the queue's size. See `LinthraAudioHandler._broadcast`.
+- **Smart pre-cache, the remote stream prebuffer, and the media-session artwork
+  prewarm** share one allocation-free test for "is this the same look-ahead
+  work?" (`samePlaybackLookahead`), which compares the current track, the modes,
+  and only the head of up-next that each service can actually warm. See
+  `lib/core/services/playback_lookahead.dart`.
+- **The Linux crash-safe session** (Android has no equivalent) rewrites its
+  document on every real change — a track change, a queue edit, pause, stop, and
+  a clean shutdown — and coalesces the position in between, so a session that is
+  simply playing costs a handful of writes a minute rather than hundreds.
+
 ### UI rebuilds follow real changes, not the clock
 
 A music player's UI is driven by a position that updates several times a second.
@@ -133,17 +155,38 @@ deliberately conservative about power:
 See `DisplayRefreshRate` (`android/app/src/main/kotlin/.../DisplayRefreshRate.kt`),
 driven from `MainActivity`'s resume/pause.
 
-### Network: event-driven, never polled
+### Network: event-driven, and never polled in the background
 
-- **No background polling, heartbeats, or keep-alives** for Jellyfin or
-  Navidrome/Subsonic. The HTTP clients are request/response only.
+- **Nothing polls, heartbeats, or keeps a connection alive while the app is off
+  screen.** The Jellyfin / Navidrome / Subsonic HTTP clients are request /
+  response only.
+- **The one recurring request is the server availability probe, and it runs only
+  while the app is on screen.** A configured Jellyfin server is re-probed about
+  once a minute so walking back onto the home network restores the library on
+  its own, with no reconnect and no rescan. That probe is gated on app
+  visibility: the moment the screen goes off (or the app is backgrounded) the
+  timer is cancelled, and it comes back — with an immediate probe — when you
+  return to the app. This matters because playback deliberately keeps the
+  process alive: an ungated once-a-minute probe would keep waking the CPU and
+  the radio for a whole listening session, refreshing a library nobody is
+  looking at. See `JellyfinAvailabilityController` and `AppVisibility`
+  (`lib/core/lifecycle/app_visibility.dart`).
 - **Library sync runs on an explicit "Sync library" action**, with a one-time
   auto-sync on first connecting an account. There is no recurring sync loop.
 - **Connectivity is observed, not polled** — Linthra reacts to OS connectivity
   events rather than waking up to test the network.
-- **During playback there are no extra network calls per tick** — lyrics are
+- **During playback there are no network calls per position tick** — lyrics are
   fetched once per track (keyed by id, auto-disposed when no longer current), and
-  artwork URLs are stable.
+  artwork URLs are stable. What a *streamed* track does send is the standard
+  playback report your server needs to show Linthra as an active player
+  (start / pause / resume / stop, plus a progress ping at most every 10 s while
+  playing). It is bounded and off the playback path, it rides a radio the stream
+  is already using, and a local or cached track sends nothing at all. See
+  `PlaybackReportingService`.
+- **Remote control, when you turn it on, is a socket rather than a poll.** The
+  Jellyfin control socket answers the server's own `ForceKeepAlive` on the
+  interval the server asks for; nothing keeps it open when remote control is
+  off.
 
 ### Scans, cache, and artwork: once, on demand
 
@@ -232,6 +275,18 @@ Battery work is only safe if it's measurable. Useful levers:
   `test/features/player/queue_sheet_throttle_test.dart`,
   `test/shared/widgets/now_playing_indicator_test.dart`) so a regression that
   reintroduces per-tick rebuilds fails CI.
+- **The tick-cost benchmark** measures the non-UI half: how much work the
+  services hanging off the playback state stream do for a run of position
+  ticks. It is a harness, not a CI gate, so run it explicitly and compare two
+  revisions on the same machine:
+
+  ```bash
+  flutter test test/benchmarks/playback_tick_cost_bench.dart
+  ```
+
+The most recent read-through of the whole playback path, with the numbers it
+produced and what was changed as a result, is in
+[docs/battery-playback-audit.md](./battery-playback-audit.md).
 
 ## Possible future work (not done here)
 
@@ -247,3 +302,12 @@ avoid risky changes:
   under the OS battery-saver or when unplugged below a threshold. This needs a
   battery-state signal and a user-facing setting, so it's deferred rather than
   guessed.
+- **Visibility-aware refresh rate.** The high-refresh preference is pinned for
+  as long as the app is foregrounded, which also stops the system dropping to a
+  lower idle rate while a static Now Playing screen sits on screen. Releasing
+  the pin while nothing is animating would hand that back, but it needs care not
+  to make scrolling stutter on the first flick, so it is measured-and-deferred
+  rather than guessed at. See the audit for the reasoning.
+- **Per-provider availability probes.** Only Jellyfin probes today. If Subsonic
+  or Plex adopt the same probe, they should adopt the same visibility gate with
+  it rather than each adding a timer of their own.
