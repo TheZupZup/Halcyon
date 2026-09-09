@@ -315,7 +315,11 @@ NOT publish a release; those still happen manually after the PR is merged.
    and paste a hand-written **changelog text**. For a **stable** release (e.g.
    `v0.1.1`) do **not** leave the changelog empty: the empty-input default is an
    alpha-worded, "not on F-Droid yet" maintenance note that is wrong for a stable,
-   on-F-Droid release.
+   on-F-Droid release. **Release date** is optional and only feeds the AppStream
+   `<release>` entry: leave it empty to stamp the day the workflow runs, or set
+   it when you already know the release will be published on another day. A
+   re-run keeps a date that is already recorded, so correcting one afterwards
+   means passing the intended date explicitly.
 2. **Review the generated PR** (`chore(release): prepare v0.1.0-alpha.37`).
    Confirm the computed `versionCode`, the updated files, and the changelog
    body. Edit the changelog in the PR if you want to refine it.

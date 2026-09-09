@@ -525,6 +525,33 @@ void main() {
     });
   });
 
+  group('prepare-release-bump.yml forwards what the script needs', () {
+    // The workflow is the way this script is normally run, so an option the
+    // script grows is only real once the workflow can pass it.
+    late String workflow;
+
+    setUpAll(() {
+      workflow = File(p.join(
+        repoRoot,
+        '.github',
+        'workflows',
+        'prepare-release-bump.yml',
+      )).readAsStringSync();
+    });
+
+    test('an intended release date can be given and reaches the script', () {
+      // Without it the AppStream entry records the day the workflow ran, and
+      // a re-run keeps that date rather than correcting it (#452).
+      expect(workflow, contains('release_date:'));
+      expect(workflow, contains(r'RELEASE_DATE: ${{ inputs.release_date }}'));
+      expect(workflow, contains(r'args+=("--release-date" "$RELEASE_DATE")'));
+    });
+
+    test('the AppStream file is committed with the rest of the bump', () {
+      expect(workflow, contains('linux/packaging'));
+    });
+  });
+
   group('prepare_release_bump.py — input validation', () {
     test('rejects a leading v', () async {
       final Directory tmp = await _fixtureRepo(

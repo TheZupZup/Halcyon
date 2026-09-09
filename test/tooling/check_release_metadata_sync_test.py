@@ -278,6 +278,36 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("pinned to v0.2.4, expected v0.2.6", problems[0])
 
+    def test_manifest_source_without_a_tag_is_reported(self):
+        # The quiet version of the same drift: nothing says which release the
+        # manifest builds, so there is no synchronization to confirm.
+        problems = self.repo(
+            flatpak="modules:\n"
+            "  - name: linthra\n"
+            "    sources:\n"
+            "      - type: git\n"
+            "        url: https://github.com/TheZupZup/Linthra.git\n"
+            "      - type: git\n"
+            "        url: https://github.com/flutter/flutter.git\n"
+            "        tag: '3.44.7'\n"
+            "        dest: flutter\n"
+        ).problems()
+        self.assertEqual(len(problems), 1)
+        self.assertIn("no tag:", problems[0])
+        # Not the Flutter SDK's tag from the source below it.
+        self.assertNotIn("3.44.7", problems[0])
+
+    def test_a_commented_out_source_is_not_read_as_one(self):
+        problems = self.repo(
+            flatpak="modules:\n"
+            "  - name: linthra\n"
+            "    sources:\n"
+            "      # url: https://github.com/TheZupZup/Linthra.git\n"
+            "      - type: dir\n"
+            "        path: ..\n"
+        ).problems()
+        self.assertEqual(problems, [])
+
     def test_manifest_pinned_to_this_release_is_accepted(self):
         problems = self.repo(
             flatpak="modules:\n"

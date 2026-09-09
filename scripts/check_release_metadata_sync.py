@@ -224,29 +224,50 @@ def check_appstream(root, version_name):
     return problems
 
 
+def _source_entry(text, start):
+    """The rest of the YAML list item that begins before `start`.
+
+    Bounded at the next `- ` item so a key is never read out of the following
+    source: the Flutter SDK source right below Linthra's carries a `tag:` of
+    its own, and picking that one up would report a confident, wrong version.
+    """
+    tail = text[start:]
+    next_item = re.search(r"^[ \t]*-[ \t]", tail, flags=re.MULTILINE)
+    return tail[: next_item.start()] if next_item else tail
+
+
 def check_flatpak_manifest(root, version_name):
     """Guard the day the manifest stops building the working checkout.
 
-    The committed manifest builds `type: dir` — the checkout itself — so its
+    The committed manifest builds `type: dir`, the checkout itself, so its
     source version *is* the pubspec version and cannot drift. A Flathub
     submission manifest (#451) pins Linthra's own git tag instead, and that one
     can point at last month's release while everything else says otherwise. So
     the check is conditional: it only fires once such a source exists.
+
+    A Linthra source with no tag at all is reported rather than skipped. It is
+    the same failure in its quietest form: nothing then says which release the
+    manifest builds, and a check that stayed silent about it would be claiming
+    a synchronization it never established.
     """
     text = _read(root, FLATPAK_MANIFEST)
     if text is None:
         return []
     problems = []
     for match in re.finditer(
-        r"url:\s*\S*github\.com/TheZupZup/Linthra(?:\.git)?\s*$",
+        r"^[ \t]*(?:-[ \t]*)?url:[ \t]*\S*github\.com/TheZupZup/Linthra(?:\.git)?[ \t]*$",
         text,
         flags=re.MULTILINE | re.IGNORECASE,
     ):
-        tail = text[match.end() : match.end() + 400]
-        tag = re.search(r"^\s*tag:\s*'?\"?(?P<tag>[^'\"\s]+)", tail, re.MULTILINE)
-        if tag is None:
-            continue
+        entry = _source_entry(text, match.end())
+        tag = re.search(r"^\s*tag:\s*'?\"?(?P<tag>[^'\"\s]+)", entry, re.MULTILINE)
         expected = "v{}".format(version_name)
+        if tag is None:
+            problems.append(
+                "{}: the Linthra source has no tag:, so nothing says which "
+                "release it builds; pin {}.".format(FLATPAK_MANIFEST, expected)
+            )
+            continue
         if tag.group("tag") not in (expected, version_name):
             problems.append(
                 "{}: the Linthra source is pinned to {}, expected {}.".format(
