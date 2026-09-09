@@ -52,10 +52,11 @@ class FakePlaybackController implements LocalPlaybackController {
   bool disposed = false;
   final List<Duration> seeks = <Duration>[];
 
-  /// Pushes [next] to listeners and updates the synchronous [state].
+  /// Pushes [next] to listeners and updates the synchronous [state], stamping
+  /// the current volume/mute onto it exactly as the real controller does.
   void emit(PlaybackState next) {
-    _state = next;
-    _states.add(next);
+    _state = next.withVolume(volume: _volume, muted: _muted);
+    _states.add(_state);
   }
 
   @override
@@ -320,6 +321,29 @@ class FakePlaybackController implements LocalPlaybackController {
     restartQueueCount++;
     _queue = _queue.restarted();
     _playCurrent();
+  }
+
+  /// The listener's volume and mute, mirrored from production: the level is
+  /// kept across a mute so unmute restores it, and every emitted state carries
+  /// both so widget tests read them the same way the UI does.
+  double _volume = 1.0;
+  bool _muted = false;
+
+  @override
+  void setVolume(double volume) {
+    final double next = PlaybackState.sanitizeVolume(volume);
+    final bool nextMuted = _muted && next <= 0.0;
+    if (next == _volume && nextMuted == _muted) return;
+    _volume = next;
+    _muted = nextMuted;
+    emit(_state);
+  }
+
+  @override
+  void setMuted(bool muted) {
+    if (muted == _muted) return;
+    _muted = muted;
+    emit(_state);
   }
 
   @override

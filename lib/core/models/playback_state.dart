@@ -40,6 +40,8 @@ class PlaybackState {
     this.source,
     this.shuffleEnabled = false,
     this.repeatMode = RepeatMode.off,
+    this.volume = 1.0,
+    this.muted = false,
     this.interruptedByTransientFocus = false,
     this.errorMessage,
   });
@@ -83,6 +85,23 @@ class PlaybackState {
   /// button from; the controller consults it when a track finishes.
   final RepeatMode repeatMode;
 
+  /// The listener's own playback volume, 0.0 (silent) to 1.0 (full).
+  ///
+  /// A controller-owned mode like [shuffleEnabled] and [repeatMode], and the
+  /// *user's* level — not the engine's. What the engine is actually set to also
+  /// folds in ReplayGain normalization and any audio-focus duck, so the two are
+  /// deliberately not the same number: those are automatic attenuations the
+  /// listener never asked for and must not see their slider move for.
+  ///
+  /// Kept out of range by nothing: every writer goes through
+  /// [PlaybackState.sanitizeVolume], so a stored, remote (MPRIS), or arithmetic
+  /// value can never land here out of range or as NaN.
+  final double volume;
+
+  /// Whether playback is muted. Independent of [volume], which keeps the level
+  /// to come back to — so unmute restores exactly what was playing before.
+  final bool muted;
+
   /// Whether playback is paused *only* because another app is holding a
   /// transient audio focus (a call, a navigation prompt, a voice interaction)
   /// and Linthra intends to resume the moment focus comes back.
@@ -105,6 +124,11 @@ class PlaybackState {
   /// only on a freshly built error state and clears on the next state change, so
   /// a stale message can never ride along onto a later playing/paused state.
   final String? errorMessage;
+
+  /// The level actually heard: zero while muted, [volume] otherwise. What a
+  /// volume UI (and MPRIS' `Volume`) should show, so muted always reads as
+  /// silent without losing the level unmute restores.
+  double get effectiveVolume => muted ? 0.0 : volume;
 
   bool get isPlaying => status == PlaybackStatus.playing;
   bool get hasTrack => currentTrack != null;
@@ -138,6 +162,8 @@ class PlaybackState {
     PlaybackSource? source,
     bool? shuffleEnabled,
     RepeatMode? repeatMode,
+    double? volume,
+    bool? muted,
     bool? interruptedByTransientFocus,
   }) {
     return PlaybackState(
@@ -151,6 +177,8 @@ class PlaybackState {
       source: source ?? this.source,
       shuffleEnabled: shuffleEnabled ?? this.shuffleEnabled,
       repeatMode: repeatMode ?? this.repeatMode,
+      volume: volume ?? this.volume,
+      muted: muted ?? this.muted,
       interruptedByTransientFocus:
           interruptedByTransientFocus ?? this.interruptedByTransientFocus,
     );
@@ -175,10 +203,50 @@ class PlaybackState {
       source: source,
       shuffleEnabled: shuffleEnabled,
       repeatMode: repeatMode,
+      volume: volume,
+      muted: muted,
       interruptedByTransientFocus: value,
       errorMessage: errorMessage,
     );
   }
+
+  /// Returns this state carrying [volume] and [muted].
+  ///
+  /// Like [withTransientFocusInterruption] this re-stamps a state the
+  /// controller has already built, so [errorMessage] survives: the volume is
+  /// orthogonal to why playback stopped. Controllers stamp every emission
+  /// through here, so no emit path can publish a stale level — including the
+  /// paths that build a fresh state rather than copying the last one.
+  PlaybackState withVolume({required double volume, required bool muted}) {
+    if (volume == this.volume && muted == this.muted) return this;
+    return PlaybackState(
+      status: status,
+      currentTrack: currentTrack,
+      upNext: upNext,
+      previous: previous,
+      hasPrevious: hasPrevious,
+      position: position,
+      duration: duration,
+      source: source,
+      shuffleEnabled: shuffleEnabled,
+      repeatMode: repeatMode,
+      volume: volume,
+      muted: muted,
+      interruptedByTransientFocus: interruptedByTransientFocus,
+      errorMessage: errorMessage,
+    );
+  }
+
+  /// Forces [value] into the only range a volume may ever hold: 0.0–1.0.
+  ///
+  /// Every path that can produce a volume from outside the app — a persisted
+  /// preference, an MPRIS client, a scroll/keyboard step's arithmetic — goes
+  /// through here, so an out-of-range or non-finite value is corrected at the
+  /// edge instead of reaching the audio engine. A non-finite value has no
+  /// sensible clamp, so it falls back to full volume: the level the app plays
+  /// at with no preference at all.
+  static double sanitizeVolume(double value) =>
+      value.isFinite ? value.clamp(0.0, 1.0) : 1.0;
 
   @override
   bool operator ==(Object other) =>
@@ -194,6 +262,8 @@ class PlaybackState {
           other.source == source &&
           other.shuffleEnabled == shuffleEnabled &&
           other.repeatMode == repeatMode &&
+          other.volume == volume &&
+          other.muted == muted &&
           other.interruptedByTransientFocus == interruptedByTransientFocus &&
           other.errorMessage == errorMessage);
 
@@ -210,6 +280,8 @@ class PlaybackState {
       source,
       shuffleEnabled,
       repeatMode,
+      volume,
+      muted,
       interruptedByTransientFocus,
       errorMessage,
     );

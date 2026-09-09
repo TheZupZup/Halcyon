@@ -74,6 +74,23 @@ abstract interface class PlaybackController {
   /// track finishes; the new mode is reflected in [PlaybackState.repeatMode].
   void setRepeatMode(RepeatMode mode);
 
+  /// Sets the listener's playback volume, 0.0 (silent) to 1.0 (full).
+  ///
+  /// Out-of-range and non-finite values are corrected rather than rejected (see
+  /// [PlaybackState.sanitizeVolume]), so a scroll step's arithmetic or a remote
+  /// control's value can never reach the audio engine unbounded. Raising the
+  /// volume above zero also unmutes, which is what dragging a muted slider up
+  /// obviously means. The new level is reflected in [PlaybackState.volume].
+  ///
+  /// This is the *user's* level, applied on top of whatever the engine is doing
+  /// automatically (ReplayGain normalization, an audio-focus duck) — so those
+  /// never move the slider, and this never undoes them.
+  void setVolume(double volume);
+
+  /// Mutes or unmutes playback, leaving [PlaybackState.volume] untouched so
+  /// unmuting restores exactly the level that was playing before.
+  void setMuted(bool muted);
+
   Future<void> play();
   Future<void> pause();
   Future<void> stop();

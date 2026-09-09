@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/dimens.dart';
 import '../../core/models/playback_state.dart';
 import '../../core/models/track.dart';
+import '../../data/repositories/host_platform_provider.dart';
 import '../../shared/layout/adaptive_layout.dart';
 import '../../shared/widgets/empty_state.dart';
 import 'cast/cast_button.dart';
@@ -19,6 +20,7 @@ import 'widgets/now_playing_background.dart';
 import 'widgets/playback_controls.dart';
 import 'widgets/playback_progress_bar.dart';
 import 'widgets/track_metadata.dart';
+import 'widgets/volume_controls.dart';
 
 /// Full-screen now-playing view. Renders from [playbackStateProvider] and drives
 /// playback through the [PlaybackController]; it never touches the audio engine,
@@ -201,7 +203,7 @@ class _NowPlayingState extends State<_NowPlaying> {
                   const SizedBox(height: AppSpacing.lg),
                   const _LiveControls(),
                   const SizedBox(height: AppSpacing.md),
-                  NowPlayingActions(
+                  _ActionsBar(
                     track: track,
                     lyricsVisible: _showLyrics,
                     onToggleLyrics: _toggleLyrics,
@@ -252,12 +254,70 @@ class _NowPlayingState extends State<_NowPlaying> {
         // never further away for reading lyrics.
         const _LiveControls(),
         const SizedBox(height: AppSpacing.md),
-        NowPlayingActions(
+        _ActionsBar(
           track: track,
           lyricsVisible: _showLyrics,
           onToggleLyrics: _toggleLyrics,
         ),
       ],
+    );
+  }
+}
+
+/// The action row, plus the desktop volume control beside it.
+///
+/// They share one band on purpose: volume is a secondary control here (the
+/// transport above it is what the screen is for), and giving it a row of its own
+/// would take height from the artwork and the lyrics — which a short window at a
+/// large text scale does not have to spare.
+///
+/// The control is desktop-only: a phone's volume is the system's, set with its
+/// hardware keys, so mobile keeps exactly the row it had. It also steps aside
+/// while casting, where the level that matters belongs to the receiver and the
+/// cast sheet already owns it, and on a desktop window too narrow to hold both
+/// it and the five actions — a slider squeezing the queue button off the edge
+/// is worse than no slider.
+class _ActionsBar extends ConsumerWidget {
+  /// The narrowest band that holds the five actions and the volume control
+  /// without squeezing either. Measured against the band itself, not the
+  /// window: in the two-column layout this row lives in the narrower half.
+  static const double _volumeBandMinWidth = 460;
+
+  const _ActionsBar({
+    required this.track,
+    required this.lyricsVisible,
+    required this.onToggleLyrics,
+  });
+
+  final Track track;
+  final bool lyricsVisible;
+  final VoidCallback onToggleLyrics;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final Widget actions = NowPlayingActions(
+      track: track,
+      lyricsVisible: lyricsVisible,
+      onToggleLyrics: onToggleLyrics,
+    );
+    // Falls back to the service's own state until the first stream event, the
+    // same way the source/casting line does.
+    final bool casting = ref.watch(
+          castStateProvider.select((s) => s.valueOrNull?.isConnected),
+        ) ??
+        ref.watch(castServiceProvider).state.isConnected;
+    if (casting || !ref.watch(hostPlatformProvider).isDesktop) return actions;
+
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        if (constraints.maxWidth < _volumeBandMinWidth) return actions;
+        return Row(
+          children: <Widget>[
+            Expanded(child: actions),
+            const VolumeControls(),
+          ],
+        );
+      },
     );
   }
 }

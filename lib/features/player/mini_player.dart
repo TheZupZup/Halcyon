@@ -11,12 +11,14 @@ import '../../core/models/playback_state.dart';
 import '../../core/models/track.dart';
 import '../../core/services/playback_source_label.dart';
 import '../../data/repositories/favorites_repository_provider.dart';
+import '../../data/repositories/host_platform_provider.dart';
 import '../../shared/widgets/wavy_progress_indicator.dart';
 import 'cast/cast_providers.dart';
 import 'favorites_providers.dart';
 import 'player_providers.dart';
 import 'widgets/album_artwork.dart';
 import 'widgets/queue_sheet.dart';
+import 'widgets/volume_controls.dart';
 
 /// A compact, persistent now-playing bar shown above the bottom navigation on
 /// every main screen (Library / Folders / Playlists / Downloads / Settings).
@@ -49,6 +51,10 @@ class MiniPlayer extends ConsumerWidget {
   /// can give up the space the previous/next buttons and the queue button need.
   static const double _transportBreakpoint = 600;
 
+  /// The volume control asks for another ~140px beside the queue button, so it
+  /// waits for a bar wide enough to give it without squeezing the title.
+  static const double _volumeBreakpoint = 840;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Watch only the current track (id-distinct) and its resolved source, so the
@@ -76,6 +82,7 @@ class MiniPlayer extends ConsumerWidget {
     final bool isCasting = ref.watch(
       castStateProvider.select((s) => s.valueOrNull?.isConnected ?? false),
     );
+    final bool isDesktop = ref.watch(hostPlatformProvider).isDesktop;
     final subtitle = _subtitle(track);
     // The copy actually playing (Navidrome / Jellyfin / Local music / Cache),
     // shown as a faint tag beside the metadata. Hidden while casting, where the
@@ -113,6 +120,15 @@ class MiniPlayer extends ConsumerWidget {
                         isCasting: isCasting,
                       );
 
+                      // Desktop bars wide enough for the full transport also
+                      // get the volume control, where a desktop listener looks
+                      // for it first. Hidden while casting: the level that
+                      // matters then is the receiver's, which the cast sheet
+                      // owns.
+                      final bool showVolume = isDesktop &&
+                          !isCasting &&
+                          constraints.maxWidth >= _volumeBreakpoint;
+
                       if (constraints.maxWidth >= _transportBreakpoint) {
                         // Two equally weighted side columns, so the transport
                         // sits on the window's centre line rather than
@@ -125,10 +141,16 @@ class MiniPlayer extends ConsumerWidget {
                               showFavorite: true,
                               showSkip: true,
                             ),
-                            const Expanded(
+                            Expanded(
                               child: Align(
                                 alignment: AlignmentDirectional.centerEnd,
-                                child: _QueueButton(),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: <Widget>[
+                                    if (showVolume) const VolumeControls(),
+                                    const _QueueButton(),
+                                  ],
+                                ),
                               ),
                             ),
                           ],

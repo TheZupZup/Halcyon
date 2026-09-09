@@ -131,7 +131,8 @@ class MprisPlayerObject extends DBusObject {
           DBusIntrospectProperty('Shuffle', DBusSignature('b'),
               access: DBusPropertyAccess.readwrite),
           _readable('Metadata', 'a{sv}'),
-          _readable('Volume', 'd'),
+          DBusIntrospectProperty('Volume', DBusSignature('d'),
+              access: DBusPropertyAccess.readwrite),
           _readable('Position', 'x'),
           _readable('MinimumRate', 'd'),
           _readable('MaximumRate', 'd'),
@@ -404,12 +405,20 @@ class MprisPlayerObject extends DBusObject {
         }
         _controller.setShuffleEnabled((value as DBusBoolean).value);
         return DBusMethodSuccessResponse();
-      case 'Rate':
       case 'Volume':
-        // Both are read/write in the spec and read-only here: Linthra's
-        // playback seam exposes neither a rate nor a volume (desktop volume
-        // control is #394). Saying so is better than accepting a value and
-        // silently not applying it.
+        if (value.signature != DBusSignature('d')) {
+          return DBusMethodErrorResponse.invalidArgs();
+        }
+        // The spec's own advice for a value outside 0.0–1.0 is to clamp it, and
+        // a shell's slider can hand over a hair above 1.0 through floating
+        // point alone. Setting it above zero unmutes, the same as dragging
+        // Linthra's own slider up.
+        _controller.setVolume((value as DBusDouble).value);
+        return DBusMethodSuccessResponse();
+      case 'Rate':
+        // Read/write in the spec and read-only here: Linthra's playback seam
+        // exposes no playback rate. Saying so is better than accepting a value
+        // and silently not applying it.
         return DBusMethodErrorResponse.propertyReadOnly();
       default:
         return DBusMethodErrorResponse.unknownProperty();
@@ -445,7 +454,9 @@ class MprisPlayerObject extends DBusObject {
       'Rate': const DBusDouble(1.0),
       'Shuffle': DBusBoolean(state.shuffleEnabled),
       'Metadata': DBusDict.stringVariant(metadata()),
-      'Volume': const DBusDouble(1.0),
+      // The level actually heard, so a mute in Linthra reads as zero on the bus
+      // rather than as an unchanged slider in the shell.
+      'Volume': DBusDouble(state.effectiveVolume),
       'Position': DBusInt64(state.position.inMicroseconds),
       'MinimumRate': const DBusDouble(1.0),
       'MaximumRate': const DBusDouble(1.0),

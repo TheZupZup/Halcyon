@@ -290,6 +290,15 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   // volume whenever a track loads (and immediately when toggled).
   bool _normalizeVolume = false;
 
+  // The listener's own volume and mute, owned here like shuffle and repeat: they
+  // are session-wide modes, not properties of the loaded source, so they survive
+  // track changes, a cast handoff, and a post-suspend reload. They are kept
+  // apart from the engine's level on purpose — normalization and ducking
+  // attenuate what is heard without ever moving the listener's slider — and are
+  // folded together with those in [_engineVolume].
+  double _volume = 1.0;
+  bool _muted = false;
+
   // How many times the current track has been retried after a mid-stream
   // failure. Reset when a fresh track loads and when playback reaches `playing`,
   // so each track (and each successful stretch) gets its own one-retry budget.
@@ -599,9 +608,7 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   /// wins — Linthra can never be left stuck ducked.
   void _enqueueFocusVolume() {
     if (_suspended) return;
-    final double base =
-        volumeFor(_queue.current, normalizeVolume: _normalizeVolume);
-    final double target = _ducked ? base * _duckVolumeFactor : base;
+    final double target = _engineVolume();
     _focusChain = _focusChain.then((_) async {
       try {
         await _player.setVolume(target);
@@ -1069,8 +1076,11 @@ class JustAudioPlaybackController implements LocalPlaybackController {
   void _emit(PlaybackState next, {bool force = false}) {
     // Stamp the foreground focus hold on from one place, so no emit path can
     // publish a state that disagrees with the current hold.
-    final PlaybackState stamped =
-        next.withTransientFocusInterruption(_foregroundHeldForFocus);
+    final PlaybackState stamped = next
+        .withTransientFocusInterruption(_foregroundHeldForFocus)
+        // Stamped from one place like the focus hold, so the paths that build a
+        // fresh state (an error, a restore) can never publish a stale level.
+        .withVolume(volume: _volume, muted: _muted);
     // [force] bypasses the equality guard for a state that differs only in a way
     // PlaybackState == can't see — namely a same-bare-id provider swap, where
     // Track == compares only the bare id (jellyfin:101 == subsonic:101), so the
@@ -1239,6 +1249,36 @@ class JustAudioPlaybackController implements LocalPlaybackController {
     unawaited(_applyVolume());
   }
 
+  @override
+  void setVolume(double volume) {
+    final double next = PlaybackState.sanitizeVolume(volume);
+    // Turning the level up is an unmute: a slider dragged off zero that stayed
+    // silent because a mute flag nobody can see is still set would look broken.
+    final bool nextMuted = _muted && next <= 0.0;
+    if (next == _volume && nextMuted == _muted) return;
+    _volume = next;
+    _muted = nextMuted;
+    _publishVolume();
+  }
+
+  @override
+  void setMuted(bool muted) {
+    if (muted == _muted) return;
+    _muted = muted;
+    // [_volume] is deliberately untouched, so unmute comes back to exactly the
+    // level that was playing.
+    _publishVolume();
+  }
+
+  /// Pushes a volume/mute change to the engine and re-stamps the state so the
+  /// UI (and MPRIS) follow immediately.
+  void _publishVolume() {
+    // Best-effort and silent, like the normalization toggle: a volume tweak must
+    // never surface as a playback error or interrupt audio.
+    unawaited(_applyVolume());
+    _emit(_state);
+  }
+
   /// The engine volume (0.0–1.0) to use for [track] given whether normalization
   /// is on. With it off, or no track loaded, returns 1.0 (full, untouched).
   /// With it on, returns the track's safe ReplayGain multiplier — attenuation
@@ -1249,16 +1289,50 @@ class JustAudioPlaybackController implements LocalPlaybackController {
     return track.replayGain.linearVolume();
   }
 
+  /// What the engine should actually be set to right now: the listener's level
+  /// (zero while muted), attenuated by the current track's ReplayGain when
+  /// normalization is on, and again by the duck factor while another app holds
+  /// a duckable transient focus.
+  ///
+  /// One definition, read by both the load path and the focus chain, so a duck
+  /// landing mid-track and a track loading mid-duck agree on the answer.
+  double _engineVolume() => engineVolumeFor(
+        _queue.current,
+        normalizeVolume: _normalizeVolume,
+        volume: _volume,
+        muted: _muted,
+        ducked: _ducked,
+      );
+
+  /// How the three attenuations compose, as a pure function so the order can be
+  /// asserted without an engine: the track's ReplayGain (when normalization is
+  /// on), the listener's own level (zero while muted), and the duck factor while
+  /// another app holds a duckable transient focus.
+  ///
+  /// They multiply rather than override each other — halving the volume of an
+  /// already-normalized track means half of *that* — and every factor is at
+  /// most 1.0, so the result can never exceed full volume or amplify anything.
+  @visibleForTesting
+  static double engineVolumeFor(
+    Track? track, {
+    required bool normalizeVolume,
+    required double volume,
+    required bool muted,
+    required bool ducked,
+  }) {
+    double level = volumeFor(track, normalizeVolume: normalizeVolume);
+    level *= muted ? 0.0 : volume;
+    // [_restoreDuckedVolume] clears the duck and re-applies the listener's level
+    // on the unduck/regain, so the engine is never left attenuated.
+    if (ducked) level *= _duckVolumeFactor;
+    return level;
+  }
+
   /// Pushes the target volume for the current track onto the engine. A cast
   /// receiver owns its own volume while suspended, so this is a no-op then.
   Future<void> _applyVolume() async {
     if (_suspended) return;
-    double volume =
-        volumeFor(_queue.current, normalizeVolume: _normalizeVolume);
-    // While another app holds a duckable transient focus, attenuate (but keep
-    // playing). [_restoreDuckedVolume] clears the flag and re-applies full
-    // volume on the unduck/regain, so the engine is never left ducked.
-    if (_ducked) volume *= _duckVolumeFactor;
+    final double volume = _engineVolume();
     try {
       await _player.setVolume(volume);
     } catch (_) {
