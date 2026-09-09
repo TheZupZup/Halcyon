@@ -17,12 +17,17 @@ class _FakeService implements AudioOutputDeviceService {
 
   final List<AudioOutputDevice> available;
   final List<AudioOutputDevice> routed = <AudioOutputDevice>[];
+  bool routingSucceeds = true;
 
   @override
   Future<List<AudioOutputDevice>> devices() async => available;
 
   @override
-  Future<void> select(AudioOutputDevice device) async => routed.add(device);
+  Future<bool> select(AudioOutputDevice device) async {
+    if (!routingSucceeds) return false;
+    routed.add(device);
+    return true;
+  }
 }
 
 void main() {
@@ -134,5 +139,21 @@ void main() {
 
     expect(find.textContaining('No outputs were reported'), findsOneWidget);
     expect(find.byType(DropdownButton<String>), findsNothing);
+  });
+
+  testWidgets('says so when the backend refuses the switch',
+      (WidgetTester tester) async {
+    final _FakeService service = _FakeService(
+      devices: <AudioOutputDevice>[AudioOutputDevice.systemDefault, headset],
+    )..routingSucceeds = false;
+    final InMemoryPlaybackPreferences preferences = await pump(tester, service);
+
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('USB Headset').last);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('could not be used'), findsOneWidget);
+    expect(await preferences.audioOutputDeviceId(), isNull);
   });
 }

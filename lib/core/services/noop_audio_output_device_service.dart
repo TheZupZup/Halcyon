@@ -19,5 +19,5 @@ class NoopAudioOutputDeviceService implements AudioOutputDeviceService {
       const <AudioOutputDevice>[];
 
   @override
-  Future<void> select(AudioOutputDevice device) async {}
+  Future<bool> select(AudioOutputDevice device) async => false;
 }

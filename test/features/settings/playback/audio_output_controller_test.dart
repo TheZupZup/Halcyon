@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/audio_output_device.dart';
@@ -23,6 +25,14 @@ class _FakeService implements AudioOutputDeviceService {
   final List<AudioOutputDevice> routed = <AudioOutputDevice>[];
   int enumerations = 0;
 
+  /// Whether the backend accepts a switch. `false` stands in for a device that
+  /// disappeared between the list and the tap.
+  bool routingSucceeds = true;
+
+  /// Held futures, so a test can interleave two operations deliberately.
+  final List<Completer<void>> pendingRoutes = <Completer<void>>[];
+  bool holdRouting = false;
+
   @override
   Future<List<AudioOutputDevice>> devices() async {
     enumerations++;
@@ -30,7 +40,16 @@ class _FakeService implements AudioOutputDeviceService {
   }
 
   @override
-  Future<void> select(AudioOutputDevice device) async => routed.add(device);
+  Future<bool> select(AudioOutputDevice device) async {
+    if (holdRouting) {
+      final Completer<void> gate = Completer<void>();
+      pendingRoutes.add(gate);
+      await gate.future;
+    }
+    if (!routingSucceeds) return false;
+    routed.add(device);
+    return true;
+  }
 }
 
 void main() {
@@ -297,6 +316,121 @@ void main() {
       expect(state.selected, AudioOutputDevice.systemDefault);
       expect(state.savedDeviceUnavailable, isTrue);
       expect(service.routed.last, AudioOutputDevice.systemDefault);
+    });
+  });
+
+  group('AudioOutputController when the backend does not cooperate', () {
+    test('a refused switch is neither stored nor shown as playing', () async {
+      final _FakeService service = _FakeService(
+        devices: <AudioOutputDevice>[AudioOutputDevice.systemDefault, headset],
+      )..routingSucceeds = false;
+      final InMemoryPlaybackPreferences preferences =
+          InMemoryPlaybackPreferences();
+      final ProviderContainer container = containerFor(service, preferences);
+      await container.read(audioOutputControllerProvider.future);
+
+      await container
+          .read(audioOutputControllerProvider.notifier)
+          .select(headset);
+
+      final AudioOutputSettingsState state =
+          container.read(audioOutputControllerProvider).requireValue;
+      expect(state.selected, AudioOutputDevice.systemDefault);
+      expect(state.selectionFailed, isTrue);
+      expect(await preferences.audioOutputDeviceId(), isNull);
+    });
+
+    test('a refused switch is retried, not assumed applied', () async {
+      final _FakeService service = _FakeService(
+        devices: <AudioOutputDevice>[AudioOutputDevice.systemDefault, headset],
+      )..routingSucceeds = false;
+      final ProviderContainer container =
+          containerFor(service, InMemoryPlaybackPreferences());
+      await container.read(audioOutputControllerProvider.future);
+      await container
+          .read(audioOutputControllerProvider.notifier)
+          .select(headset);
+
+      service.routingSucceeds = true;
+      await container
+          .read(audioOutputControllerProvider.notifier)
+          .select(headset);
+
+      expect(service.routed, <AudioOutputDevice>[headset]);
+      expect(
+        container.read(audioOutputControllerProvider).requireValue.selected,
+        headset,
+      );
+    });
+
+    test('a failed enumeration keeps a session-only selection', () async {
+      final _FakeService service = _FakeService(
+        devices: <AudioOutputDevice>[AudioOutputDevice.systemDefault, unstable],
+      );
+      final ProviderContainer container =
+          containerFor(service, InMemoryPlaybackPreferences());
+      await container.read(audioOutputControllerProvider.future);
+      await container
+          .read(audioOutputControllerProvider.notifier)
+          .select(unstable);
+
+      // The backend goes quiet for one refresh, then comes back.
+      service.available = <AudioOutputDevice>[];
+      await container.read(audioOutputControllerProvider.notifier).refresh();
+
+      final AudioOutputSettingsState duringOutage =
+          container.read(audioOutputControllerProvider).requireValue;
+      expect(duringOutage.devices, isEmpty);
+      expect(duringOutage.selected, unstable);
+
+      service.available = <AudioOutputDevice>[
+        AudioOutputDevice.systemDefault,
+        unstable,
+      ];
+      await container.read(audioOutputControllerProvider.notifier).refresh();
+
+      // The outage must not have routed the listener away from their device.
+      expect(
+        container.read(audioOutputControllerProvider).requireValue.selected,
+        unstable,
+      );
+      expect(service.routed, <AudioOutputDevice>[unstable]);
+    });
+
+    test('two quick choices leave playback on the later one', () async {
+      final _FakeService service = _FakeService(
+        devices: <AudioOutputDevice>[
+          AudioOutputDevice.systemDefault,
+          builtIn,
+          headset,
+        ],
+      );
+      final InMemoryPlaybackPreferences preferences =
+          InMemoryPlaybackPreferences();
+      final ProviderContainer container = containerFor(service, preferences);
+      await container.read(audioOutputControllerProvider.future);
+      final AudioOutputController controller =
+          container.read(audioOutputControllerProvider.notifier);
+
+      service.holdRouting = true;
+      final Future<void> first = controller.select(builtIn);
+      final Future<void> second = controller.select(headset);
+
+      // Release the first route only once both gestures are in flight, and let
+      // it finish last if the calls were not serialized.
+      await Future<void>.delayed(Duration.zero);
+      expect(service.pendingRoutes, hasLength(1),
+          reason: 'the second choice must wait for the first');
+      service.holdRouting = false;
+      service.pendingRoutes.single.complete();
+      await Future.wait(<Future<void>>[first, second]);
+
+      expect(service.routed, <AudioOutputDevice>[builtIn, headset]);
+      expect(await preferences.audioOutputDeviceId(), headset.id);
+      expect(
+        container.read(audioOutputControllerProvider).requireValue.selected,
+        headset,
+      );
     });
   });
 }

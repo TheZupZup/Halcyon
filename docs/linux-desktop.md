@@ -269,8 +269,21 @@ Four decisions worth knowing:
   device is looked up in the list the host actually reports. If it is not there
   — unplugged headset, a different machine, a renamed sink — Linthra stays on
   the system default, forgets the stored value rather than pushing a name libmpv
-  would reject, and the card says so. A backend that cannot be enumerated at all
-  is *not* treated as "device gone": nothing is cleared and nothing is re-routed.
+  would reject, and the card says so.
+* **"Did not answer" is never read as "device gone".** A backend that cannot be
+  enumerated — including one that does not publish `audio-device-list` before
+  the probe times out — clears nothing, re-routes nothing, and keeps the live
+  selection; the card just reports that it found no outputs. libmpv seeds its
+  own state with a lone `auto` entry, and treating *that* as the real list is
+  exactly how a transient hiccup would look like an unplugged device, so the
+  timeout is deliberately surfaced as a failure instead.
+* **A refused switch is not recorded as done.** Routing reports whether it took
+  effect. If the backend refuses (the device went away between the list and the
+  tap) nothing is stored, playback is still shown where it actually is, the card
+  says the switch did not happen, and the next attempt at that device is a real
+  attempt rather than a no-op.
+* **Choices are serialized.** Two quick picks queue instead of racing, so the
+  later gesture is the one that ends up playing and stored.
 * **Only stable ids are remembered.** PipeWire/PulseAudio node names and ALSA
   `CARD=` names are derived from the hardware and survive a reboot, so they are
   persisted. ALSA's numeric handles (`alsa/hw:1,0`) are card *indexes* that

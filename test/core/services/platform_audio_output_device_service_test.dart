@@ -19,7 +19,10 @@ class _RecordingService implements AudioOutputDeviceService {
       const <AudioOutputDevice>[AudioOutputDevice.systemDefault];
 
   @override
-  Future<void> select(AudioOutputDevice device) async => selected = device;
+  Future<bool> select(AudioOutputDevice device) async {
+    selected = device;
+    return true;
+  }
 }
 
 void main() {

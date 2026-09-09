@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linthra/core/models/audio_output_device.dart';
 import 'package:linthra/core/services/linux_audio_output_device_service.dart';
@@ -51,26 +53,44 @@ void main() {
         apply: (String id) async => applied = id,
       );
 
-      await service.select(
+      final bool routed = await service.select(
         const AudioOutputDevice(id: 'pulse/headset', label: 'Headset'),
       );
 
       expect(applied, 'pulse/headset');
+      expect(routed, isTrue);
     });
 
-    test('a device that vanished mid-switch leaves playback alone', () async {
+    test('a device that vanished mid-switch reports failure, not an error',
+        () async {
       final LinuxAudioOutputDeviceService service =
           LinuxAudioOutputDeviceService(
         probe: () async => const <({String id, String description})>[],
         apply: (_) async => throw StateError('device is gone'),
       );
 
-      await expectLater(
-        service.select(
+      // Reported rather than thrown, so Settings keeps working — but reported,
+      // so the caller does not go on to remember an output that never started.
+      expect(
+        await service.select(
           const AudioOutputDevice(id: 'pulse/headset', label: 'Headset'),
         ),
-        completes,
+        isFalse,
       );
+    });
+
+    test('a probe that never answers is an enumeration failure', () async {
+      // The real timeout path: `_readDevices` deliberately lets a
+      // TimeoutException out rather than falling back to libmpv's seeded
+      // `[auto]` state, because a caller comparing a saved device against that
+      // one-entry list would conclude the device had been removed.
+      final LinuxAudioOutputDeviceService service =
+          LinuxAudioOutputDeviceService(
+        probe: () async => throw TimeoutException('libmpv never answered'),
+        apply: (_) async {},
+      );
+
+      expect(await service.devices(), isEmpty);
     });
   });
 }

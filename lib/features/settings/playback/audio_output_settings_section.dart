@@ -104,6 +104,15 @@ class _AudioOutputSettingsSectionState
                 color: theme.colorScheme.tertiary,
               ),
             ],
+            if (state.selectionFailed) ...<Widget>[
+              const SizedBox(height: AppSpacing.sm),
+              _Note(
+                icon: Icons.error_outline,
+                text: 'That output could not be used, so playback stayed on '
+                    '${state.selected.label}. Refresh the list and try again.',
+                color: theme.colorScheme.error,
+              ),
+            ],
             if (!state.selected.isSystemDefault && !state.isRemembered) ...[
               const SizedBox(height: AppSpacing.sm),
               _Note(

@@ -66,12 +66,16 @@ class LinuxAudioOutputDeviceService implements AudioOutputDeviceService {
   }
 
   @override
-  Future<void> select(AudioOutputDevice device) async {
+  Future<bool> select(AudioOutputDevice device) async {
     try {
       await _apply(device.id);
+      return true;
     } catch (_) {
-      // Routing is best-effort. A device that vanished between the list and the
-      // tap leaves playback where it is rather than throwing into Settings.
+      // A device that vanished between the list and the tap leaves playback
+      // where it is rather than throwing into Settings — but the caller is told
+      // it did not happen, so it does not go on to remember an output that
+      // never started.
+      return false;
     }
   }
 
@@ -98,13 +102,14 @@ class LinuxAudioOutputDeviceService implements AudioOutputDeviceService {
       // media_kit seeds the state with a lone `auto` entry and replaces it when
       // libmpv publishes the real list, so an unpopulated state means "not
       // reported yet", not "this machine has one output".
-      try {
-        devices = await player.stream.audioDevices
-            .firstWhere((List<AudioDevice> list) => !_isUnpopulated(list))
-            .timeout(probeTimeout);
-      } on TimeoutException {
-        devices = player.state.audioDevices;
-      }
+      devices = await player.stream.audioDevices
+          .firstWhere((List<AudioDevice> list) => !_isUnpopulated(list))
+          .timeout(probeTimeout);
+      // A timeout is deliberately *not* caught here. Falling back to the seeded
+      // `[auto]` state would read as "this machine has exactly one output",
+      // and a caller comparing a saved device against that list would conclude
+      // it had been removed. A backend that did not answer in time is an
+      // enumeration failure, and `devices()` reports it as one.
     }
     return <({String id, String description})>[
       for (final AudioDevice device in devices)
