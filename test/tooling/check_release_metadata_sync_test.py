@@ -13,7 +13,9 @@ the network.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import sys
 import tempfile
 import unittest
@@ -293,6 +295,18 @@ class SyncTest(unittest.TestCase):
             checker.main(["--repo-root", str(repo.root)]),
             1,
         )
+
+    def test_main_offers_a_fix_that_works_with_written_release_notes(self):
+        # Reported drift is often AppStream-only, next to a hand-written Play
+        # changelog. Without --keep-changelog the bump script refuses rather
+        # than touch those notes, so the advertised fix has to name it.
+        repo = self.repo(app_info_version="0.2.5")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(checker.main(["--repo-root", str(repo.root)]), 1)
+        message = stderr.getvalue()
+        self.assertIn("prepare_release_bump.py", message)
+        self.assertIn("--keep-changelog", message)
 
     def test_main_exits_zero_on_a_consistent_checkout(self):
         repo = self.repo()

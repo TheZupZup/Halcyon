@@ -22,6 +22,7 @@ Usage:
     python3 scripts/prepare_release_bump.py 0.1.0-alpha.37 \
         --changelog "Linthra 0.1.0-alpha.37 — fixed X."
     python3 scripts/prepare_release_bump.py 0.1.0-alpha.37 --force-changelog
+    python3 scripts/prepare_release_bump.py 0.1.0-alpha.37 --keep-changelog
     python3 scripts/prepare_release_bump.py 0.1.0-alpha.37 --release-date 2026-09-09
 
 Drift between all of those (and the release tag) is checked by
@@ -175,18 +176,26 @@ def default_changelog(version_name):
     ).format(name=version_name)
 
 
-def create_changelog(path, version_name, body, allow_overwrite):
+def create_changelog(path, version_name, body, allow_overwrite, keep_existing):
     """Write the Fastlane changelog at `path`.
 
     Returns True if the file was created or changed. Raises if the file already
     exists with different content and `allow_overwrite` is False — the workflow
     must opt into clobbering an existing changelog.
+
+    `keep_existing` leaves a changelog that is already there exactly as it is.
+    That is what a re-run needs when the release notes were written by hand and
+    something *else* (the AppStream entry, the F-Droid code) still has to be
+    fixed: without it the only ways through are failing here or overwriting
+    real notes with the generated default.
     """
     raw = body if body else default_changelog(version_name)
     content = raw.rstrip() + "\n"
     if path.exists():
         existing = path.read_text()
         if existing == content:
+            return False
+        if keep_existing:
             return False
         if not allow_overwrite:
             raise VersionError(
@@ -336,6 +345,11 @@ def is_prerelease(version_name):
     return match.group(4) is not None
 
 
+def today_utc():
+    """Today's date in UTC, so two machines bumping at once agree."""
+    return dt.datetime.now(dt.timezone.utc).date().isoformat()
+
+
 def parse_release_date(value):
     """Validate a YYYY-MM-DD release date and return it normalised."""
     try:
@@ -379,8 +393,13 @@ def update_appstream_release(path, version_name, release_date):
 
     Newest first, which is the order the file already uses and the order
     software centres read. An entry that already names `version_name` is
-    rewritten in place (date, development marker) rather than duplicated, so
-    re-running the script is safe.
+    rewritten in place rather than duplicated, so re-running the script is
+    safe.
+
+    `release_date` is the date to record, or None to stamp a *new* entry with
+    today (UTC) and leave an entry that is already there on the date it has. A
+    release that already shipped therefore keeps its published date through a
+    re-run on another day; changing one is a deliberate --release-date.
 
     Returns True if the file changed. A missing file returns False silently, as
     with the F-Droid metadata: a checkout may not carry the Linux packaging.
@@ -396,15 +415,18 @@ def update_appstream_release(path, version_name, release_date):
         )
 
     body = block.group("body")
-    entry = _release_entry(version_name, release_date)
-    existing = next(
+    existing, existing_attributes = next(
         (
-            tag
+            (tag, attributes)
             for tag, attributes in appstream_releases(text)
             if attributes.get("version") == version_name
         ),
-        None,
+        (None, {}),
     )
+    # The date already in the file wins over today: it is the date that release
+    # was published, and only an explicit --release-date may rewrite it.
+    date = release_date or existing_attributes.get("date") or today_utc()
+    entry = _release_entry(version_name, date)
     if existing is not None:
         new_body = body.replace(existing, entry, 1)
     else:
@@ -433,7 +455,14 @@ def _rel(repo, path):
         return str(path)
 
 
-def prepare(repo, raw_version, changelog_body, allow_overwrite, release_date):
+def prepare(
+    repo,
+    raw_version,
+    changelog_body,
+    allow_overwrite,
+    keep_changelog,
+    release_date,
+):
     """Run the full bump against `repo`. Returns (versionName, code, changed)."""
     if raw_version.startswith("v"):
         raise VersionError(
@@ -474,7 +503,9 @@ def prepare(repo, raw_version, changelog_body, allow_overwrite, release_date):
         changed.append(_rel(repo, pubspec))
     if update_app_info(app_info, version_name):
         changed.append(_rel(repo, app_info))
-    if create_changelog(changelog, version_name, changelog_body, allow_overwrite):
+    if create_changelog(
+        changelog, version_name, changelog_body, allow_overwrite, keep_changelog
+    ):
         changed.append(_rel(repo, changelog))
     if update_fdroid_metadata(fdroid, version_name, version_code):
         changed.append(_rel(repo, fdroid))
@@ -506,6 +537,14 @@ def main(argv=None):
         help="Overwrite the Fastlane changelog if it already exists.",
     )
     parser.add_argument(
+        "--keep-changelog",
+        action="store_true",
+        help=(
+            "Leave an existing Fastlane changelog alone instead of failing. "
+            "Use to repair other metadata without touching written notes."
+        ),
+    )
+    parser.add_argument(
         "--release-date",
         default="",
         help=(
@@ -522,16 +561,25 @@ def main(argv=None):
 
     repo = args.repo_root.resolve()
     try:
+        if args.keep_changelog and args.force_changelog:
+            raise VersionError(
+                "--keep-changelog and --force-changelog contradict each other; "
+                "pass one."
+            )
+        if args.keep_changelog and args.changelog:
+            raise VersionError(
+                "--keep-changelog leaves the existing changelog alone, so "
+                "--changelog would be ignored; pass one."
+            )
         release_date = (
-            parse_release_date(args.release_date)
-            if args.release_date
-            else dt.datetime.now(dt.timezone.utc).date().isoformat()
+            parse_release_date(args.release_date) if args.release_date else None
         )
         version_name, version_code, changed = prepare(
             repo,
             args.version,
             args.changelog,
             args.force_changelog,
+            args.keep_changelog,
             release_date,
         )
     except VersionError as err:

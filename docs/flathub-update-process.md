@@ -138,7 +138,8 @@ notes are in
 
 Flathub runs `flatpak-builder-lint` on the submission and treats its warnings
 as failures. Wiring that into CI is #449; until that lands, run it by hand
-against the manifest and the exported repository:
+from the repository root (step 1.5 left you in `flatpak/`), against the
+manifest and the repository it exported:
 
 ```sh
 flatpak run --command=flatpak-builder-lint org.flatpak.Builder \

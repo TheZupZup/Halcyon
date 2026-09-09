@@ -322,8 +322,13 @@ def main(argv=None):
         print(file=sys.stderr)
         print(
             "Fix: python3 scripts/prepare_release_bump.py <version>\n"
-            "     (writes pubspec, app_info, the Fastlane changelog, the "
-            "F-Droid metadata and the AppStream release entry)",
+            "     writes pubspec, app_info, the Fastlane changelog, the "
+            "F-Droid\n"
+            "     metadata and the AppStream release entry. Add "
+            "--keep-changelog when\n"
+            "     the release notes are already written: without it the script\n"
+            "     refuses rather than touch them, and the rest of the metadata\n"
+            "     stays unfixed.",
             file=sys.stderr,
         )
         return 1

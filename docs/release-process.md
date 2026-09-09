@@ -343,7 +343,9 @@ NOT publish a release; those still happen manually after the PR is merged.
 The workflow refuses to run when the tag already exists locally or on origin,
 when `pubspec.yaml` is already at the requested version, when `app_info.dart`
 has no `_devVersionName` to update, or when an existing Fastlane changelog
-would be overwritten without `--force-changelog`. See
+would be overwritten without `--force-changelog` (`--keep-changelog` leaves
+written notes alone instead, for a re-run that only has to fix the other
+metadata). See
 [scripts/prepare_release_bump.py](../scripts/prepare_release_bump.py) for the
 full safety list — that is the same script the workflow invokes, so you can
 run it locally:

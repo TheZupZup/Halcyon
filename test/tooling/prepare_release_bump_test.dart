@@ -251,6 +251,65 @@ void main() {
       expect(changelog.readAsStringSync().trim(), 'new content');
     });
 
+    test('--keep-changelog leaves written notes and still fixes the rest',
+        () async {
+      // The partial-bump case: the notes were written by hand, and something
+      // else (here the F-Droid code) still has to be brought into line.
+      final Directory tmp = await _fixtureRepo(
+        pubspecVersion: '0.1.0-alpha.37',
+        pubspecCode: 100037,
+        appInfoVersion: '0.1.0-alpha.37',
+        fdroidBody: 'Name: Linthra\n'
+            'CurrentVersion: 0.1.0-alpha.36\n'
+            'CurrentVersionCode: 100036\n',
+      );
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final File changelog = File(p.join(tmp.path, 'fastlane', 'metadata',
+          'android', 'en-US', 'changelogs', '100037.txt'));
+      changelog.writeAsStringSync('Hand-written release notes.\n');
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.37',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--keep-changelog'],
+      );
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+      expect(changelog.readAsStringSync(), 'Hand-written release notes.\n');
+      expect(
+        File(p.join(tmp.path, 'metadata', 'io.github.thezupzup.linthra.yml'))
+            .readAsStringSync(),
+        contains('CurrentVersionCode: 100037'),
+      );
+    });
+
+    test('--keep-changelog still writes a changelog that is not there yet',
+        () async {
+      final Directory tmp = await _fixtureRepo(
+        pubspecVersion: '0.1.0-alpha.36',
+        pubspecCode: 100036,
+        appInfoVersion: '0.1.0-alpha.36',
+      );
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.37',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--keep-changelog'],
+      );
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+      expect(
+        File(p.join(tmp.path, 'fastlane', 'metadata', 'android', 'en-US',
+                'changelogs', '100037.txt'))
+            .existsSync(),
+        isTrue,
+      );
+    });
+
     test('updates F-Droid CurrentVersion / CurrentVersionCode when present',
         () async {
       final Directory tmp = await _fixtureRepo(
@@ -383,7 +442,7 @@ void main() {
       expect('0.1.0-alpha.37'.allMatches(after).length, 1);
     });
 
-    test('refreshes the date of an entry that already exists', () async {
+    test('refreshes an existing entry when a date is given', () async {
       final Directory tmp = await fixture();
       addTearDown(() async => tmp.delete(recursive: true));
 
@@ -400,6 +459,25 @@ void main() {
       expect(after, contains('date="2026-09-09"'));
       expect(after, isNot(contains('date="2026-09-06"')));
       expect('0.1.0-alpha.36'.allMatches(after).length, 1);
+    });
+
+    test('keeps the recorded date when the bump is re-run', () async {
+      // A release that already shipped keeps its published date, whatever day
+      // the re-run happens on: the prepare workflow passes no --release-date,
+      // so a retry tomorrow must not rewrite release history.
+      final Directory tmp = await fixture();
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.36',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--keep-changelog'],
+      );
+      expect(r.exitCode, 0,
+          reason: 'stdout:\n${r.stdout}\nstderr:\n${r.stderr}');
+      expect(
+          metainfoFile(tmp).readAsStringSync(), contains('date="2026-09-06"'));
     });
 
     test('does nothing when the metainfo file is absent', () async {
@@ -474,6 +552,42 @@ void main() {
           _runScript(script, '0.1.0-alpha.37+100037', repoRoot: tmp.path);
       expect(r.exitCode, isNot(0));
       expect(r.stderr, contains('"+versionCode"'));
+    });
+
+    test('rejects --keep-changelog together with --force-changelog', () async {
+      final Directory tmp = await _fixtureRepo(
+        pubspecVersion: '0.1.0-alpha.36',
+        pubspecCode: 100036,
+        appInfoVersion: '0.1.0-alpha.36',
+      );
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.37',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--keep-changelog', '--force-changelog'],
+      );
+      expect(r.exitCode, isNot(0));
+      expect(r.stderr, contains('contradict each other'));
+    });
+
+    test('rejects --keep-changelog together with --changelog', () async {
+      final Directory tmp = await _fixtureRepo(
+        pubspecVersion: '0.1.0-alpha.36',
+        pubspecCode: 100036,
+        appInfoVersion: '0.1.0-alpha.36',
+      );
+      addTearDown(() async => tmp.delete(recursive: true));
+
+      final ProcessResult r = _runScript(
+        script,
+        '0.1.0-alpha.37',
+        repoRoot: tmp.path,
+        extraArgs: <String>['--keep-changelog', '--changelog', 'text'],
+      );
+      expect(r.exitCode, isNot(0));
+      expect(r.stderr, contains('would be ignored'));
     });
 
     test('rejects a malformed version', () async {
